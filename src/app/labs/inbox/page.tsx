@@ -1,0 +1,243 @@
+import Link from "next/link";
+import { requireAdmin } from "@/lib/auth-guard";
+import { listLabCases } from "../actions";
+import { getGmailConnectionState, listInboundEmails } from "./actions";
+import { logoutAction } from "../../login/actions";
+import { UploadZone } from "./UploadZone";
+import { InboundRowActions } from "./InboundRowActions";
+import { GmailPanel } from "./GmailPanel";
+import { PracticeBetterPanel } from "./PracticeBetterPanel";
+import { pbHealthCheck } from "@/lib/practicebetter/client";
+import { getLatestPracticeBetterSync } from "@/lib/practicebetter/sync";
+
+export const dynamic = "force-dynamic";
+
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+const CONFIDENCE_STYLES: Record<string, string> = {
+  high: "bg-emerald-100 text-emerald-800",
+  medium: "bg-amber-100 text-amber-800",
+  low: "bg-zinc-200 text-zinc-700",
+  none: "bg-red-100 text-red-700",
+};
+
+const STATUS_STYLES: Record<string, string> = {
+  pending: "bg-amber-100 text-amber-800",
+  parsed: "bg-blue-100 text-blue-800",
+  failed: "bg-red-100 text-red-700",
+  applied: "bg-emerald-100 text-emerald-800",
+  dismissed: "bg-zinc-200 text-zinc-700",
+};
+
+export default async function InboxPage() {
+  const user = await requireAdmin();
+  const [emails, activeCases, gmailState, pbProbe, pbSync] = await Promise.all([
+    listInboundEmails(),
+    listLabCases({ view: "active" }),
+    getGmailConnectionState(),
+    pbHealthCheck(),
+    getLatestPracticeBetterSync(),
+  ]);
+  const caseIndex = new Map(activeCases.map((c) => [c.id, c]));
+  const slimCases = activeCases.map((c) => ({
+    id: c.id,
+    patient_name: c.patient_name,
+    lab_name: c.lab_name,
+  }));
+
+  const pendingCount = emails.filter(
+    (e) => e.parser_status === "parsed" || e.parser_status === "pending",
+  ).length;
+
+  return (
+    <div className="min-h-dvh bg-zinc-50">
+      <header className="border-b border-zinc-200 bg-white">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+          <div>
+            <h1 className="text-lg font-semibold tracking-tight text-zinc-900">
+              Lab inbox
+            </h1>
+            <p className="text-xs text-zinc-500">
+              {pendingCount} pending review
+              {" · "}
+              uploads parse automatically with Claude
+            </p>
+          </div>
+          <div className="flex items-center gap-3 text-sm">
+            <Link
+              href="/labs"
+              className="text-xs text-zinc-600 underline-offset-2 hover:text-zinc-900 hover:underline"
+            >
+              ← Cases
+            </Link>
+            <span className="text-zinc-600">{user.email}</span>
+            <form action={logoutAction}>
+              <button
+                type="submit"
+                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+              >
+                Sign out
+              </button>
+            </form>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto mt-6 max-w-7xl space-y-6 px-6 pb-16">
+        <GmailPanel
+          initialConnected={gmailState.connected}
+          initialEmail={gmailState.email}
+          initialLastSyncedAt={gmailState.lastSyncedAt}
+        />
+        <PracticeBetterPanel initial={pbProbe} initialSync={pbSync} />
+        <UploadZone />
+
+        {emails.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-zinc-300 bg-white p-12 text-center text-sm text-zinc-600">
+            No reports yet. Upload a PDF above to get started.
+          </div>
+        ) : (
+          <ul className="space-y-3">
+            {emails.map((email) => {
+              const ext = email.parser_extracted ?? null;
+              const matchedCase = email.matched_case_id
+                ? caseIndex.get(email.matched_case_id)
+                : null;
+              const isApplied = email.parser_status === "applied";
+              const isDismissed = email.parser_status === "dismissed";
+              const isFailed = email.parser_status === "failed";
+              const defaultStep: 2 | 4 =
+                ext?.result_kind === "partial" ? 2 : 4;
+
+              return (
+                <li
+                  key={email.id}
+                  className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
+                            STATUS_STYLES[email.parser_status] ??
+                            "bg-zinc-100 text-zinc-700"
+                          }`}
+                        >
+                          {email.parser_status}
+                        </span>
+                        {email.matched_confidence ? (
+                          <span
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
+                              CONFIDENCE_STYLES[email.matched_confidence] ??
+                              "bg-zinc-100"
+                            }`}
+                          >
+                            {email.matched_confidence === "none"
+                              ? "no match"
+                              : `${email.matched_confidence} match`}
+                          </span>
+                        ) : null}
+                        <span className="text-xs text-zinc-500">
+                          {formatDateTime(email.received_at)}
+                        </span>
+                      </div>
+                      <h3 className="mt-1 truncate text-sm font-medium text-zinc-900">
+                        {email.subject ?? "(no subject)"}
+                      </h3>
+                      {email.from_address ? (
+                        <p className="text-xs text-zinc-500">
+                          From: {email.from_address}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {isFailed && email.parser_error ? (
+                    <p className="mt-2 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">
+                      Parser error: {email.parser_error}
+                    </p>
+                  ) : null}
+
+                  {ext ? (
+                    <dl className="mt-3 grid grid-cols-[110px_1fr] gap-x-3 gap-y-1 text-xs">
+                      {ext.lab_name ? (
+                        <>
+                          <dt className="text-zinc-500">Lab</dt>
+                          <dd className="text-zinc-900">{ext.lab_name}</dd>
+                        </>
+                      ) : null}
+                      {ext.patient_name ? (
+                        <>
+                          <dt className="text-zinc-500">Patient</dt>
+                          <dd className="text-zinc-900">{ext.patient_name}</dd>
+                        </>
+                      ) : null}
+                      {ext.test_panel ? (
+                        <>
+                          <dt className="text-zinc-500">Panel</dt>
+                          <dd className="text-zinc-900">{ext.test_panel}</dd>
+                        </>
+                      ) : null}
+                      {ext.result_kind ? (
+                        <>
+                          <dt className="text-zinc-500">Result</dt>
+                          <dd className="text-zinc-900">{ext.result_kind}</dd>
+                        </>
+                      ) : null}
+                      {ext.collected_date ? (
+                        <>
+                          <dt className="text-zinc-500">Collected</dt>
+                          <dd className="text-zinc-900">{ext.collected_date}</dd>
+                        </>
+                      ) : null}
+                      {ext.summary ? (
+                        <>
+                          <dt className="text-zinc-500">Summary</dt>
+                          <dd className="text-zinc-900">{ext.summary}</dd>
+                        </>
+                      ) : null}
+                    </dl>
+                  ) : null}
+
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-zinc-100 pt-3">
+                    <div className="text-xs">
+                      {matchedCase ? (
+                        <span className="text-zinc-700">
+                          Matched →{" "}
+                          <Link
+                            href={`/labs/${matchedCase.id}`}
+                            className="font-medium text-zinc-900 hover:underline"
+                          >
+                            {matchedCase.patient_name} · {matchedCase.lab_name}
+                          </Link>
+                        </span>
+                      ) : (
+                        <span className="text-zinc-500">No matched case.</span>
+                      )}
+                    </div>
+                    {!isApplied && !isDismissed ? (
+                      <InboundRowActions
+                        inboundId={email.id}
+                        matchedCaseId={email.matched_case_id}
+                        defaultStep={defaultStep}
+                        activeCases={slimCases}
+                        alreadyApplied={false}
+                      />
+                    ) : null}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </main>
+    </div>
+  );
+}
