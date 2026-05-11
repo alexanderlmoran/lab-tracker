@@ -1,53 +1,29 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
-import {
-  DndContext,
-  PointerSensor,
-  useDraggable,
-  useDroppable,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-  type DragStartEvent,
-} from "@dnd-kit/core";
+import { useState, useTransition } from "react";
 import type { LabCase } from "@/lib/types";
 import {
   COLUMN_LABEL,
   COLUMN_ORDER,
   type ColumnKey,
-  getColumnFor,
+  getColumnForPatient,
+  groupByPatient,
+  type PatientGroup,
 } from "@/lib/columns";
-import { CaseCard } from "./CaseCard";
-import {
-  ColumnJumpDialog,
-  type ColumnJumpHandle,
-} from "./ColumnJumpDialog";
-import {
-  EmailConfirmDialog,
-  type EmailConfirmHandle,
-} from "./EmailConfirmDialog";
+import { PatientCard } from "./PatientCard";
 import { bulkArchive, bulkDelete } from "./actions";
 
-function DroppableColumn({
+function StaticColumn({
   col,
   count,
   children,
-  isOver,
 }: {
   col: ColumnKey;
   count: number;
   children: React.ReactNode;
-  isOver: boolean;
 }) {
-  const { setNodeRef } = useDroppable({ id: `col:${col}` });
   return (
-    <section
-      ref={setNodeRef}
-      className={`flex flex-col rounded-lg p-2 transition-colors ${
-        isOver ? "bg-zinc-200" : "bg-zinc-100/60"
-      }`}
-    >
+    <section className="flex flex-col rounded-lg bg-zinc-100/60 p-2 lg:min-h-0">
       <header className="flex items-center justify-between px-2 py-1.5">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-700">
           {COLUMN_LABEL[col]}
@@ -56,111 +32,88 @@ function DroppableColumn({
           {count}
         </span>
       </header>
-      <div className="flex min-h-[40px] flex-col gap-2 p-1">{children}</div>
+      <div className="flex min-h-[40px] flex-col gap-2 p-1 lg:flex-1 lg:overflow-y-auto">
+        {children}
+      </div>
     </section>
   );
 }
 
-function DraggableCardWrapper({
-  row,
-  emailDialogRef,
-  columnJumpRef,
+function SelectablePatientCard({
+  group,
   selectMode,
   selected,
   onToggleSelect,
 }: {
-  row: LabCase;
-  emailDialogRef: React.RefObject<EmailConfirmHandle | null>;
-  columnJumpRef: React.RefObject<ColumnJumpHandle | null>;
+  group: PatientGroup;
   selectMode: boolean;
-  selected: boolean;
-  onToggleSelect: (id: string) => void;
+  selected: Set<string>;
+  onToggleSelect: (caseIds: string[]) => void;
 }) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: `card:${row.id}`,
-    disabled: selectMode,
-  });
+  if (!selectMode) return <PatientCard group={group} />;
 
-  if (selectMode) {
-    return (
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => onToggleSelect(row.id)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onToggleSelect(row.id);
-          }
-        }}
-        className={`relative cursor-pointer rounded-md transition-shadow ${
-          selected ? "ring-2 ring-blue-500" : "hover:ring-1 hover:ring-zinc-300"
-        }`}
-      >
-        <span
-          aria-hidden
-          className={`absolute left-2 top-2 z-10 flex h-4 w-4 items-center justify-center rounded border ${
-            selected
-              ? "border-blue-500 bg-blue-500 text-white"
-              : "border-zinc-300 bg-white"
-          }`}
-        >
-          {selected ? (
-            <svg viewBox="0 0 12 12" className="h-3 w-3">
-              <path
-                d="M2 6.5l2.5 2.5L10 3.5"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          ) : null}
-        </span>
-        <div className="pointer-events-none">
-          <CaseCard row={row} />
-        </div>
-      </div>
-    );
-  }
+  // In select mode every card in the group toggles together — bulk actions
+  // operate on the patient as a whole. Visual ring uses "all selected" state.
+  const groupIds = group.cases.map((c) => c.id);
+  const allSelected = groupIds.every((id) => selected.has(id));
 
   return (
     <div
-      ref={setNodeRef}
-      {...attributes}
-      {...listeners}
-      style={{
-        opacity: isDragging ? 0.4 : 1,
-        cursor: "grab",
+      role="button"
+      tabIndex={0}
+      onClick={() => onToggleSelect(groupIds)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onToggleSelect(groupIds);
+        }
       }}
+      className={`relative cursor-pointer rounded-md transition-shadow ${
+        allSelected ? "ring-2 ring-blue-500" : "hover:ring-1 hover:ring-zinc-300"
+      }`}
     >
-      <CaseCard
-        row={row}
-        emailDialogRef={emailDialogRef}
-        columnJumpRef={columnJumpRef}
-      />
+      <span
+        aria-hidden
+        className={`absolute left-2 top-2 z-10 flex h-4 w-4 items-center justify-center rounded border ${
+          allSelected
+            ? "border-blue-500 bg-blue-500 text-white"
+            : "border-zinc-300 bg-white"
+        }`}
+      >
+        {allSelected ? (
+          <svg viewBox="0 0 12 12" className="h-3 w-3">
+            <path
+              d="M2 6.5l2.5 2.5L10 3.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        ) : null}
+      </span>
+      <div className="pointer-events-none">
+        <PatientCard group={group} />
+      </div>
     </div>
   );
 }
 
 export function KanbanBoard({ rows }: { rows: LabCase[] }) {
-  const emailDialogRef = useRef<EmailConfirmHandle | null>(null);
-  const columnJumpRef = useRef<ColumnJumpHandle | null>(null);
-  const [overCol, setOverCol] = useState<ColumnKey | null>(null);
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [, startBulk] = useTransition();
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-  );
-
-  function toggleSelect(id: string) {
+  function toggleSelectGroup(ids: string[]) {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      const allIn = ids.every((id) => next.has(id));
+      if (allIn) {
+        for (const id of ids) next.delete(id);
+      } else {
+        for (const id of ids) next.add(id);
+      }
       return next;
     });
   }
@@ -191,7 +144,8 @@ export function KanbanBoard({ rows }: { rows: LabCase[] }) {
     });
   }
 
-  const grouped: Record<ColumnKey, LabCase[]> = {
+  const groups = groupByPatient(rows);
+  const grouped: Record<ColumnKey, PatientGroup[]> = {
     untouched: [],
     sample_sent: [],
     partial_results: [],
@@ -200,51 +154,15 @@ export function KanbanBoard({ rows }: { rows: LabCase[] }) {
     rof_done: [],
     closed: [],
   };
-  for (const row of rows) grouped[getColumnFor(row)].push(row);
-
-  function onDragStart(_e: DragStartEvent) {
-    setOverCol(null);
-  }
-
-  async function onDragEnd(e: DragEndEvent) {
-    setOverCol(null);
-    const overId = e.over?.id;
-    if (!overId || typeof overId !== "string" || !overId.startsWith("col:"))
-      return;
-    const target = overId.slice("col:".length) as ColumnKey;
-
-    const cardId = String(e.active.id).slice("card:".length);
-    const row = rows.find((r) => r.id === cardId);
-    if (!row) return;
-
-    const current = getColumnFor(row);
-    if (current === target) return;
-
-    if (!emailDialogRef.current || !columnJumpRef.current) return;
-
-    await columnJumpRef.current.open({
-      row,
-      target,
-      emailDialog: emailDialogRef.current,
-    });
-  }
-
-  function onDragOver(e: { over: { id: string | number } | null }) {
-    const overId = e.over?.id;
-    if (typeof overId === "string" && overId.startsWith("col:")) {
-      setOverCol(overId.slice("col:".length) as ColumnKey);
-    } else {
-      setOverCol(null);
-    }
-  }
+  for (const g of groups) grouped[getColumnForPatient(g.cases)].push(g);
 
   return (
-    <>
+    <div className="flex h-full flex-col">
       <div className="mb-3 flex items-center justify-between">
         <div className="text-xs text-zinc-500">
           {selectMode
-            ? `${selected.size} selected`
-            : "Drag cards between columns, or use Select to bulk-act."}
+            ? `${selected.size} case${selected.size === 1 ? "" : "s"} selected`
+            : `${groups.length} patient${groups.length === 1 ? "" : "s"} · ${rows.length} lab${rows.length === 1 ? "" : "s"}`}
         </div>
         <div className="flex items-center gap-2">
           {selectMode ? (
@@ -282,44 +200,28 @@ export function KanbanBoard({ rows }: { rows: LabCase[] }) {
         </div>
       </div>
 
-      <DndContext
-        id="kanban-dnd"
-        sensors={sensors}
-        onDragStart={onDragStart}
-        onDragEnd={onDragEnd}
-        onDragOver={onDragOver}
-        onDragCancel={() => setOverCol(null)}
-      >
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3 lg:grid-cols-7">
-          {COLUMN_ORDER.map((col) => {
-            const cards = grouped[col];
-            return (
-              <DroppableColumn
-                key={col}
-                col={col}
-                count={cards.length}
-                isOver={overCol === col}
-              >
-                {cards.length === 0 ? (
-                  <p className="px-2 py-3 text-[11px] text-zinc-400">—</p>
-                ) : (
-                  cards.map((row) => (
-                    <DraggableCardWrapper
-                      key={row.id}
-                      row={row}
-                      emailDialogRef={emailDialogRef}
-                      columnJumpRef={columnJumpRef}
-                      selectMode={selectMode}
-                      selected={selected.has(row.id)}
-                      onToggleSelect={toggleSelect}
-                    />
-                  ))
-                )}
-              </DroppableColumn>
-            );
-          })}
-        </div>
-      </DndContext>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3 lg:grid-cols-7 lg:flex-1 lg:min-h-0">
+        {COLUMN_ORDER.map((col) => {
+          const colGroups = grouped[col];
+          return (
+            <StaticColumn key={col} col={col} count={colGroups.length}>
+              {colGroups.length === 0 ? (
+                <p className="px-2 py-3 text-[11px] text-zinc-400">—</p>
+              ) : (
+                colGroups.map((g) => (
+                  <SelectablePatientCard
+                    key={g.patientEmail.toLowerCase()}
+                    group={g}
+                    selectMode={selectMode}
+                    selected={selected}
+                    onToggleSelect={toggleSelectGroup}
+                  />
+                ))
+              )}
+            </StaticColumn>
+          );
+        })}
+      </div>
 
       {selectMode && selected.size > 0 ? (
         <div className="fixed inset-x-0 bottom-4 z-30 mx-auto flex w-fit items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-2 shadow-lg">
@@ -350,9 +252,6 @@ export function KanbanBoard({ rows }: { rows: LabCase[] }) {
           </button>
         </div>
       ) : null}
-
-      <EmailConfirmDialog ref={emailDialogRef} />
-      <ColumnJumpDialog ref={columnJumpRef} />
-    </>
+    </div>
   );
 }

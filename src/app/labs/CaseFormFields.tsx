@@ -1,6 +1,10 @@
 "use client";
 
+import { useRef, useState } from "react";
 import type { LabCase } from "@/lib/types";
+import { LabCombobox } from "./LabCombobox";
+import { PatientPicker } from "./PatientPicker";
+import { BarcodeScanner } from "./BarcodeScanner";
 
 const inputClass =
   "mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-900 focus:ring-2 focus:ring-zinc-900/10";
@@ -8,6 +12,20 @@ const labelClass = "block text-xs font-medium text-zinc-700";
 
 export function CaseFormFields({ initial }: { initial?: LabCase | null }) {
   const v = initial ?? null;
+  const trackingRef = useRef<HTMLInputElement | null>(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+
+  function onScan(code: string) {
+    if (trackingRef.current) {
+      trackingRef.current.value = code;
+      // Surface the change to any listeners (the form is otherwise uncontrolled).
+      trackingRef.current.dispatchEvent(
+        new Event("input", { bubbles: true }),
+      );
+    }
+    setScannerOpen(false);
+  }
+
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <div className="sm:col-span-2">
@@ -16,61 +34,7 @@ export function CaseFormFields({ initial }: { initial?: LabCase | null }) {
         </h3>
       </div>
 
-      <div>
-        <label htmlFor="patientName" className={labelClass}>
-          Name <span className="text-red-600">*</span>
-        </label>
-        <input
-          id="patientName"
-          name="patientName"
-          required
-          maxLength={200}
-          defaultValue={v?.patient_name ?? ""}
-          className={inputClass}
-        />
-      </div>
-
-      <div>
-        <label htmlFor="patientEmail" className={labelClass}>
-          Email <span className="text-red-600">*</span>
-        </label>
-        <input
-          id="patientEmail"
-          name="patientEmail"
-          type="email"
-          required
-          maxLength={200}
-          defaultValue={v?.patient_email ?? ""}
-          className={inputClass}
-        />
-      </div>
-
-      <div>
-        <label htmlFor="patientPhone" className={labelClass}>
-          Phone
-        </label>
-        <input
-          id="patientPhone"
-          name="patientPhone"
-          type="tel"
-          maxLength={40}
-          defaultValue={v?.patient_phone ?? ""}
-          className={inputClass}
-        />
-      </div>
-
-      <div>
-        <label htmlFor="patientDob" className={labelClass}>
-          DOB
-        </label>
-        <input
-          id="patientDob"
-          name="patientDob"
-          type="date"
-          defaultValue={v?.patient_dob ?? ""}
-          className={inputClass}
-        />
-      </div>
+      <PatientPicker initial={initial} />
 
       <div className="sm:col-span-2">
         <label htmlFor="patientAddress" className={labelClass}>
@@ -92,46 +56,39 @@ export function CaseFormFields({ initial }: { initial?: LabCase | null }) {
         </h3>
       </div>
 
-      <div>
-        <label htmlFor="labName" className={labelClass}>
-          Lab name <span className="text-red-600">*</span>
-        </label>
-        <input
-          id="labName"
-          name="labName"
-          required
-          maxLength={100}
-          placeholder="e.g. Dutch, Genova, Vibrant"
-          defaultValue={v?.lab_name ?? ""}
-          className={inputClass}
-        />
-      </div>
-
-      <div>
-        <label htmlFor="labPanel" className={labelClass}>
-          Panel
-        </label>
-        <input
-          id="labPanel"
-          name="labPanel"
-          maxLength={100}
-          placeholder="e.g. Complete, Adrenal"
-          defaultValue={v?.lab_panel ?? ""}
-          className={inputClass}
-        />
+      <div className="sm:col-span-2">
+        <LabCombobox initial={initial} />
       </div>
 
       <div className="sm:col-span-2">
         <label htmlFor="trackingNumber" className={labelClass}>
           Tracking number
         </label>
-        <input
-          id="trackingNumber"
-          name="trackingNumber"
-          maxLength={100}
-          defaultValue={v?.tracking_number ?? ""}
-          className={inputClass}
-        />
+        <div className="mt-1 flex gap-2">
+          <input
+            id="trackingNumber"
+            name="trackingNumber"
+            ref={trackingRef}
+            maxLength={100}
+            defaultValue={v?.tracking_number ?? ""}
+            className={`${inputClass} mt-0 flex-1`}
+          />
+          <button
+            type="button"
+            onClick={() => setScannerOpen(true)}
+            title="Scan barcode"
+            aria-label="Scan barcode"
+            className="shrink-0 rounded-md border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+          >
+            Scan
+          </button>
+        </div>
+        {scannerOpen ? (
+          <BarcodeScanner
+            onClose={() => setScannerOpen(false)}
+            onDetect={onScan}
+          />
+        ) : null}
       </div>
 
       <div className="sm:col-span-2 flex flex-wrap items-center gap-x-6 gap-y-2 pt-1">

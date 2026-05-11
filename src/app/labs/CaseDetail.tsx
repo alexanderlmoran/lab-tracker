@@ -7,12 +7,48 @@ import { StepChecklist } from "./StepChecklist";
 import { ActivityLog } from "./ActivityLog";
 import { CaseDialog } from "./CaseDialog";
 import { RefreshLabStatusButton } from "./RefreshLabStatusButton";
+import { RefreshTrackingButton } from "./RefreshTrackingButton";
+import { markCaseClosed } from "./actions";
 import {
   dumpPracticeBetterNotesForCase,
   linkCaseToPracticeBetterRecord,
   probePracticeBetterWriteEndpoints,
   pushLabToPracticeBetter,
 } from "./practicebetter-actions";
+
+function MarkClosedButton({ caseId, isAlreadyClosed }: { caseId: string; isAlreadyClosed: boolean }) {
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  function onClick() {
+    if (
+      !confirm(
+        "Mark this case as closed?\n\nSets every applicable step to done and lands the card in the Closed column. No patient emails fire — use this for cases that are historically complete.\n\nReversible: untick any step in the checklist to undo.",
+      )
+    )
+      return;
+    setError(null);
+    start(async () => {
+      const r = await markCaseClosed(caseId);
+      if (!r.ok) setError(r.error ?? "Failed");
+    });
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={pending || isAlreadyClosed}
+        title={isAlreadyClosed ? "Already closed" : "Bulk-advance to Closed without firing emails"}
+        className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {pending ? "Closing…" : isAlreadyClosed ? "Closed" : "Mark as closed →"}
+      </button>
+      {error ? <span className="text-[11px] text-red-600">{error}</span> : null}
+    </div>
+  );
+}
 
 function PracticeBetterLinkRow({ row }: { row: LabCase }) {
   const [pending, start] = useTransition();
@@ -246,6 +282,28 @@ export function CaseDetail({ row }: { row: LabCase }) {
             value={row.lab_panel ? `${row.lab_name} · ${row.lab_panel}` : row.lab_name}
           />
           <Field label="Tracking" value={row.tracking_number} />
+          {row.tracking_number ? (
+            <div className="flex items-start gap-2 py-1">
+              <span className="w-24 shrink-0 text-xs uppercase tracking-wide text-zinc-500">
+                Carrier
+              </span>
+              <div className="min-w-0 flex-1 space-y-1">
+                {row.tracking_status ? (
+                  <p className="text-xs text-zinc-700">
+                    <strong className="capitalize">{row.tracking_status.replace(/_/g, " ")}</strong>
+                    {row.tracking_location ? ` · ${row.tracking_location}` : ""}
+                    {row.tracking_status_detail ? ` — ${row.tracking_status_detail}` : ""}
+                    {row.tracking_polled_at ? (
+                      <span className="ml-2 text-[10px] text-zinc-400">
+                        polled {row.tracking_polled_at.slice(0, 16).replace("T", " ")}
+                      </span>
+                    ) : null}
+                  </p>
+                ) : null}
+                <RefreshTrackingButton caseId={row.id} />
+              </div>
+            </div>
+          ) : null}
           <div className="flex items-center gap-2 py-1">
             <span className="w-24 text-xs uppercase tracking-wide text-zinc-500">
               Lab API
@@ -298,9 +356,12 @@ export function CaseDetail({ row }: { row: LabCase }) {
       </section>
 
       <section>
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-          Steps
-        </h3>
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            Steps
+          </h3>
+          <MarkClosedButton caseId={row.id} isAlreadyClosed={currentCol === "closed"} />
+        </div>
         <StepChecklist initial={row} />
       </section>
 

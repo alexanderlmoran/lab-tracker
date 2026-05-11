@@ -3,20 +3,13 @@
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
-import { envEmailConfig } from "@/lib/email/render";
+import { BCC_BY_KIND, SUBJECT, envEmailConfig } from "@/lib/email/render";
 import type { EmailKind, LabCase } from "@/lib/types";
 
 const Input = z.object({
   caseId: z.string().uuid(),
   kind: z.enum(["sample_sent", "partial_uploaded", "complete_uploaded", "rof_followup"]),
 });
-
-const SUBJECT: Record<EmailKind, string> = {
-  sample_sent: "Your sample is on its way to the lab",
-  partial_uploaded: "Partial lab results are ready in your portal",
-  complete_uploaded: "Your full lab results are ready",
-  rof_followup: "Thanks for your review — here's what's next",
-};
 
 export type PriorSend = {
   status: "sent" | "skipped";
@@ -81,7 +74,7 @@ export async function getEmailMeta(input: {
       to: ctx.testRedirect ?? row.patient_email,
       from: ctx.fromHeader,
       replyTo: ctx.replyTo ?? null,
-      bcc: ctx.testRedirect ? [] : ctx.bcc,
+      bcc: ctx.testRedirect ? [] : BCC_BY_KIND[parsed.data.kind],
       subject,
       isTestRedirect: Boolean(ctx.testRedirect),
       testRedirectTarget: ctx.testRedirect,

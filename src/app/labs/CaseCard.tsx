@@ -28,6 +28,21 @@ function timeAgo(iso: string) {
   return `${d}d ago`;
 }
 
+/**
+ * SSR-safe relative time. Server renders empty (Date.now() differs between
+ * server and client by enough to flip the rounded minute count), then the
+ * client fills in after mount.
+ */
+function RelativeTime({ iso }: { iso: string }) {
+  const [text, setText] = useState<string>("");
+  useEffect(() => {
+    setText(timeAgo(iso));
+    const id = setInterval(() => setText(timeAgo(iso)), 30_000);
+    return () => clearInterval(id);
+  }, [iso]);
+  return <>{text}</>;
+}
+
 function ProgressDots({ row }: { row: LabCase }) {
   return (
     <div className="flex items-center gap-1">
@@ -229,7 +244,7 @@ export function CaseCard({
         </div>
         <div className="mt-1 flex items-center justify-between gap-2">
           <p className="text-[11px] text-zinc-400">
-            Updated {timeAgo(row.updated_at)}
+            Updated <RelativeTime iso={row.updated_at} />
           </p>
           {staleness.stale ? (
             <span

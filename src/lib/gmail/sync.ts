@@ -4,6 +4,10 @@ import { getAuthorizedGmailClient } from "./client";
 import { extractPdfText } from "@/lib/inbound/extract-pdf";
 import { parseLabReportWithClaude } from "@/lib/inbound/parse-with-claude";
 import { matchCase } from "@/lib/inbound/match-case";
+import {
+  detectLabFromEmail,
+  isNotificationOnlyEmail,
+} from "@/lib/inbound/detect-notification";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import type { LabCase } from "@/lib/types";
 
@@ -14,8 +18,18 @@ export type SyncResult = {
   details: Array<{ messageId: string; status: "parsed" | "skipped" | "error"; note?: string }>;
 };
 
-const SYNC_QUERY =
-  "has:attachment filename:pdf newer_than:30d -in:trash -in:drafts";
+const COMMON_FILTERS = "newer_than:30d -in:trash -in:drafts";
+// Primary query — emails carrying the lab result PDF. Most labs work this
+// way and the existing Claude parser handles them end-to-end.
+const SYNC_QUERY = `has:attachment filename:pdf ${COMMON_FILTERS}`;
+// Secondary query — notification-only emails (Vibrant, Genova, etc.) that
+// say "log in to view" with no attachment. Surfaced as `needs_manual_pull`
+// so staff can click straight through to the lab portal.
+const NOTIFICATION_QUERY =
+  '("your results are ready" OR "view your results" ' +
+  'OR "log in to view" OR "results are now available" ' +
+  'OR "results have been posted" OR "secure portal") ' +
+  `-has:attachment ${COMMON_FILTERS}`;
 
 function decodeBase64Url(input: string): Buffer {
   const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
@@ -81,12 +95,25 @@ export async function syncGmailInbox(): Promise<SyncResult> {
     details: [],
   };
 
-  const list = await gmail.users.messages.list({
-    userId: "me",
-    q: SYNC_QUERY,
-    maxResults: 50,
-  });
-  const messages = list.data.messages ?? [];
+  const [primary, notifications] = await Promise.all([
+    gmail.users.messages.list({ userId: "me", q: SYNC_QUERY, maxResults: 50 }),
+    gmail.users.messages.list({
+      userId: "me",
+      q: NOTIFICATION_QUERY,
+      maxResults: 25,
+    }),
+  ]);
+  const seenIds = new Set<string>();
+  const messages: gmail_v1.Schema$Message[] = [];
+  for (const m of [
+    ...(primary.data.messages ?? []),
+    ...(notifications.data.messages ?? []),
+  ]) {
+    const id = m.id;
+    if (!id || seenIds.has(id)) continue;
+    seenIds.add(id);
+    messages.push(m);
+  }
 
   // Pre-load existing message IDs to skip duplicates fast.
   if (messages.length > 0) {
@@ -182,6 +209,37 @@ export async function syncGmailInbox(): Promise<SyncResult> {
               extracted_text: a.text,
             })),
           );
+        }
+
+        // Notification-only path: lab said "log in to view" with no PDF.
+        // Skip the (expensive, doomed) Claude parse and surface the row as
+        // `needs_manual_pull` so staff can click straight to the portal.
+        if (
+          isNotificationOnlyEmail({
+            subject,
+            bodyText,
+            attachmentCount: attachmentTexts.length,
+          })
+        ) {
+          const detectedLab = detectLabFromEmail({
+            subject,
+            fromAddress: fromAddr,
+            bodyText,
+          });
+          await db
+            .from("inbound_emails")
+            .update({
+              parser_status: "needs_manual_pull",
+              parser_extracted: detectedLab ? { lab_name: detectedLab } : null,
+            })
+            .eq("id", inboundId);
+          result.processed += 1;
+          result.details.push({
+            messageId: id,
+            status: "parsed",
+            note: "notification-only",
+          });
+          continue;
         }
 
         try {

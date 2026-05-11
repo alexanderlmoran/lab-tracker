@@ -6,36 +6,45 @@ type Common = {
   patientName: string;
   practiceName: string;
   practiceAddress?: string | null;
-  patientPortalUrl?: string | null;
 };
+
+function firstName(full: string): string {
+  const tok = full.trim().split(/\s+/)[0];
+  return tok || full;
+}
+
+const PRACTICE_PHONE = "305-602-5260";
+const PB_PORTAL = "practicebetter.io";
 
 export function SampleSent(
   props: Common & {
     labName: string;
-    trackingNumber?: string | null;
+    labPanel: string | null;
+    turnaroundText: string;
   },
 ) {
+  const first = firstName(props.patientName);
+  const labLabel = props.labPanel
+    ? `${props.labName} ${props.labPanel}`
+    : props.labName;
   return (
     <Layout
-      preview={`Your ${props.labName} sample is on its way`}
+      preview="Sample Received"
       practiceName={props.practiceName}
       practiceAddress={props.practiceAddress}
     >
-      <Text style={styles.heading}>
-        Your sample is on its way to {props.labName}
-      </Text>
-      <Text style={styles.body}>Hi {props.patientName},</Text>
+      <Text style={styles.body}>Dear {first},</Text>
       <Text style={styles.body}>
-        Your sample has been sent to {props.labName}.
-        {props.trackingNumber
-          ? ` Tracking: ${props.trackingNumber}.`
-          : ""}{" "}
-        Most results return within a few weeks; we'll reach out as soon as
-        anything is ready in your portal.
+        Your sample has been sent to our partner laboratory for: {labLabel}.
       </Text>
       <Text style={styles.body}>
-        If anything looks off in the meantime, just reply to this email.
+        Results are expected within {props.turnaroundText}.
       </Text>
+      <Text style={styles.body}>
+        Thank you and please call us at {PRACTICE_PHONE} if you have any
+        questions.
+      </Text>
+      <Text style={styles.body}>You can also reply to this email.</Text>
     </Layout>
   );
 }
@@ -43,30 +52,38 @@ export function SampleSent(
 export function PartialUploaded(
   props: Common & {
     labName: string;
+    labPanel: string | null;
   },
 ) {
+  const first = firstName(props.patientName);
+  const labLabel = props.labPanel
+    ? `${props.labName} ${props.labPanel}`
+    : props.labName;
   return (
     <Layout
-      preview={`Partial ${props.labName} results are ready in your portal`}
+      preview="Partial Results Received"
       practiceName={props.practiceName}
       practiceAddress={props.practiceAddress}
     >
-      <Text style={styles.heading}>
-        Partial {props.labName} results are ready
-      </Text>
-      <Text style={styles.body}>Hi {props.patientName},</Text>
+      <Text style={styles.body}>Dear {first},</Text>
       <Text style={styles.body}>
-        Some of your {props.labName} results are now uploaded to your patient
-        portal. Have a look when you get a chance — the rest will follow.
+        We have received partial results for the following: {labLabel}.
       </Text>
-      {props.patientPortalUrl ? (
-        <Text style={styles.body}>
-          View in portal:{" "}
-          <a href={props.patientPortalUrl} style={{ color: "#0f8b7e" }}>
-            {props.patientPortalUrl}
-          </a>
-        </Text>
-      ) : null}
+      <Text style={styles.body}>
+        These results have been uploaded to Practice Better.
+      </Text>
+      <Text style={styles.body}>
+        We will notify you when the complete results become available.
+      </Text>
+      <Text style={styles.body}>
+        To view the partial results, please look for a separate email from
+        Practice Better, or log in to: {PB_PORTAL}
+      </Text>
+      <Text style={styles.body}>
+        Thank you and please call us at {PRACTICE_PHONE} if you have any
+        questions.
+      </Text>
+      <Text style={styles.body}>You can also reply to this email.</Text>
     </Layout>
   );
 }
@@ -74,34 +91,41 @@ export function PartialUploaded(
 export function CompleteUploaded(
   props: Common & {
     labName: string;
+    labPanel: string | null;
   },
 ) {
+  const first = firstName(props.patientName);
+  const labLabel = props.labPanel
+    ? `${props.labName} ${props.labPanel}`
+    : props.labName;
   return (
     <Layout
-      preview={`Your full ${props.labName} results are ready`}
+      preview="Complete Results Received"
       practiceName={props.practiceName}
       practiceAddress={props.practiceAddress}
     >
-      <Text style={styles.heading}>Your full results are ready</Text>
-      <Text style={styles.body}>Hi {props.patientName},</Text>
+      <Text style={styles.body}>Dear {first},</Text>
       <Text style={styles.body}>
-        All of your {props.labName} results are now in your patient portal.
-        The next step is your Review of Findings — we'll send a separate note
-        with scheduling.
+        We have received the complete results for the following: {labLabel}.
       </Text>
-      {props.patientPortalUrl ? (
-        <Text style={styles.body}>
-          View in portal:{" "}
-          <a href={props.patientPortalUrl} style={{ color: "#0f8b7e" }}>
-            {props.patientPortalUrl}
-          </a>
-        </Text>
-      ) : null}
+      <Text style={styles.body}>
+        These results have been uploaded to Practice Better.
+      </Text>
+      <Text style={styles.body}>
+        To view the complete results, please look for a separate email from
+        Practice Better, or log in to: {PB_PORTAL}
+      </Text>
+      <Text style={styles.body}>
+        Thank you and please call us at {PRACTICE_PHONE} if you have any
+        questions.
+      </Text>
+      <Text style={styles.body}>You can also reply to this email.</Text>
     </Layout>
   );
 }
 
 export function RofFollowup(props: Common) {
+  const first = firstName(props.patientName);
   return (
     <Layout
       preview="Thanks for your review — here's what's next"
@@ -109,12 +133,12 @@ export function RofFollowup(props: Common) {
       practiceAddress={props.practiceAddress}
     >
       <Text style={styles.heading}>
-        Thanks for your review — here's what's next
+        Thanks for your review — here&apos;s what&apos;s next
       </Text>
-      <Text style={styles.body}>Hi {props.patientName},</Text>
+      <Text style={styles.body}>Dear {first},</Text>
       <Text style={styles.body}>
-        Great catching up. As discussed, we'll send your protocol shortly, and
-        a member of the team will follow up about supplements and anything
+        Great catching up. As discussed, we&apos;ll send your protocol shortly,
+        and a member of the team will follow up about supplements and anything
         else that came out of the review.
       </Text>
       <Text style={styles.body}>If anything is unclear, reply here.</Text>

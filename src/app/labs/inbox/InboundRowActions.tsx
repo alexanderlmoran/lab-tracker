@@ -14,12 +14,15 @@ export function InboundRowActions({
   defaultStep,
   activeCases,
   alreadyApplied,
+  dismissOnly = false,
 }: {
   inboundId: string;
   matchedCaseId: string | null;
   defaultStep: 2 | 4;
   activeCases: Pick<LabCase, "id" | "patient_name" | "lab_name">[];
   alreadyApplied: boolean;
+  /** Notification-only rows: only the Dismiss action makes sense. */
+  dismissOnly?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -57,6 +60,19 @@ export function InboundRowActions({
   if (alreadyApplied) {
     return (
       <span className="text-xs text-emerald-700">Applied — case advanced.</span>
+    );
+  }
+
+  if (dismissOnly) {
+    return (
+      <button
+        type="button"
+        onClick={onDismiss}
+        disabled={pending}
+        className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
+      >
+        Dismiss
+      </button>
     );
   }
 

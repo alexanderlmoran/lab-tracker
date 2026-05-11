@@ -43,6 +43,7 @@ const CaseInput = z.object({
   partialExpected: z.boolean().default(false),
   autoSendEmails: z.boolean().default(true),
   notes: z.string().trim().max(2000).optional().transform((v) => (v && v.length ? v : null)),
+  practiceBetterRecordId: z.string().trim().max(100).optional().transform((v) => (v && v.length ? v : null)),
 });
 
 type ParsedCase = z.infer<typeof CaseInput>;
@@ -60,6 +61,7 @@ function readForm(formData: FormData): unknown {
     partialExpected: formData.get("partialExpected") === "on",
     autoSendEmails: formData.get("autoSendEmails") === "on",
     notes: formData.get("notes") ?? "",
+    practiceBetterRecordId: formData.get("practiceBetterRecordId") ?? "",
   };
 }
 
@@ -76,6 +78,7 @@ function dbColumns(p: ParsedCase) {
     partial_expected: p.partialExpected,
     auto_send_emails: p.autoSendEmails,
     notes: p.notes,
+    practicebetter_record_id: p.practiceBetterRecordId,
   };
 }
 
@@ -380,9 +383,43 @@ export async function setStepCompleted(input: {
 
   const db = getSupabaseAdmin();
 
+  // Step 1 → true sets the predicted result-date range from the catalog;
+  // toggling step 1 back to false clears it. No-op for other steps so we
+  // don't pay the extra fetch on every check.
+  const updatePayload: Record<string, unknown> = { [dbCol]: completed };
+  let expectedDatesEvent: { min: string | null; max: string | null } | null = null;
+  if (stepNum === 1) {
+    if (completed) {
+      const { data: caseRow } = await db
+        .from("lab_cases")
+        .select("lab_name, lab_panel")
+        .eq("id", caseId)
+        .maybeSingle();
+      if (caseRow?.lab_name) {
+        const { findLabByName, predictResultDates } = await import(
+          "@/lib/labs/catalog"
+        );
+        const joined = caseRow.lab_panel
+          ? `${caseRow.lab_name} ${caseRow.lab_panel}`
+          : caseRow.lab_name;
+        const entry =
+          findLabByName(joined) ?? findLabByName(caseRow.lab_name);
+        if (entry) {
+          const { minIso, maxIso } = predictResultDates(new Date(), entry);
+          updatePayload.expected_result_at_min = minIso;
+          updatePayload.expected_result_at_max = maxIso;
+          if (minIso || maxIso) expectedDatesEvent = { min: minIso, max: maxIso };
+        }
+      }
+    } else {
+      updatePayload.expected_result_at_min = null;
+      updatePayload.expected_result_at_max = null;
+    }
+  }
+
   const { error: updateErr } = await db
     .from("lab_cases")
-    .update({ [dbCol]: completed })
+    .update(updatePayload)
     .eq("id", caseId);
   if (updateErr) return { ok: false, error: updateErr.message };
 
@@ -395,6 +432,15 @@ export async function setStepCompleted(input: {
     note: note ?? null,
   });
 
+  if (expectedDatesEvent) {
+    await db.from("lab_events").insert({
+      case_id: caseId,
+      kind: "expected_dates_set",
+      actor: user.email ?? "admin",
+      note: `Predicted: ${expectedDatesEvent.min ?? "—"} to ${expectedDatesEvent.max ?? "—"}`,
+    });
+  }
+
   // Auto-push to PracticeBetter when final results are marked uploaded.
   // Best-effort: a PB failure must not block the step toggle.
   if (completed && step === 5) {
@@ -405,6 +451,63 @@ export async function setStepCompleted(input: {
       console.error("[practicebetter] auto-push failed", err);
     }
   }
+
+  revalidatePath("/labs");
+  revalidatePath(`/labs/${caseId}`);
+  return { ok: true };
+}
+
+/**
+ * Bulk-advance a case to "Closed" — sets every step boolean (except 2/3
+ * when partial_expected = false, which stay skipped) to true in one update.
+ * No emails fire even though steps 1/3/5/7 normally have email gates: the
+ * intent here is "this case is historically done, mark it shipped" — sending
+ * patient emails for past activity would be wrong.
+ *
+ * Used by the "Mark as closed" shortcut in CaseDetail. Reversible via the
+ * existing per-step toggle (untick step 9 → card leaves Closed).
+ */
+export async function markCaseClosed(
+  caseId: string,
+): Promise<ActionResult> {
+  const user = await requireAdmin();
+  const db = getSupabaseAdmin();
+
+  const { data: caseRow, error: fetchErr } = await db
+    .from("lab_cases")
+    .select("partial_expected")
+    .eq("id", caseId)
+    .maybeSingle();
+  if (fetchErr || !caseRow) {
+    return { ok: false, error: fetchErr?.message ?? "Case not found" };
+  }
+
+  const updatePayload: Record<string, boolean> = {
+    step1_sample_sent: true,
+    step4_complete_received: true,
+    step5_complete_uploaded: true,
+    step6_rof_scheduled: true,
+    step7_rof_completed: true,
+    step8_protocol_emailed: true,
+    step9_sales_followup: true,
+  };
+  if (caseRow.partial_expected) {
+    updatePayload.step2_partial_received = true;
+    updatePayload.step3_partial_uploaded = true;
+  }
+
+  const { error: updateErr } = await db
+    .from("lab_cases")
+    .update(updatePayload)
+    .eq("id", caseId);
+  if (updateErr) return { ok: false, error: updateErr.message };
+
+  await db.from("lab_events").insert({
+    case_id: caseId,
+    kind: "case_edited",
+    actor: user.email ?? "admin",
+    note: "Marked as closed (bulk step advance, no emails fired)",
+  });
 
   revalidatePath("/labs");
   revalidatePath(`/labs/${caseId}`);

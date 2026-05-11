@@ -3,8 +3,11 @@ import { requireAdmin } from "@/lib/auth-guard";
 import { listDistinctLabNames, listLabCases } from "./actions";
 import { logoutAction } from "../login/actions";
 import { KanbanBoard } from "./KanbanBoard";
+import { LabKanbanBoard } from "./LabKanbanBoard";
+import { LabsTabs, type LabsTab } from "./LabsTabs";
 import { CaseDialog } from "./CaseDialog";
 import { SearchBar } from "./SearchBar";
+import { RefreshAllTrackingButton } from "./RefreshAllTrackingButton";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +25,8 @@ export default async function LabsPage({
   const sp = await searchParams;
   const q = firstString(sp.q);
   const lab = firstString(sp.lab);
+  const tabParam = firstString(sp.tab);
+  const tab: LabsTab = tabParam === "labs" ? "labs" : "patients";
   const hasFilters = Boolean(q || lab);
 
   const [cases, labNames] = await Promise.all([
@@ -30,7 +35,7 @@ export default async function LabsPage({
   ]);
 
   return (
-    <div className="min-h-dvh bg-zinc-50">
+    <div className="flex min-h-dvh flex-col bg-zinc-50 lg:h-dvh lg:overflow-hidden">
       <header className="border-b border-zinc-200 bg-white">
         <div className="mx-auto flex max-w-screen-2xl items-center justify-between px-6 py-4">
           <div>
@@ -45,6 +50,12 @@ export default async function LabsPage({
           </div>
           <div className="flex items-center gap-3 text-sm">
             <CaseDialog mode="create" triggerLabel="+ New case" />
+            <Link
+              href="/labs/import"
+              className="text-xs text-zinc-600 underline-offset-2 hover:text-zinc-900 hover:underline"
+            >
+              Import
+            </Link>
             <Link
               href="/labs/inbox"
               className="text-xs text-zinc-600 underline-offset-2 hover:text-zinc-900 hover:underline"
@@ -88,9 +99,13 @@ export default async function LabsPage({
         </div>
       </header>
 
-      <main className="mx-auto max-w-screen-2xl px-4 pb-16 pt-6">
-        <div className="mb-4">
-          <SearchBar labNames={labNames} />
+      <main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col px-4 pb-16 pt-6 lg:min-h-0 lg:pb-6">
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <LabsTabs tab={tab} />
+          <div className="flex-1 min-w-0">
+            <SearchBar labNames={labNames} />
+          </div>
+          <RefreshAllTrackingButton />
         </div>
         {cases.length === 0 ? (
           <div className="rounded-lg border border-dashed border-zinc-300 bg-white p-12 text-center">
@@ -111,7 +126,13 @@ export default async function LabsPage({
             </p>
           </div>
         ) : (
-          <KanbanBoard rows={cases} />
+          <div className="flex-1 lg:min-h-0">
+            {tab === "labs" ? (
+              <LabKanbanBoard rows={cases} />
+            ) : (
+              <KanbanBoard rows={cases} />
+            )}
+          </div>
         )}
       </main>
     </div>

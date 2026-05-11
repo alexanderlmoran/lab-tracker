@@ -1,0 +1,135 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { requireAdmin } from "@/lib/auth-guard";
+import { getSupabaseAdmin } from "@/utils/supabase/admin";
+import {
+  FedExError,
+  fedexTrackBatch,
+  isFedExConfigured,
+  type FedExTrackResult,
+} from "@/lib/tracking/fedex";
+import type { ActionResult, TrackingStatus } from "@/lib/types";
+
+type CaseRow = {
+  id: string;
+  tracking_number: string | null;
+  tracking_status: TrackingStatus | null;
+};
+
+function mergeUpdate(result: FedExTrackResult, existing: CaseRow) {
+  // Don't overwrite an existing `delivered` with a later `unknown` — FedEx
+  // sometimes returns "no information available" after a package has long
+  // since been delivered. Keep the most-recent useful state.
+  if (result.status === "unknown" && existing.tracking_status === "delivered") {
+    return null;
+  }
+  const polledIso = new Date().toISOString();
+  return {
+    tracking_carrier: "fedex" as const,
+    tracking_status: result.status,
+    tracking_status_detail: result.statusDetail,
+    tracking_event_at: result.eventAtIso,
+    tracking_location: result.location,
+    tracking_polled_at: polledIso,
+    tracking_delivered_at: result.deliveredAtIso ?? null,
+  };
+}
+
+/**
+ * Refresh a single case's FedEx tracking. Used by the "Refresh tracking"
+ * button on case detail. Returns the updated tracking snapshot or an error.
+ */
+export async function refreshTrackingForCase(
+  caseId: string,
+): Promise<ActionResult<{
+  status: TrackingStatus;
+  detail: string | null;
+  location: string | null;
+  eventAtIso: string | null;
+  deliveredAtIso: string | null;
+}>> {
+  const user = await requireAdmin();
+  if (!isFedExConfigured()) {
+    return {
+      ok: false,
+      error: "FedEx not configured — set FEDEX_API_KEY/SECRET/BASE in env",
+    };
+  }
+  const db = getSupabaseAdmin();
+  const { data: row, error: fetchErr } = await db
+    .from("lab_cases")
+    .select("id, tracking_number, tracking_status")
+    .eq("id", caseId)
+    .maybeSingle();
+  if (fetchErr || !row) {
+    return { ok: false, error: fetchErr?.message ?? "Case not found" };
+  }
+  if (!row.tracking_number) {
+    return { ok: false, error: "No tracking number on this case" };
+  }
+
+  let results: FedExTrackResult[];
+  try {
+    results = await fedexTrackBatch([row.tracking_number]);
+  } catch (err) {
+    const e = err instanceof FedExError ? err : new Error(String(err));
+    return { ok: false, error: `FedEx error: ${e.message}` };
+  }
+  const r = results[0];
+  if (!r) return { ok: false, error: "No result returned from FedEx" };
+
+  const update = mergeUpdate(r, row as CaseRow);
+  if (update) {
+    const { error: updateErr } = await db
+      .from("lab_cases")
+      .update(update)
+      .eq("id", caseId);
+    if (updateErr) return { ok: false, error: updateErr.message };
+  }
+
+  await db.from("lab_events").insert({
+    case_id: caseId,
+    kind: "tracking_refreshed",
+    actor: user.email ?? "admin",
+    note: `${r.status}${r.location ? ` · ${r.location}` : ""}${r.statusDetail ? ` — ${r.statusDetail}` : ""}`,
+  });
+
+  revalidatePath("/labs");
+  revalidatePath(`/labs/${caseId}`);
+
+  return {
+    ok: true,
+    data: {
+      status: r.status,
+      detail: r.statusDetail,
+      location: r.location,
+      eventAtIso: r.eventAtIso,
+      deliveredAtIso: r.deliveredAtIso,
+    },
+  };
+}
+
+/**
+ * Bulk refresh, user-initiated. Wraps the shared core (also called by the
+ * Vercel cron route at /api/cron/refresh-tracking) with a requireAdmin gate
+ * and revalidate on finish.
+ */
+export async function refreshTrackingForActiveCases(): Promise<
+  ActionResult<{ polled: number; updated: number; errors: number }>
+> {
+  const user = await requireAdmin();
+  const { refreshTrackingForActiveCasesCore } = await import(
+    "@/lib/tracking/refresh-core"
+  );
+  const r = await refreshTrackingForActiveCasesCore({
+    actor: user.email ?? "admin",
+    limit: 300,
+  });
+  if (!r.ok) return { ok: false, error: r.error };
+  revalidatePath("/labs");
+  return {
+    ok: true,
+    data: { polled: r.polled, updated: r.updated, errors: r.errors },
+  };
+}

@@ -20,7 +20,10 @@ export type LabEventKind =
   | "email_sent"
   | "email_resent"
   | "email_failed"
-  | "email_skipped";
+  | "email_skipped"
+  | "case_bulk_imported"
+  | "expected_dates_set"
+  | "tracking_refreshed";
 
 export type LabCase = {
   id: string;
@@ -47,9 +50,28 @@ export type LabCase = {
   archived_at: string | null;
   deleted_at: string | null;
   practicebetter_record_id: string | null;
+  expected_result_at_min: string | null;
+  expected_result_at_max: string | null;
+  bulk_import_id: string | null;
+  tracking_carrier: string | null;
+  tracking_status: TrackingStatus | null;
+  tracking_status_detail: string | null;
+  tracking_event_at: string | null;
+  tracking_polled_at: string | null;
+  tracking_delivered_at: string | null;
+  tracking_location: string | null;
   created_at: string;
   updated_at: string;
 };
+
+export type TrackingStatus =
+  | "pre_transit"
+  | "in_transit"
+  | "out_for_delivery"
+  | "delivered"
+  | "exception"
+  | "returned"
+  | "unknown";
 
 export type PracticeBetterPushKind = "partial" | "complete" | "manual";
 export type PracticeBetterPushStatus = "queued" | "sent" | "failed" | "skipped";
@@ -102,7 +124,8 @@ export type InboundEmailStatus =
   | "parsed"
   | "failed"
   | "applied"
-  | "dismissed";
+  | "dismissed"
+  | "needs_manual_pull";
 
 export type InboundEmailMatchConfidence = "high" | "medium" | "low" | "none";
 

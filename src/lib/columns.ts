@@ -92,6 +92,64 @@ export function getColumnFor(c: LabCase): ColumnKey {
   return "untouched";
 }
 
+/**
+ * Multi-lab patient placement: a patient with multiple lab cases sits in the
+ * column of their *least-progressed* lab — the bottleneck — so the board
+ * surfaces "what needs to happen next for this patient." The exception:
+ * "closed" only when every lab is closed; one closed lab + one in-progress
+ * lab keeps the patient in the in-progress column.
+ */
+export function getColumnForPatient(cases: LabCase[]): ColumnKey {
+  if (cases.length === 0) return "untouched";
+  let minIdx = COLUMN_ORDER.length;
+  let minCol: ColumnKey = "closed";
+  for (const c of cases) {
+    const col = getColumnFor(c);
+    const idx = COLUMN_ORDER.indexOf(col);
+    if (idx >= 0 && idx < minIdx) {
+      minIdx = idx;
+      minCol = col;
+    }
+  }
+  return minCol;
+}
+
+export type PatientGroup = {
+  patientEmail: string;
+  patientName: string;
+  cases: LabCase[];
+};
+
+/**
+ * Group lab cases by patient email (the de facto patient identity). Cases
+ * within a group are sorted by lab_name then panel for stable display.
+ * Groups are returned in insertion order.
+ */
+export function groupByPatient(rows: LabCase[]): PatientGroup[] {
+  const map = new Map<string, PatientGroup>();
+  for (const row of rows) {
+    const key = row.patient_email.trim().toLowerCase();
+    let g = map.get(key);
+    if (!g) {
+      g = {
+        patientEmail: row.patient_email,
+        patientName: row.patient_name,
+        cases: [],
+      };
+      map.set(key, g);
+    }
+    g.cases.push(row);
+  }
+  for (const g of map.values()) {
+    g.cases.sort((a, b) => {
+      const labCmp = (a.lab_name || "").localeCompare(b.lab_name || "");
+      if (labCmp !== 0) return labCmp;
+      return (a.lab_panel || "").localeCompare(b.lab_panel || "");
+    });
+  }
+  return [...map.values()];
+}
+
 export function isEmailStep(step: StepNumber): step is 1 | 3 | 5 | 7 {
   return step === 1 || step === 3 || step === 5 || step === 7;
 }

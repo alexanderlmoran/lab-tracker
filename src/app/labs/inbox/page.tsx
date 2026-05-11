@@ -9,6 +9,7 @@ import { GmailPanel } from "./GmailPanel";
 import { PracticeBetterPanel } from "./PracticeBetterPanel";
 import { pbHealthCheck } from "@/lib/practicebetter/client";
 import { getLatestPracticeBetterSync } from "@/lib/practicebetter/sync";
+import { getPortalUrlForLab } from "@/lib/inbound/detect-notification";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +35,11 @@ const STATUS_STYLES: Record<string, string> = {
   failed: "bg-red-100 text-red-700",
   applied: "bg-emerald-100 text-emerald-800",
   dismissed: "bg-zinc-200 text-zinc-700",
+  needs_manual_pull: "bg-purple-100 text-purple-800",
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  needs_manual_pull: "manual pull",
 };
 
 export default async function InboxPage() {
@@ -113,6 +119,10 @@ export default async function InboxPage() {
               const isApplied = email.parser_status === "applied";
               const isDismissed = email.parser_status === "dismissed";
               const isFailed = email.parser_status === "failed";
+              const isManualPull = email.parser_status === "needs_manual_pull";
+              const portalUrl = isManualPull
+                ? getPortalUrlForLab(ext?.lab_name)
+                : null;
               const defaultStep: 2 | 4 =
                 ext?.result_kind === "partial" ? 2 : 4;
 
@@ -130,7 +140,8 @@ export default async function InboxPage() {
                             "bg-zinc-100 text-zinc-700"
                           }`}
                         >
-                          {email.parser_status}
+                          {STATUS_LABELS[email.parser_status] ??
+                            email.parser_status}
                         </span>
                         {email.matched_confidence ? (
                           <span
@@ -163,6 +174,25 @@ export default async function InboxPage() {
                     <p className="mt-2 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">
                       Parser error: {email.parser_error}
                     </p>
+                  ) : null}
+
+                  {isManualPull ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md bg-purple-50 px-3 py-2 text-xs text-purple-800">
+                      <span>
+                        Notification email — no PDF attached. Pull this result
+                        from the lab portal manually.
+                      </span>
+                      {portalUrl ? (
+                        <a
+                          href={portalUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="ml-auto rounded-md border border-purple-300 bg-white px-2.5 py-1 text-[11px] font-medium text-purple-800 hover:bg-purple-100"
+                        >
+                          Open {ext?.lab_name ?? "lab"} portal →
+                        </a>
+                      ) : null}
+                    </div>
                   ) : null}
 
                   {ext ? (
@@ -222,13 +252,22 @@ export default async function InboxPage() {
                         <span className="text-zinc-500">No matched case.</span>
                       )}
                     </div>
-                    {!isApplied && !isDismissed ? (
+                    {!isApplied && !isDismissed && !isManualPull ? (
                       <InboundRowActions
                         inboundId={email.id}
                         matchedCaseId={email.matched_case_id}
                         defaultStep={defaultStep}
                         activeCases={slimCases}
                         alreadyApplied={false}
+                      />
+                    ) : isManualPull ? (
+                      <InboundRowActions
+                        inboundId={email.id}
+                        matchedCaseId={email.matched_case_id}
+                        defaultStep={defaultStep}
+                        activeCases={slimCases}
+                        alreadyApplied={false}
+                        dismissOnly
                       />
                     ) : null}
                   </div>
