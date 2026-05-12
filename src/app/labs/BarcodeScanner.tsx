@@ -62,9 +62,13 @@ export function BarcodeScanner({
     dialogRef.current?.showModal();
   }, []);
 
+  // Effect 1: load ZXing module and enumerate cameras. Runs ONCE per mount.
+  // Critical that this is separate from the decode effect — otherwise the
+  // initial deviceId=null run kicks off a decode immediately, and the moment
+  // setDeviceId() lands React tears that decode down and starts a new one.
+  // On iOS Safari that race produces a black video that never recovers.
   useEffect(() => {
     let cancelled = false;
-
     (async () => {
       try {
         const mod = await import("@zxing/browser");
@@ -77,46 +81,79 @@ export function BarcodeScanner({
             };
           }
         ).BrowserMultiFormatReader;
-        const reader = new Reader();
-        readerRef.current = reader;
+        readerRef.current = new Reader();
 
         let cams: MediaDeviceInfo[] = [];
         try {
           cams = await Reader.listVideoInputDevices();
-          if (cancelled) return;
-          setDevices(cams);
         } catch {
-          // listVideoInputDevices may require an already-granted permission.
+          // listVideoInputDevices needs permission — happens once on first
+          // grant. We fall through and let decodeFromVideoDevice prompt.
         }
-
+        if (cancelled) return;
+        setDevices(cams);
         const preferred =
           cams.find((d) => /back|rear|environment/i.test(d.label))?.deviceId ??
           cams[0]?.deviceId ??
           null;
-        const chosen = deviceId || preferred;
-        if (chosen !== deviceId) setDeviceId(chosen);
+        // Empty string is a sentinel meaning "default camera" — distinct from
+        // null which means "haven't picked yet, don't start the decode loop".
+        setDeviceId(preferred ?? "");
+      } catch (e) {
+        if (cancelled) return;
+        const err = e as { name?: string; message?: string };
+        setError(err?.message || "Could not load barcode scanner.");
+        setStarting(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-        const controls = await reader.decodeFromVideoDevice(
-          chosen ?? undefined,
-          videoRef.current,
-          (result, _err, ctrl) => {
-            if (result) {
-              const text =
-                (result as { getText?: () => string }).getText?.() ??
-                String(result);
-              ctrl.stop();
-              controlsRef.current = null;
-              onDetectRef.current?.(text);
-            }
-          },
-        );
+  // Effect 2: start the actual camera once we know which one to use. Runs
+  // every time the user picks a different camera too.
+  useEffect(() => {
+    if (deviceId === null) return; // device list still loading
+    const reader = readerRef.current;
+    const video = videoRef.current;
+    if (!reader || !video) return;
+
+    let cancelled = false;
+    let localControls: IControlsLike | null = null;
+
+    setStarting(true);
+    setError(null);
+
+    reader
+      .decodeFromVideoDevice(
+        deviceId || undefined,
+        video,
+        (result, _err, ctrl) => {
+          if (result) {
+            const text =
+              (result as { getText?: () => string }).getText?.() ??
+              String(result);
+            ctrl.stop();
+            controlsRef.current = null;
+            onDetectRef.current?.(text);
+          }
+        },
+      )
+      .then((controls) => {
         if (cancelled) {
-          controls.stop();
+          try {
+            controls.stop();
+          } catch {
+            // already stopped
+          }
           return;
         }
+        localControls = controls;
         controlsRef.current = controls;
         setStarting(false);
-      } catch (e) {
+      })
+      .catch((e) => {
         if (cancelled) return;
         const err = e as { name?: string; message?: string };
         setError(
@@ -127,20 +164,58 @@ export function BarcodeScanner({
               : err?.message || "Could not start camera.",
         );
         setStarting(false);
-      }
-    })();
+      });
 
     return () => {
       cancelled = true;
+      // 1) Stop the ZXing controller (cancels the decode loop).
       try {
-        controlsRef.current?.stop();
+        (localControls ?? controlsRef.current)?.stop();
       } catch {
         // already stopped
       }
       controlsRef.current = null;
-      readerRef.current = null;
+
+      // 2) Hard-release the camera. Without this, the MediaStreamTrack stays
+      //    live after the dialog closes and the next open() shows a black
+      //    video on iOS/Chrome because the OS treats the camera as in-use.
+      const v = videoRef.current;
+      if (v) {
+        const stream = v.srcObject as MediaStream | null;
+        if (stream) {
+          for (const track of stream.getTracks()) {
+            try {
+              track.stop();
+            } catch {
+              // ignore
+            }
+          }
+        }
+        try {
+          v.pause();
+        } catch {
+          // ignore
+        }
+        // Some browsers cache the last frame as a black still unless we
+        // explicitly null this out before the next mount.
+        v.srcObject = null;
+        try {
+          v.load();
+        } catch {
+          // ignore
+        }
+      }
     };
   }, [deviceId]);
+
+  // Final teardown: when the entire component unmounts, also clear the
+  // reader ref (the per-deviceId cleanup handles streams, but the reader
+  // outlives that effect and shouldn't leak across mount cycles).
+  useEffect(() => {
+    return () => {
+      readerRef.current = null;
+    };
+  }, []);
 
   function submitManual() {
     const code = manual.trim();

@@ -5,7 +5,9 @@ export type EmailKind =
   | "sample_sent"
   | "partial_uploaded"
   | "complete_uploaded"
-  | "rof_followup";
+  | "rof_followup"
+  | "nadia_all_received"
+  | "rof_allison";
 
 export type EmailStatus = "queued" | "sent" | "failed" | "skipped";
 
@@ -35,6 +37,7 @@ export type LabCase = {
   lab_name: string;
   lab_panel: string | null;
   tracking_number: string | null;
+  collection_date: string | null;
   partial_expected: boolean;
   auto_send_emails: boolean;
   notes: string | null;
@@ -60,6 +63,10 @@ export type LabCase = {
   tracking_polled_at: string | null;
   tracking_delivered_at: string | null;
   tracking_location: string | null;
+  nadia_confirm_token: string | null;
+  nadia_confirm_sent_at: string | null;
+  nadia_confirmed_at: string | null;
+  allison_rof_emailed_at: string | null;
   created_at: string;
   updated_at: string;
 };

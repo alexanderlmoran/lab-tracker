@@ -29,7 +29,7 @@ export const COLUMN_LABEL: Record<ColumnKey, string> = {
   complete_results: "Complete Results",
   rof_scheduled: "ROF Scheduled",
   rof_done: "ROF Done",
-  closed: "Closed",
+  closed: "Protocol received",
 };
 
 const STEP_LABELS: Record<StepNumber, string> = {
@@ -41,7 +41,7 @@ const STEP_LABELS: Record<StepNumber, string> = {
   6: "Patient scheduled in Zenoti",
   7: "ROF confirmed → Email 4",
   8: "Patient emailed protocol",
-  9: "Salesperson follow-up",
+  9: "ROF Allison email sent (she will proofread)",
 };
 
 const STEP_TO_COL: Record<StepNumber, keyof LabCase> = {

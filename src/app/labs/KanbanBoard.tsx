@@ -23,14 +23,13 @@ function StaticColumn({
   children: React.ReactNode;
 }) {
   return (
-    <section className="flex flex-col rounded-lg bg-zinc-100/60 p-2 lg:min-h-0">
+    <section
+      className="kanban-col flex flex-col p-2 lg:min-h-0"
+      data-col={col}
+    >
       <header className="flex items-center justify-between px-2 py-1.5">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-700">
-          {COLUMN_LABEL[col]}
-        </h3>
-        <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-600">
-          {count}
-        </span>
+        <h3 className="col-head-title">{COLUMN_LABEL[col]}</h3>
+        <span className="col-head-count">{count}</span>
       </header>
       <div className="flex min-h-[40px] flex-col gap-2 p-1 lg:flex-1 lg:overflow-y-auto">
         {children}

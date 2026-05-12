@@ -31,7 +31,7 @@ export type LabCatalogEntry = {
 
 export const LAB_CATALOG: LabCatalogEntry[] = [
   // ── Access ────────────────────────────────────────────────────────────
-  { name: "Access Blood Panel", provider: "Access", panel: "Blood Panel", turnaroundDaysMin: null, turnaroundDaysMax: null, aliases: ["access", "Labs - Access Blood Panel"] },
+  { name: "Access Blood Panel", provider: "Access", panel: "Blood Panel", turnaroundDaysMin: 5, turnaroundDaysMax: 7, aliases: ["access", "Labs - Access Blood Panel"] },
 
   // ── CancerCheck ───────────────────────────────────────────────────────
   { name: "CancerCheck", provider: "CancerCheck", panel: null, turnaroundDaysMin: 28, turnaroundDaysMax: 42, aliases: ["cancer check", "Labs - CancerCheck"] },

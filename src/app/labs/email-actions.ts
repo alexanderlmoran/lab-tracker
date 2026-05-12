@@ -7,7 +7,19 @@ import { requireAdmin } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { renderEmail } from "@/lib/email/render";
 import { EMAIL_TO_STEP } from "@/lib/email/step-map";
+import { maybeFireNadiaAllReceived } from "@/lib/workflow";
 import type { ActionResult, EmailKind, EmailLog, LabCase } from "@/lib/types";
+
+async function fireDownstream(kind: EmailKind, caseId: string, actor: string) {
+  // Step 5 (complete_uploaded) is the only patient-email step that has a
+  // downstream internal trigger. Best-effort — failures stay in the log.
+  if (kind !== "complete_uploaded") return;
+  try {
+    await maybeFireNadiaAllReceived(caseId, actor);
+  } catch (err) {
+    console.error("[workflow] nadia trigger failed", err);
+  }
+}
 
 const Kind = z.enum([
   "sample_sent",
@@ -210,6 +222,8 @@ export async function sendPatientEmail(input: {
     });
   }
 
+  await fireDownstream(kind, caseId, user.email ?? "admin");
+
   revalidatePath("/labs");
   revalidatePath(`/labs/${caseId}`);
   return { ok: true, data: { messageId: dispatch.data?.messageId } };
@@ -286,6 +300,10 @@ export async function skipPatientEmail(input: {
       actor: user.email ?? "admin",
     },
   ]);
+
+  // Skipped patient email still advances the workflow — Nadia outreach
+  // should fire when the step is marked done, regardless of how it got there.
+  await fireDownstream(kind, caseId, user.email ?? "admin");
 
   revalidatePath("/labs");
   revalidatePath(`/labs/${caseId}`);

@@ -1,0 +1,335 @@
+/* ─────────────────────────────────────────────────────────────────
+   Lab Tracker — Pulse HUD
+   Ported from claude.ai/design handoff (Lab Tracker HUD.html → Variant A).
+   Replaces the plain <header> on /labs with a brand + count chip + nav +
+   stale/sync glance chips + new-case CTA + user chip, plus a vivid
+   "flow strip" beneath that visualises pipeline distribution.
+
+   Selectors are namespaced under `.hud--pulse` to keep them out of the way
+   of the rest of the Tailwind-based app. Variables for pipeline colors are
+   declared on :root so the kanban can pick them up too.
+   ───────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Pipeline palette — used by the HUD flow strip AND the kanban columns. */
+  --c-new: #94a3b8;       /* slate-400 */
+  --c-sent: #38bdf8;      /* sky-400 */
+  --c-partial: #a78bfa;   /* violet-400 */
+  --c-complete: #818cf8;  /* indigo-400 */
+  --c-rof-s: #facc15;     /* amber */
+  --c-rof-d: #34d399;     /* emerald */
+  --c-closed: #10b981;    /* emerald deep */
+  --c-stale: #f43f5e;     /* rose */
+}
+
+/* Shared HUD chrome */
+.hud {
+  background: #ffffff;
+  border-bottom: 1px solid var(--color-zinc-200, #e4e4e7);
+}
+.hud .row {
+  max-width: 96rem;
+  margin: 0 auto;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* Pulse variant */
+.hud--pulse { position: relative; isolation: isolate; }
+.hud--pulse .row { padding-top: 14px; padding-bottom: 14px; }
+
+.hud--pulse .brand { display: flex; align-items: center; gap: 12px; }
+.hud--pulse .brand-mark {
+  width: 30px; height: 30px; border-radius: 9px;
+  background: radial-gradient(120% 120% at 20% 10%, #818cf8 0%, #6366f1 45%, #4338ca 100%);
+  color: #fff;
+  display: grid; place-items: center;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 13px; font-weight: 600;
+  letter-spacing: -0.02em;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.35) inset,
+    0 0 0 1px rgba(67, 56, 202, 0.35) inset,
+    0 6px 14px -6px rgba(67, 56, 202, 0.55),
+    0 2px 4px rgba(67, 56, 202, 0.18);
+}
+.hud--pulse .brand-meta { display: flex; flex-direction: column; line-height: 1.15; }
+.hud--pulse .brand-name { font-size: 14px; font-weight: 600; color: #18181b; letter-spacing: -0.01em; }
+.hud--pulse .brand-sub  { font-size: 11px; color: #71717a; }
+
+/* "X active" count chip */
+.hud--pulse .count-chip {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffffff, #f7f7fa);
+  border: 1px solid #e4e4e7;
+  box-shadow: 0 1px 0 rgba(24, 24, 27, 0.02), 0 1px 2px rgba(24, 24, 27, 0.04);
+}
+.hud--pulse .count-chip .n {
+  font-size: 14px; font-weight: 600; color: #18181b;
+  font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
+}
+.hud--pulse .count-chip .lbl { font-size: 11.5px; color: #71717a; }
+
+/* Nav */
+.hud--pulse .nav { display: flex; align-items: center; gap: 1px; margin-left: 6px; }
+.hud--pulse .nav a {
+  position: relative;
+  padding: 6px 11px;
+  border-radius: 8px;
+  font-size: 12.5px; font-weight: 500;
+  color: #52525b;
+  display: inline-flex; align-items: center; gap: 6px;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.hud--pulse .nav a:hover {
+  background: color-mix(in oklab, #6366f1 6%, #ffffff);
+  color: #18181b;
+}
+.hud--pulse .nav a .badge {
+  background: linear-gradient(180deg, #6366f1, #4f46e5);
+  color: #ffffff;
+  font-size: 10px; font-weight: 600;
+  padding: 1px 5px; border-radius: 999px;
+  min-width: 16px; text-align: center;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.25) inset;
+}
+
+.hud--pulse .spacer { flex: 1; }
+
+/* Glance chips on the right */
+.hud--pulse .glance { display: inline-flex; align-items: center; gap: 8px; }
+.hud--pulse .chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 12px; font-weight: 500;
+  background: linear-gradient(180deg, #ffffff, #f7f7fa);
+  border: 1px solid #e4e4e7;
+  color: #3f3f46;
+  box-shadow: 0 1px 0 rgba(24, 24, 27, 0.02), 0 1px 2px rgba(24, 24, 27, 0.04);
+}
+.hud--pulse .chip .num {
+  font-variant-numeric: tabular-nums; font-weight: 600; color: #18181b;
+}
+.hud--pulse .chip.stale {
+  color: #b91c3c;
+  background: linear-gradient(180deg, #fff5f7, #ffeef2);
+  border-color: color-mix(in oklab, var(--c-stale) 28%, #e4e4e7);
+}
+.hud--pulse .chip.stale .num { color: #b91c3c; }
+.hud--pulse .chip.stale .dot {
+  width: 7px; height: 7px; border-radius: 999px; background: var(--c-stale);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--c-stale) 22%, transparent);
+  animation: hud-pulse-soft 2.2s ease-in-out infinite;
+}
+.hud--pulse .chip.sync { color: #52525b; }
+.hud--pulse .chip.sync .dot {
+  width: 7px; height: 7px; border-radius: 999px; background: #10b981;
+  box-shadow: 0 0 0 3px color-mix(in oklab, #10b981 22%, transparent);
+  animation: hud-pulse-soft 2s ease-in-out infinite;
+}
+
+@keyframes hud-pulse-soft {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.18); opacity: 0.85; }
+}
+
+/* New case button — indigo gradient */
+.hud--pulse .new-btn {
+  background: linear-gradient(180deg, #6366f1 0%, #4f46e5 100%);
+  color: #ffffff;
+  border: 0;
+  border-radius: 9px;
+  padding: 7px 14px;
+  font-size: 12.5px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 6px;
+  cursor: pointer;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.25) inset,
+    0 0 0 1px rgba(67, 56, 202, 0.4) inset,
+    0 6px 14px -6px rgba(79, 70, 229, 0.6),
+    0 1px 2px rgba(24, 24, 27, 0.08);
+  transition: transform 0.08s ease, box-shadow 0.12s ease;
+}
+.hud--pulse .new-btn:hover {
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.3) inset,
+    0 0 0 1px rgba(67, 56, 202, 0.5) inset,
+    0 10px 18px -6px rgba(79, 70, 229, 0.7),
+    0 1px 2px rgba(24, 24, 27, 0.08);
+}
+.hud--pulse .new-btn:active { transform: translateY(0.5px); }
+.hud--pulse .new-btn .plus { font-size: 14px; line-height: 1; opacity: 0.95; }
+
+/* User chip */
+.hud--pulse .userchip {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 3px 10px 3px 3px;
+  border: 1px solid #e4e4e7;
+  border-radius: 999px;
+  font-size: 12px; color: #3f3f46;
+  background: linear-gradient(180deg, #ffffff, #f7f7fa);
+}
+.hud--pulse .userchip .avatar {
+  width: 24px; height: 24px; border-radius: 999px;
+  background: linear-gradient(135deg, #818cf8, #4f46e5);
+  color: #ffffff;
+  display: grid; place-items: center;
+  font-size: 10px; font-weight: 700;
+  text-transform: uppercase;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.25) inset;
+}
+.hud--pulse .userchip .role {
+  font-size: 9.5px; font-weight: 600;
+  color: #52525b;
+  background: #f4f4f5;
+  border: 1px solid #e4e4e7;
+  padding: 1px 5px; border-radius: 4px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+
+/* Sign-out */
+.hud--pulse .signout {
+  border: 0; background: transparent;
+  padding: 4px 8px;
+  font-size: 12px; color: #71717a;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.hud--pulse .signout:hover { background: #f4f4f5; color: #18181b; }
+
+/* Flow strip */
+.hud--pulse .flow {
+  position: relative;
+  display: flex;
+  height: 5px;
+  width: 100%;
+  background: #f4f4f5;
+  overflow: hidden;
+}
+.hud--pulse .flow .seg {
+  height: 100%;
+  position: relative;
+  filter: saturate(1.05);
+}
+.hud--pulse .flow .seg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0) 55%);
+  pointer-events: none;
+}
+.hud--pulse .flow .seg + .seg { box-shadow: -1px 0 0 rgba(255, 255, 255, 0.85); }
+
+/* Compact density (reserved — not toggled yet but supported by markup) */
+.hud[data-density="compact"] .row { padding-top: 8px; padding-bottom: 8px; }
+.hud[data-density="compact"] .nav a { padding: 4px 8px; font-size: 12px; }
+.hud[data-density="compact"] .new-btn { padding: 5px 10px; font-size: 12px; }
+
+/* Focus visible — accessible outline for keyboard users */
+.hud--pulse .new-btn:focus-visible,
+.hud--pulse .signout:focus-visible,
+.hud--pulse .nav a:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Kanban column colorization (matches the HUD flow strip palette)
+   Driven entirely by `data-col` on the column wrapper — the rest is
+   color-mix() math against --col-c which is set per column.
+   ───────────────────────────────────────────────────────────────── */
+
+.kanban-col {
+  --col-c: var(--c-new);
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--col-c) 10%, #ffffff),
+    color-mix(in oklab, var(--col-c) 4%, #ffffff) 80px,
+    #ffffff
+  );
+  border: 1px solid color-mix(in oklab, var(--col-c) 22%, #e4e4e7);
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.6) inset,
+    0 1px 2px rgba(24, 24, 27, 0.03);
+}
+.kanban-col::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 0;
+  height: 3px;
+  border-radius: 0 0 3px 3px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--col-c) 85%, transparent),
+    color-mix(in oklab, var(--col-c) 45%, transparent)
+  );
+}
+
+.kanban-col[data-col="untouched"]        { --col-c: var(--c-new); }
+.kanban-col[data-col="sample_sent"]      { --col-c: var(--c-sent); }
+.kanban-col[data-col="partial_results"]  { --col-c: var(--c-partial); }
+.kanban-col[data-col="complete_results"] { --col-c: var(--c-complete); }
+.kanban-col[data-col="rof_scheduled"]    { --col-c: var(--c-rof-s); }
+.kanban-col[data-col="rof_done"]         { --col-c: var(--c-rof-d); }
+.kanban-col[data-col="closed"]           { --col-c: var(--c-closed); }
+
+.kanban-col .col-head-title {
+  color: color-mix(in oklab, var(--col-c) 65%, #0a0a0b);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.kanban-col .col-head-title::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--col-c);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--col-c) 22%, transparent);
+}
+.kanban-col .col-head-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: color-mix(in oklab, var(--col-c) 60%, #0a0a0b);
+  background: color-mix(in oklab, var(--col-c) 15%, #ffffff);
+  border: 1px solid color-mix(in oklab, var(--col-c) 25%, #e4e4e7);
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Card accent rail — left edge matches the column color. The kanban card
+   markup wraps the existing PatientCard / CaseCard in a div with class
+   `kanban-card`, so the rail layers underneath without us touching the
+   card content components. */
+.kanban-card {
+  position: relative;
+  padding-left: 0;
+}
+.kanban-card::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--col-c);
+  opacity: 0.85;
+  pointer-events: none;
+  z-index: 1;
+}

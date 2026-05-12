@@ -5,6 +5,7 @@ import type { LabCase } from "@/lib/types";
 import { LabCombobox } from "./LabCombobox";
 import { PatientPicker } from "./PatientPicker";
 import { BarcodeScanner } from "./BarcodeScanner";
+import { normalizeScannedTracking } from "@/lib/tracking/normalize";
 
 const inputClass =
   "mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-900 focus:ring-2 focus:ring-zinc-900/10";
@@ -16,8 +17,9 @@ export function CaseFormFields({ initial }: { initial?: LabCase | null }) {
   const [scannerOpen, setScannerOpen] = useState(false);
 
   function onScan(code: string) {
+    const tracking = normalizeScannedTracking(code);
     if (trackingRef.current) {
-      trackingRef.current.value = code;
+      trackingRef.current.value = tracking;
       // Surface the change to any listeners (the form is otherwise uncontrolled).
       trackingRef.current.dispatchEvent(
         new Event("input", { bubbles: true }),
@@ -60,7 +62,23 @@ export function CaseFormFields({ initial }: { initial?: LabCase | null }) {
         <LabCombobox initial={initial} />
       </div>
 
-      <div className="sm:col-span-2">
+      <div>
+        <label htmlFor="collectionDate" className={labelClass}>
+          Collection date
+        </label>
+        <input
+          id="collectionDate"
+          name="collectionDate"
+          type="date"
+          defaultValue={v?.collection_date ?? ""}
+          className={inputClass}
+        />
+        <p className="mt-1 text-[11px] text-zinc-500">
+          When the sample was drawn from the patient. Anchors the expected-results estimate.
+        </p>
+      </div>
+
+      <div>
         <label htmlFor="trackingNumber" className={labelClass}>
           Tracking number
         </label>

@@ -1,13 +1,16 @@
 import { render } from "@react-email/components";
 import * as React from "react";
 import type { LabCase, EmailKind } from "@/lib/types";
-import { findLabByName } from "@/lib/labs/catalog";
+import { getEffectiveLab } from "@/lib/labs/effective";
+import { PatientEmail } from "./templates";
 import {
-  CompleteUploaded,
-  PartialUploaded,
-  RofFollowup,
-  SampleSent,
-} from "./templates";
+  applyPlaceholders,
+  firstNameOf,
+  labLabelOf,
+  loadAllPatientTemplates,
+  type EmailTemplate,
+  type PatientEmailKind,
+} from "./template-data";
 
 export type RenderedEmail = {
   to: string[];
@@ -26,6 +29,8 @@ export const SUBJECT: Record<EmailKind, string> = {
   partial_uploaded: "Partial Results Received",
   complete_uploaded: "Complete Results Received",
   rof_followup: "Thanks for your review — here's what's next",
+  nadia_all_received: "All labs received — please confirm scheduling outreach",
+  rof_allison: "ROF booked — please proofread",
 };
 
 // Operational BCC per email kind. These are practice routing rules, not
@@ -41,12 +46,22 @@ export const BCC_BY_KIND: Record<EmailKind, string[]> = {
     "nadia@centnerwellness.com",
   ],
   rof_followup: [],
+  nadia_all_received: [],
+  rof_allison: [],
 };
 
-export function envEmailConfig() {
-  const fromEmail = process.env.ALERT_FROM_EMAIL ?? "";
-  const replyTo = process.env.REPLY_TO_EMAIL || undefined;
-  const practiceName = stripQuotes(process.env.PRACTICE_NAME ?? "");
+export function envEmailConfig(overrides?: {
+  fromEmail?: string | null;
+  replyTo?: string | null;
+  practiceName?: string | null;
+}) {
+  const fromEmail =
+    overrides?.fromEmail?.trim() || process.env.ALERT_FROM_EMAIL || "";
+  const replyTo =
+    overrides?.replyTo?.trim() || process.env.REPLY_TO_EMAIL || undefined;
+  const practiceName = stripQuotes(
+    overrides?.practiceName?.trim() || process.env.PRACTICE_NAME || "",
+  );
   const practiceAddress = stripQuotes(process.env.PRACTICE_MAILING_ADDRESS ?? "") || null;
   const testRedirect = (process.env.EMAIL_TEST_REDIRECT ?? "").trim() || null;
   const fromHeader = practiceName
@@ -62,16 +77,42 @@ export function envEmailConfig() {
   };
 }
 
+/** Load env config merged with any DB overrides from app_settings. Used by
+ * server-side dispatch paths. Falls back to env-only if the table is empty
+ * or unreachable so a fresh install keeps working. */
+export async function loadEmailConfig() {
+  try {
+    const { getSupabaseAdmin } = await import("@/utils/supabase/admin");
+    const db = getSupabaseAdmin();
+    const { data } = await db
+      .from("app_settings")
+      .select("key, value")
+      .in("key", ["from_email", "reply_to_email", "practice_name"]);
+    const map: Record<string, string | null> = {};
+    for (const row of (data ?? []) as Array<{ key: string; value: string | null }>) {
+      map[row.key] = row.value;
+    }
+    return envEmailConfig({
+      fromEmail: map.from_email,
+      replyTo: map.reply_to_email,
+      practiceName: map.practice_name,
+    });
+  } catch {
+    return envEmailConfig();
+  }
+}
+
 function stripQuotes(s: string) {
   return s.replace(/^['"](.+)['"]$/, "$1");
 }
 
-function turnaroundTextFor(row: LabCase): string {
+async function turnaroundTextFor(row: LabCase): Promise<string> {
   const lookupKey = row.lab_panel
     ? `${row.lab_name} ${row.lab_panel}`
     : row.lab_name;
   const entry =
-    findLabByName(lookupKey) ?? findLabByName(row.lab_name) ?? null;
+    (await getEffectiveLab(lookupKey)) ??
+    (await getEffectiveLab(row.lab_name));
   const min = entry?.turnaroundDaysMin ?? null;
   const max = entry?.turnaroundDaysMax ?? null;
   if (min == null && max == null) return "a few weeks";
@@ -92,64 +133,161 @@ function turnaroundTextFor(row: LabCase): string {
   return `${single} business days`;
 }
 
-function templateFor(kind: EmailKind, row: LabCase, ctx: ReturnType<typeof envEmailConfig>) {
-  const common = {
+function placeholderContext(
+  row: LabCase,
+  ctx: ReturnType<typeof envEmailConfig>,
+  turnaroundText: string,
+): Record<string, string> {
+  return {
     patientName: row.patient_name,
+    patientFirstName: firstNameOf(row.patient_name),
+    labName: row.lab_name,
+    labPanel: row.lab_panel ?? "",
+    labLabel: labLabelOf(row),
+    turnaroundText,
     practiceName: ctx.practiceName,
-    practiceAddress: ctx.practiceAddress,
   };
-  switch (kind) {
-    case "sample_sent":
-      return React.createElement(SampleSent, {
-        ...common,
-        labName: row.lab_name,
-        labPanel: row.lab_panel,
-        turnaroundText: turnaroundTextFor(row),
-      });
-    case "partial_uploaded":
-      return React.createElement(PartialUploaded, {
-        ...common,
-        labName: row.lab_name,
-        labPanel: row.lab_panel,
-      });
-    case "complete_uploaded":
-      return React.createElement(CompleteUploaded, {
-        ...common,
-        labName: row.lab_name,
-        labPanel: row.lab_panel,
-      });
-    case "rof_followup":
-      return React.createElement(RofFollowup, common);
-  }
+}
+
+function renderTemplateElement(
+  template: EmailTemplate,
+  ctx: ReturnType<typeof envEmailConfig>,
+  placeholders: Record<string, string>,
+) {
+  const heading = template.heading
+    ? applyPlaceholders(template.heading, placeholders)
+    : null;
+  const paragraphs = template.paragraphs.map((p) =>
+    applyPlaceholders(p, placeholders),
+  );
+  const subject = applyPlaceholders(template.subject, placeholders);
+  return {
+    element: React.createElement(PatientEmail, {
+      preview: subject,
+      heading,
+      paragraphs,
+      practiceName: ctx.practiceName,
+      practiceAddress: ctx.practiceAddress,
+    }),
+    subject,
+  };
 }
 
 export async function renderEmail(
   row: LabCase,
   kind: EmailKind,
 ): Promise<RenderedEmail> {
-  const ctx = envEmailConfig();
-  const element = templateFor(kind, row, ctx);
+  if (kind === "nadia_all_received" || kind === "rof_allison") {
+    throw new Error(
+      `Internal email kind '${kind}' must be dispatched via src/lib/email/internal.ts, not renderEmail.`,
+    );
+  }
+  const patientKind = kind as PatientEmailKind;
+
+  const [ctx, templates, turnaroundText] = await Promise.all([
+    loadEmailConfig(),
+    loadAllPatientTemplates(),
+    patientKind === "sample_sent" ? turnaroundTextFor(row) : Promise.resolve(""),
+  ]);
+  const template = templates[patientKind];
+  const placeholders = placeholderContext(row, ctx, turnaroundText);
+  const { element, subject } = renderTemplateElement(template, ctx, placeholders);
   const html = await render(element, { pretty: false });
   const text = await render(element, { plainText: true });
 
   const originalTo = row.patient_email;
   const isTestRedirect = Boolean(ctx.testRedirect);
   const to = isTestRedirect ? [ctx.testRedirect!] : [originalTo];
-  const subject = isTestRedirect
-    ? `[TEST → ${originalTo}] ${SUBJECT[kind]}`
-    : SUBJECT[kind];
+  const finalSubject = isTestRedirect
+    ? `[TEST → ${originalTo}] ${subject}`
+    : subject;
 
-  const bccList = BCC_BY_KIND[kind];
+  const bccList = template.bcc;
 
   return {
     to,
     bcc: isTestRedirect || bccList.length === 0 ? undefined : bccList,
     from: ctx.fromHeader,
     replyTo: ctx.replyTo,
-    subject,
+    subject: finalSubject,
     html,
     text,
     isTestRedirect,
     originalTo,
+  };
+}
+
+/** Render a template against a fake patient row — used by the "Send test"
+ * button in /labs/settings → Email templates so admins can preview without
+ * a real case. */
+export async function renderTestEmail(args: {
+  kind: PatientEmailKind;
+  toEmail: string;
+}): Promise<RenderedEmail> {
+  const ctx = await loadEmailConfig();
+  const templates = await loadAllPatientTemplates();
+  const template = templates[args.kind];
+
+  const sampleRow: LabCase = {
+    id: "00000000-0000-0000-0000-000000000000",
+    patient_name: "Sample Patient",
+    patient_email: args.toEmail,
+    patient_phone: null,
+    patient_dob: null,
+    patient_address: null,
+    lab_name: "Access",
+    lab_panel: "Blood Panel",
+    tracking_number: null,
+    collection_date: null,
+    partial_expected: false,
+    auto_send_emails: true,
+    notes: null,
+    step1_sample_sent: true,
+    step2_partial_received: false,
+    step3_partial_uploaded: false,
+    step4_complete_received: false,
+    step5_complete_uploaded: false,
+    step6_rof_scheduled: false,
+    step7_rof_completed: false,
+    step8_protocol_emailed: false,
+    step9_sales_followup: false,
+    archived_at: null,
+    deleted_at: null,
+    practicebetter_record_id: null,
+    expected_result_at_min: null,
+    expected_result_at_max: null,
+    bulk_import_id: null,
+    tracking_carrier: null,
+    tracking_status: null,
+    tracking_status_detail: null,
+    tracking_event_at: null,
+    tracking_polled_at: null,
+    tracking_delivered_at: null,
+    tracking_location: null,
+    nadia_confirm_token: null,
+    nadia_confirm_sent_at: null,
+    nadia_confirmed_at: null,
+    allison_rof_emailed_at: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  const turnaroundText =
+    args.kind === "sample_sent" ? await turnaroundTextFor(sampleRow) : "";
+  const placeholders = placeholderContext(sampleRow, ctx, turnaroundText);
+  const { element, subject } = renderTemplateElement(template, ctx, placeholders);
+  const html = await render(element, { pretty: false });
+  const text = await render(element, { plainText: true });
+
+  return {
+    to: [args.toEmail],
+    bcc: undefined,
+    from: ctx.fromHeader,
+    replyTo: ctx.replyTo,
+    subject: `[TEST] ${subject}`,
+    html,
+    text,
+    isTestRedirect: true,
+    originalTo: args.toEmail,
   };
 }

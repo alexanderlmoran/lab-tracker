@@ -7,6 +7,7 @@ import {
   findLabByName,
   type LabCatalogEntry,
 } from "@/lib/labs/catalog";
+import { listEffectiveLabsForPicker } from "./actions";
 
 const inputClass =
   "mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-900 focus:ring-2 focus:ring-zinc-900/10";
@@ -66,11 +67,41 @@ export function LabCombobox({ initial }: { initial?: LabCase | null }) {
   const [open, setOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(-1);
 
+  // DB-backed effective catalog (DB rows override code by name; DB-only rows
+  // added via /labs/settings → Lab catalog show up here too). Falls back to
+  // the code catalog until the fetch resolves, so the dropdown never feels
+  // broken on a slow network.
+  const [effective, setEffective] = useState<LabCatalogEntry[]>(LAB_CATALOG);
+  useEffect(() => {
+    let cancelled = false;
+    listEffectiveLabsForPicker()
+      .then((rows) => {
+        if (cancelled) return;
+        setEffective(
+          rows.map((r) => ({
+            name: r.name,
+            provider: r.provider,
+            panel: r.panel,
+            turnaroundDaysMin: r.turnaroundDaysMin,
+            turnaroundDaysMax: r.turnaroundDaysMax,
+            retired: r.retired || undefined,
+          })),
+        );
+      })
+      .catch(() => {
+        // Stay on the code catalog fallback — never block UX on a DB hiccup.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const matches = useMemo<LabCatalogEntry[]>(() => {
     const q = display.trim().toLowerCase();
-    if (!q) return LAB_CATALOG.slice(0, 30);
+    const pool = effective.filter((e) => !e.retired);
+    if (!q) return pool.slice(0, 30);
     const scored: { entry: LabCatalogEntry; score: number }[] = [];
-    for (const e of LAB_CATALOG) {
+    for (const e of pool) {
       const hay =
         `${e.name} ${e.provider} ${e.panel ?? ""}`.toLowerCase();
       const idx = hay.indexOf(q);
@@ -78,7 +109,7 @@ export function LabCombobox({ initial }: { initial?: LabCase | null }) {
     }
     scored.sort((a, b) => a.score - b.score);
     return scored.slice(0, 30).map((s) => s.entry);
-  }, [display]);
+  }, [display, effective]);
 
   useEffect(() => {
     if (!open) return;

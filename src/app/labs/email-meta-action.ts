@@ -3,7 +3,7 @@
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
-import { BCC_BY_KIND, SUBJECT, envEmailConfig } from "@/lib/email/render";
+import { BCC_BY_KIND, SUBJECT, loadEmailConfig } from "@/lib/email/render";
 import type { EmailKind, LabCase } from "@/lib/types";
 
 const Input = z.object({
@@ -63,7 +63,7 @@ export async function getEmailMeta(input: {
   const latest = priorList[0] ?? null;
   const sentCount = priorList.filter((r) => r.status === "sent").length;
 
-  const ctx = envEmailConfig();
+  const ctx = await loadEmailConfig();
   const subject = ctx.testRedirect
     ? `[TEST → ${row.patient_email}] ${SUBJECT[parsed.data.kind]}`
     : SUBJECT[parsed.data.kind];

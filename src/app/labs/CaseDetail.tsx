@@ -40,10 +40,10 @@ function MarkClosedButton({ caseId, isAlreadyClosed }: { caseId: string; isAlrea
         type="button"
         onClick={onClick}
         disabled={pending || isAlreadyClosed}
-        title={isAlreadyClosed ? "Already closed" : "Bulk-advance to Closed without firing emails"}
+        title={isAlreadyClosed ? "Protocol already received" : "Bulk-advance to Protocol received without firing emails"}
         className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {pending ? "Closing…" : isAlreadyClosed ? "Closed" : "Mark as closed →"}
+        {pending ? "Saving…" : isAlreadyClosed ? "Protocol received" : "Mark protocol received →"}
       </button>
       {error ? <span className="text-[11px] text-red-600">{error}</span> : null}
     </div>
@@ -281,6 +281,7 @@ export function CaseDetail({ row }: { row: LabCase }) {
             label="Lab"
             value={row.lab_panel ? `${row.lab_name} · ${row.lab_panel}` : row.lab_name}
           />
+          <Field label="Collected" value={row.collection_date} />
           <Field label="Tracking" value={row.tracking_number} />
           {row.tracking_number ? (
             <div className="flex items-start gap-2 py-1">

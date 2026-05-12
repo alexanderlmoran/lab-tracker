@@ -40,6 +40,13 @@ const CaseInput = z.object({
   labName: z.string().trim().min(1).max(100),
   labPanel: z.string().trim().max(100).optional().transform((v) => (v && v.length ? v : null)),
   trackingNumber: z.string().trim().max(100).optional().transform((v) => (v && v.length ? v : null)),
+  collectionDate: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
+    .optional()
+    .or(z.literal(""))
+    .transform((v) => (v && v.length ? v : null)),
   partialExpected: z.boolean().default(false),
   autoSendEmails: z.boolean().default(true),
   notes: z.string().trim().max(2000).optional().transform((v) => (v && v.length ? v : null)),
@@ -58,6 +65,7 @@ function readForm(formData: FormData): unknown {
     labName: formData.get("labName"),
     labPanel: formData.get("labPanel") ?? "",
     trackingNumber: formData.get("trackingNumber") ?? "",
+    collectionDate: formData.get("collectionDate") ?? "",
     partialExpected: formData.get("partialExpected") === "on",
     autoSendEmails: formData.get("autoSendEmails") === "on",
     notes: formData.get("notes") ?? "",
@@ -75,6 +83,7 @@ function dbColumns(p: ParsedCase) {
     lab_name: p.labName,
     lab_panel: p.labPanel,
     tracking_number: p.trackingNumber,
+    collection_date: p.collectionDate,
     partial_expected: p.partialExpected,
     auto_send_emails: p.autoSendEmails,
     notes: p.notes,
@@ -392,20 +401,26 @@ export async function setStepCompleted(input: {
     if (completed) {
       const { data: caseRow } = await db
         .from("lab_cases")
-        .select("lab_name, lab_panel")
+        .select("lab_name, lab_panel, collection_date")
         .eq("id", caseId)
         .maybeSingle();
       if (caseRow?.lab_name) {
-        const { findLabByName, predictResultDates } = await import(
-          "@/lib/labs/catalog"
-        );
+        const { predictResultDates } = await import("@/lib/labs/catalog");
+        const { getEffectiveLab } = await import("@/lib/labs/effective");
         const joined = caseRow.lab_panel
           ? `${caseRow.lab_name} ${caseRow.lab_panel}`
           : caseRow.lab_name;
         const entry =
-          findLabByName(joined) ?? findLabByName(caseRow.lab_name);
+          (await getEffectiveLab(joined)) ??
+          (await getEffectiveLab(caseRow.lab_name));
         if (entry) {
-          const { minIso, maxIso } = predictResultDates(new Date(), entry);
+          // Prefer collection_date as the anchor when present — it's the
+          // true "sample collected" moment. Fall back to now() for cases
+          // where the user hasn't recorded one (legacy rows).
+          const anchor = caseRow.collection_date
+            ? new Date(`${caseRow.collection_date}T00:00:00Z`)
+            : new Date();
+          const { minIso, maxIso } = predictResultDates(anchor, entry);
           updatePayload.expected_result_at_min = minIso;
           updatePayload.expected_result_at_max = maxIso;
           if (minIso || maxIso) expectedDatesEvent = { min: minIso, max: maxIso };
@@ -449,6 +464,22 @@ export async function setStepCompleted(input: {
       await pushLabToPracticeBetter({ caseId, kind: "complete" });
     } catch (err) {
       console.error("[practicebetter] auto-push failed", err);
+    }
+    try {
+      const { maybeFireNadiaAllReceived } = await import("@/lib/workflow");
+      await maybeFireNadiaAllReceived(caseId, user.email ?? "admin");
+    } catch (err) {
+      console.error("[workflow] nadia trigger failed", err);
+    }
+  }
+
+  // Step 6 (ROF booked) → email Allison + auto-tick step 9.
+  if (completed && step === 6) {
+    try {
+      const { maybeFireAllisonRof } = await import("@/lib/workflow");
+      await maybeFireAllisonRof(caseId, user.email ?? "admin");
+    } catch (err) {
+      console.error("[workflow] allison trigger failed", err);
     }
   }
 
@@ -546,6 +577,8 @@ export type LabCaseFilters = {
   q?: string;
   /** Exact lab_name match. */
   lab?: string;
+  /** Time window — restrict to cases updated within the last N days. */
+  sinceDays?: number;
 };
 
 function escapePostgrestPattern(s: string): string {
@@ -592,7 +625,13 @@ export async function listLabCases(opts: {
     filtered = filtered.eq("lab_name", lab);
   }
 
-  const { data, error } = await filtered.order("created_at", {
+  const sinceDays = opts.filters?.sinceDays;
+  if (typeof sinceDays === "number" && sinceDays > 0) {
+    const cutoff = new Date(Date.now() - sinceDays * 86400000).toISOString();
+    filtered = filtered.gte("updated_at", cutoff);
+  }
+
+  const { data, error } = await filtered.order("updated_at", {
     ascending: false,
   });
   if (error) throw new Error(error.message);
@@ -600,6 +639,23 @@ export async function listLabCases(opts: {
 }
 
 /** Distinct lab names across non-deleted cases — for the filter dropdown. */
+/** Effective catalog for the New/Edit case combobox. Merges editable DB rows
+ * over the code catalog. Client-side fallback to the code catalog if this
+ * call fails — the dropdown stays useful even when the table is unavailable. */
+export async function listEffectiveLabsForPicker() {
+  await requireAdmin();
+  const { listEffectiveLabs } = await import("@/lib/labs/effective");
+  const entries = await listEffectiveLabs();
+  return entries.map((e) => ({
+    name: e.name,
+    provider: e.provider,
+    panel: e.panel,
+    turnaroundDaysMin: e.turnaroundDaysMin,
+    turnaroundDaysMax: e.turnaroundDaysMax,
+    retired: e.retired ?? false,
+  }));
+}
+
 export async function listDistinctLabNames(): Promise<string[]> {
   await requireAdmin();
   const db = getSupabaseAdmin();
