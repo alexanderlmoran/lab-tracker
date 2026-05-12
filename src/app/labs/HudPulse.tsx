@@ -149,11 +149,15 @@ export function HudPulse({ user, cases }: HudPulseProps) {
           triggerClassName="new-btn"
         />
 
-        <span className="userchip" title={`${user.email} — ${user.role}`}>
+        <Link
+          href="/labs/account"
+          className="userchip"
+          title={`${user.email} — ${user.role} · click to open your account`}
+        >
           <span className="avatar">{initials(user.email)}</span>
           <span>{user.email}</span>
           <span className="role">{user.role}</span>
-        </span>
+        </Link>
 
         <form action={logoutAction}>
           <button type="submit" className="signout">

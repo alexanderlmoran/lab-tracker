@@ -173,6 +173,12 @@
   border-radius: 999px;
   font-size: 12px; color: #3f3f46;
   background: linear-gradient(180deg, #ffffff, #f7f7fa);
+  text-decoration: none;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.hud--pulse .userchip:hover {
+  border-color: #d4d4d8;
+  background: linear-gradient(180deg, #ffffff, #f0f0f3);
 }
 .hud--pulse .userchip .avatar {
   width: 24px; height: 24px; border-radius: 999px;
