@@ -10,6 +10,7 @@ import { PracticeBetterPanel } from "./PracticeBetterPanel";
 import { pbHealthCheck } from "@/lib/practicebetter/client";
 import { getLatestPracticeBetterSync } from "@/lib/practicebetter/sync";
 import { getPortalUrlForLab } from "@/lib/inbound/detect-notification";
+import { LabPortalLauncher } from "./LabPortalLauncher";
 
 export const dynamic = "force-dynamic";
 
@@ -103,6 +104,7 @@ export default async function InboxPage() {
           initialLastSyncedAt={gmailState.lastSyncedAt}
         />
         <PracticeBetterPanel initial={pbProbe} initialSync={pbSync} />
+        <LabPortalLauncher />
         <UploadZone />
 
         {emails.length === 0 ? (

@@ -38,7 +38,7 @@ export function isNotificationOnlyEmail(input: {
 // fallback. Returns the canonical `lab_name` from LAB_CATALOG so the inbox
 // row can render the right portal link.
 const SENDER_TO_LAB: ReadonlyArray<{ pattern: RegExp; lab: string }> = [
-  { pattern: /vibrant[-_]?america|vibrantwellness|vibrant\.com/i, lab: "Vibrant" },
+  { pattern: /vibrant[-_]?wellness|vibrant[-_]?america|vibrant\.com/i, lab: "Vibrant" },
   { pattern: /gdx\.net|genovadiagnostics|genova/i, lab: "Genova" },
   { pattern: /doctorsdata|doctor['']?sdata/i, lab: "DoctorsData" },
   { pattern: /spectracell/i, lab: "Spectracell" },
@@ -46,6 +46,10 @@ const SENDER_TO_LAB: ReadonlyArray<{ pattern: RegExp; lab: string }> = [
   { pattern: /dutchtest|precisionanalytical/i, lab: "Dutch" },
   { pattern: /glycanage/i, lab: "GlycanAge" },
   { pattern: /accessmedlab|accesslab/i, lab: "Access" },
+  { pattern: /trudiagnostic|tru[-_]?age/i, lab: "TruAge" },
+  { pattern: /microbiomelabs|microbiome\s?labs/i, lab: "MicrobiomeLabs" },
+  { pattern: /microgendx|microgen\s?dx/i, lab: "MicroGenDX" },
+  { pattern: /infectolab|qbench\.net/i, lab: "Infectolab" },
 ];
 
 export function detectLabFromEmail(input: {
@@ -67,20 +71,54 @@ export function detectLabFromEmail(input: {
   return null;
 }
 
-// Per-lab portal URLs. Best-effort — these are entry points; the operator
-// signs in and navigates to the specific result. Null = no known portal,
-// surface a "manual" hint in the UI instead of a button.
-const LAB_PORTALS: Record<string, string> = {
-  Vibrant: "https://portal.vibrant-america.com/",
-  Genova: "https://portal.gdx.net/",
-  DoctorsData: "https://www.doctorsdata.com/my-account/",
-  Spectracell: "https://www.spectracell.com/login/",
-  Cyrex: "https://www.cyrexlabs.com/customer/account/login/",
-  Dutch: "https://portal.dutchtest.com/",
-  GlycanAge: "https://results.glycanage.com/",
+// Per-lab portal URLs. Entry points only — the operator signs in and then
+// navigates to the specific result inside the portal. Verified by user
+// 2026-05-12; update here whenever a lab changes their login URL.
+export type LabPortal = {
+  /** Canonical lab name (matches LAB_CATALOG.provider where applicable). */
+  key: string;
+  /** Friendly label for buttons / dropdowns. */
+  label: string;
+  /** Sign-in URL. */
+  url: string;
+  /** Some labs maintain both patient and provider portals — note which this is. */
+  audience?: "patient" | "provider";
 };
 
+export const LAB_PORTALS: readonly LabPortal[] = [
+  { key: "Access",         label: "Access Med Lab",      url: "https://accessmedlab.com/" },
+  { key: "Cyrex",          label: "Cyrex Labs",          url: "https://www.cyrexlabs.com/Home/tabid/40/Default.aspx?returnurl=%2fOrderTests%2ftabid%2f209%2fDefault.aspx" },
+  { key: "Genova",         label: "Genova (myGDX)",      url: "https://www.gdx.net/mygdx/login" },
+  { key: "DoctorsData",    label: "Doctor's Data",       url: "https://www.doctorsdata.com/#" },
+  { key: "GlycanAge",      label: "GlycanAge partners",  url: "https://partners.glycanage.com/dashboard" },
+  { key: "Infectolab",     label: "Infectolab (QBench)", url: "https://infectolab.qbench.net/" },
+  { key: "MicrobiomeLabs", label: "Microbiome Labs",     url: "https://microbiomelabs.com/my-account/" },
+  { key: "MicroGenDX",     label: "MicroGen DX provider", url: "https://providerportal.microgendx.com/", audience: "provider" },
+  { key: "MicroGenDX",     label: "MicroGen DX patient", url: "https://microgendx.com/my-account/", audience: "patient" },
+  { key: "SpecPortal",     label: "Spec-Portal",         url: "https://spec-portal.com/" },
+  { key: "Spectracell",    label: "Spectracell",         url: "https://www.spectracell.com/user-sign-in" },
+  { key: "Vibrant",        label: "Vibrant Wellness",    url: "https://portal.vibrant-wellness.com/#/login" },
+  { key: "TruDiagnostic",  label: "TruDiagnostic",       url: "https://portal.trudiagnostic.com/sign-in" },
+];
+
+// Aliases — multiple lab catalog names that should resolve to the same portal.
+// e.g. "TruAge" is the test, "TruDiagnostic" is the lab that runs it.
+const PORTAL_ALIASES: Record<string, string> = {
+  TruAge: "TruDiagnostic",
+};
+
+/** Return the FIRST matching portal for a lab name. When a lab has multiple
+ * portals (e.g. MicroGenDX has both provider + patient), the provider one
+ * comes first in LAB_PORTALS, so that's what staff get. Use
+ * `getAllPortalsForLab()` to see both. */
 export function getPortalUrlForLab(labName: string | null | undefined): string | null {
   if (!labName) return null;
-  return LAB_PORTALS[labName] ?? null;
+  const resolved = PORTAL_ALIASES[labName] ?? labName;
+  return LAB_PORTALS.find((p) => p.key === resolved)?.url ?? null;
+}
+
+export function getAllPortalsForLab(labName: string | null | undefined): LabPortal[] {
+  if (!labName) return [];
+  const resolved = PORTAL_ALIASES[labName] ?? labName;
+  return LAB_PORTALS.filter((p) => p.key === resolved);
 }
