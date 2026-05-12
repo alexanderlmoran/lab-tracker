@@ -186,7 +186,9 @@ export async function inviteAppUser(input: {
   }
 
   const db = getSupabaseAdmin();
-  const redirectTo = `${appBaseUrl()}/labs`;
+  // Invitees land on /auth/set-password (with the magic-link session already
+  // established via /auth/callback) so they pick a password before /labs.
+  const redirectTo = `${appBaseUrl()}/auth/callback?next=${encodeURIComponent("/auth/set-password?next=/labs")}`;
   let userId: string | null = null;
   let isNew = false;
 
@@ -299,7 +301,7 @@ export async function regenerateInviteLink(input: {
 > {
   await requireRole("admin");
   const db = getSupabaseAdmin();
-  const redirectTo = `${appBaseUrl()}/labs`;
+  const redirectTo = `${appBaseUrl()}/auth/callback?next=${encodeURIComponent("/auth/set-password?next=/labs")}`;
 
   // Look up display name so the email can greet them properly.
   const { data: appUser } = await db
