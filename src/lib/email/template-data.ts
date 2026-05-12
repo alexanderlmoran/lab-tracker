@@ -1,6 +1,8 @@
-// Editable per-kind defaults + DB-overlay layer for the 4 patient emails.
-// The internal "nadia_all_received" and "rof_allison" emails stay hardcoded
-// — they're operational notifications staff won't tweak copy on.
+// Editable per-kind defaults + DB-overlay layer for every email the app
+// sends. Patient emails (4) plus staff emails (invite + password reset, 2)
+// all live here. The internal "nadia_all_received" and "rof_allison"
+// notifications stay hardcoded — those are workflow signaling, not copy
+// staff want to tweak.
 //
 // Storage shape: paragraphs are a single text blob, blank-line separated.
 // At render time we substitute {placeholders} against the case row + practice
@@ -15,6 +17,10 @@ export type PatientEmailKind =
   | "complete_uploaded"
   | "rof_followup";
 
+export type StaffEmailKind = "staff_invite" | "password_reset";
+
+export type EditableEmailKind = PatientEmailKind | StaffEmailKind;
+
 export const PATIENT_EMAIL_KINDS: PatientEmailKind[] = [
   "sample_sent",
   "partial_uploaded",
@@ -22,15 +28,22 @@ export const PATIENT_EMAIL_KINDS: PatientEmailKind[] = [
   "rof_followup",
 ];
 
-export const KIND_LABEL: Record<PatientEmailKind, string> = {
+export const STAFF_EMAIL_KINDS: StaffEmailKind[] = [
+  "staff_invite",
+  "password_reset",
+];
+
+export const KIND_LABEL: Record<EditableEmailKind, string> = {
   sample_sent: "1 · Sample sent",
   partial_uploaded: "2 · Partial results uploaded",
   complete_uploaded: "3 · Complete results uploaded",
   rof_followup: "4 · ROF follow-up",
+  staff_invite: "Staff invite (sign-in / set password)",
+  password_reset: "Password reset",
 };
 
 export type EmailTemplate = {
-  kind: PatientEmailKind;
+  kind: EditableEmailKind;
   subject: string;
   /** Optional heading rendered above the greeting. Currently only rof_followup uses one in defaults. */
   heading: string | null;
@@ -45,7 +58,10 @@ export type EmailTemplate = {
 const PRACTICE_PHONE = "305-602-5260";
 const PB_PORTAL = "practicebetter.io";
 
-export const EMAIL_DEFAULTS: Record<PatientEmailKind, EmailTemplate> = {
+// Single source of truth for ALL editable email defaults — patient and
+// staff alike. The DB-overlay only ever overrides individual fields; full
+// fallback to these defaults if a kind has no row.
+export const EMAIL_DEFAULTS: Record<EditableEmailKind, EmailTemplate> = {
   sample_sent: {
     kind: "sample_sent",
     subject: "Sample Received",
@@ -100,6 +116,30 @@ export const EMAIL_DEFAULTS: Record<PatientEmailKind, EmailTemplate> = {
     ],
     bcc: [],
   },
+  staff_invite: {
+    kind: "staff_invite",
+    subject: "You've been invited to the Centner Wellness Lab Tracking App",
+    heading: null,
+    paragraphs: [
+      "Hi {inviteeFirstName},",
+      "You've been invited to the Centner Wellness Lab Tracking App. Click the link below to sign in and pick a password.",
+      "{magicLink}",
+      "This link expires soon. If it doesn't work, ask the admin who invited you for a fresh one.",
+    ],
+    bcc: [],
+  },
+  password_reset: {
+    kind: "password_reset",
+    subject: "Reset your Centner Wellness Lab Tracking App password",
+    heading: null,
+    paragraphs: [
+      "Hi {inviteeFirstName},",
+      "We received a request to reset your Centner Wellness Lab Tracking App password. Click the link below to choose a new one.",
+      "{magicLink}",
+      "If you didn't request this, you can ignore this email — your current password stays active.",
+    ],
+    bcc: [],
+  },
 };
 
 type DbRow = {
@@ -131,7 +171,7 @@ function paragraphsFromBlob(blob: string | null | undefined): string[] | null {
 /** Merge a DB override row over the code default. Empty/null DB fields keep
  * the default — partial overrides are allowed (e.g. override just the BCC). */
 export function mergeTemplate(
-  kind: PatientEmailKind,
+  kind: EditableEmailKind,
   row: DbRow | null,
 ): EmailTemplate {
   const base = EMAIL_DEFAULTS[kind];
@@ -150,21 +190,24 @@ export function mergeTemplate(
   };
 }
 
-/** Load merged templates for every patient kind. One DB round-trip. */
-export async function loadAllPatientTemplates(): Promise<
-  Record<PatientEmailKind, EmailTemplate>
-> {
-  let rows: DbRow[] = [];
+async function loadAllTemplateRows(): Promise<Map<string, DbRow>> {
   try {
     const db = getSupabaseAdmin();
     const { data } = await db
       .from("email_templates")
       .select("kind, subject, heading, paragraphs, bcc");
-    rows = (data ?? []) as DbRow[];
+    return new Map(((data ?? []) as DbRow[]).map((r) => [r.kind, r]));
   } catch {
     // Table missing pre-migration — fall back to defaults.
+    return new Map();
   }
-  const byKind = new Map(rows.map((r) => [r.kind, r]));
+}
+
+/** Load merged templates for every patient kind. One DB round-trip. */
+export async function loadAllPatientTemplates(): Promise<
+  Record<PatientEmailKind, EmailTemplate>
+> {
+  const byKind = await loadAllTemplateRows();
   return {
     sample_sent: mergeTemplate("sample_sent", byKind.get("sample_sent") ?? null),
     partial_uploaded: mergeTemplate(
@@ -180,6 +223,27 @@ export async function loadAllPatientTemplates(): Promise<
       byKind.get("rof_followup") ?? null,
     ),
   };
+}
+
+/** Load merged templates for every staff (admin) kind. */
+export async function loadAllStaffTemplates(): Promise<
+  Record<StaffEmailKind, EmailTemplate>
+> {
+  const byKind = await loadAllTemplateRows();
+  return {
+    staff_invite: mergeTemplate("staff_invite", byKind.get("staff_invite") ?? null),
+    password_reset: mergeTemplate(
+      "password_reset",
+      byKind.get("password_reset") ?? null,
+    ),
+  };
+}
+
+export async function loadStaffTemplate(
+  kind: StaffEmailKind,
+): Promise<EmailTemplate> {
+  const all = await loadAllStaffTemplates();
+  return all[kind];
 }
 
 export async function loadPatientTemplate(

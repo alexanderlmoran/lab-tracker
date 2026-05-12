@@ -7,71 +7,22 @@ import { hasRole, requireRole, type AppRole, type SessionUser } from "@/lib/auth
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { LAB_CATALOG } from "@/lib/labs/catalog";
 import { invalidateEffectiveCatalogCache } from "@/lib/labs/effective";
-import { loadEmailConfig, renderTestEmail } from "@/lib/email/render";
+import { renderTestEmail } from "@/lib/email/render";
 import {
   EMAIL_DEFAULTS,
   KIND_LABEL,
   PATIENT_EMAIL_KINDS,
+  STAFF_EMAIL_KINDS,
   loadAllPatientTemplates,
+  loadAllStaffTemplates,
+  type EditableEmailKind,
   type EmailTemplate,
   type PatientEmailKind,
+  type StaffEmailKind,
 } from "@/lib/email/template-data";
+import { sendStaffEmail } from "@/lib/email/staff-sender";
 import { appBaseUrl } from "@/lib/app-url";
 import type { ActionResult } from "@/lib/types";
-
-/** Send the magic-link invite via OUR Resend account rather than Supabase's
- * built-in SMTP. Supabase's default sender is rate-limited and only suitable
- * for development; for prod we need a domain we control. Returns the link
- * so the admin can copy it as a fallback if the email send fails. */
-async function emailInviteLink(args: {
-  toEmail: string;
-  fullName: string | null;
-  link: string;
-  isNew: boolean;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
-  const key = process.env.RESEND_API_KEY;
-  if (!key) return { ok: false, error: "RESEND_API_KEY is not set" };
-  const ctx = await loadEmailConfig();
-  const practice = ctx.practiceName || "the Lab Tracker";
-  const greetingName = args.fullName?.split(/\s+/)[0] ?? "there";
-  const cta = args.isNew
-    ? "Click the link below to set your password and finish signing in."
-    : "Click the link below to sign in.";
-
-  const html = `
-    <p>Hi ${escapeHtml(greetingName)},</p>
-    <p>You've been invited to ${escapeHtml(practice)}. ${cta}</p>
-    <p><a href="${args.link}">${args.link}</a></p>
-    <p style="color:#6b7a8c;font-size:12px;">This link will expire. If it doesn't work, ask the admin who invited you for a fresh one.</p>
-  `;
-  const text = `Hi ${greetingName},\n\nYou've been invited to ${practice}. ${cta}\n\n${args.link}\n\nThis link will expire.`;
-
-  try {
-    const resend = new Resend(key);
-    const result = await resend.emails.send({
-      from: ctx.fromHeader,
-      to: [ctx.testRedirect ?? args.toEmail],
-      replyTo: ctx.replyTo,
-      subject: ctx.testRedirect
-        ? `[TEST → ${args.toEmail}] You've been invited to ${practice}`
-        : `You've been invited to ${practice}`,
-      html,
-      text,
-    });
-    if (result.error) return { ok: false, error: result.error.message };
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : "Send failed" };
-  }
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
 // ── App settings ──────────────────────────────────────────────────────
 
@@ -241,11 +192,11 @@ export async function inviteAppUser(input: {
   let note: string | undefined;
   let magicLinkToSurface: string | null = null;
   if (actionLink) {
-    const send = await emailInviteLink({
+    const send = await sendStaffEmail({
+      kind: "staff_invite",
       toEmail: parsed.data.email,
       fullName: parsed.data.fullName,
-      link: actionLink,
-      isNew,
+      magicLink: actionLink,
     });
     if (!send.ok) {
       magicLinkToSurface = actionLink;
@@ -334,11 +285,11 @@ export async function regenerateInviteLink(input: {
   let magicLinkToSurface: string | null = null;
 
   if (actionLink) {
-    const send = await emailInviteLink({
+    const send = await sendStaffEmail({
+      kind: "staff_invite",
       toEmail: input.email,
       fullName: (appUser?.full_name as string | null) ?? null,
-      link: actionLink,
-      isNew: false,
+      magicLink: actionLink,
     });
     if (!send.ok) {
       magicLinkToSurface = actionLink;
@@ -497,21 +448,47 @@ export async function seedLabsCatalogFromCode(): Promise<
   return { ok: true, data: { inserted: toInsert.length } };
 }
 
-// ── Email templates (DB-overridable patient copy) ─────────────────────
+// ── Email templates (DB-overridable copy — patient + staff) ───────────
+
+export type EmailTemplateGroup = "patient" | "staff";
 
 export type EmailTemplateRow = {
-  kind: PatientEmailKind;
+  kind: EditableEmailKind;
+  group: EmailTemplateGroup;
   label: string;
   subject: string;
   heading: string | null;
   paragraphs: string[];
   bcc: string[];
+  /** Placeholder tokens valid in this template — surfaced to the UI so the
+   * help text lists the right ones per email. */
+  placeholders: string[];
   isCustomised: boolean;
 };
 
+const PLACEHOLDERS_BY_GROUP: Record<EmailTemplateGroup, string[]> = {
+  patient: [
+    "{patientFirstName}",
+    "{patientName}",
+    "{labName}",
+    "{labPanel}",
+    "{labLabel}",
+    "{turnaroundText}",
+    "{practiceName}",
+  ],
+  staff: [
+    "{inviteeFirstName}",
+    "{inviteeName}",
+    "{inviteeEmail}",
+    "{practiceName}",
+    "{magicLink}",
+  ],
+};
+
 function buildRow(
-  kind: PatientEmailKind,
+  kind: EditableEmailKind,
   effective: EmailTemplate,
+  group: EmailTemplateGroup,
 ): EmailTemplateRow {
   const def = EMAIL_DEFAULTS[kind];
   const isCustomised =
@@ -521,28 +498,40 @@ function buildRow(
     effective.bcc.join(",") !== def.bcc.join(",");
   return {
     kind,
+    group,
     label: KIND_LABEL[kind],
     subject: effective.subject,
     heading: effective.heading,
     paragraphs: effective.paragraphs,
     bcc: effective.bcc,
+    placeholders: PLACEHOLDERS_BY_GROUP[group],
     isCustomised,
   };
 }
 
 export async function listEmailTemplates(): Promise<EmailTemplateRow[]> {
   await requireRole("admin");
-  const all = await loadAllPatientTemplates();
-  return PATIENT_EMAIL_KINDS.map((kind) => buildRow(kind, all[kind]));
+  const [patient, staff] = await Promise.all([
+    loadAllPatientTemplates(),
+    loadAllStaffTemplates(),
+  ]);
+  return [
+    ...PATIENT_EMAIL_KINDS.map((k) => buildRow(k, patient[k], "patient")),
+    ...STAFF_EMAIL_KINDS.map((k) => buildRow(k, staff[k], "staff")),
+  ];
 }
 
+const ALL_KINDS = z.enum([
+  "sample_sent",
+  "partial_uploaded",
+  "complete_uploaded",
+  "rof_followup",
+  "staff_invite",
+  "password_reset",
+]);
+
 const TemplateUpdate = z.object({
-  kind: z.enum([
-    "sample_sent",
-    "partial_uploaded",
-    "complete_uploaded",
-    "rof_followup",
-  ]),
+  kind: ALL_KINDS,
   subject: z.string().trim().max(200),
   heading: z
     .string()
@@ -555,7 +544,7 @@ const TemplateUpdate = z.object({
 });
 
 export async function updateEmailTemplate(input: {
-  kind: PatientEmailKind;
+  kind: EditableEmailKind;
   subject: string;
   heading: string;
   paragraphs: string;
@@ -584,7 +573,7 @@ export async function updateEmailTemplate(input: {
 }
 
 export async function resetEmailTemplate(input: {
-  kind: PatientEmailKind;
+  kind: EditableEmailKind;
 }): Promise<ActionResult> {
   await requireRole("admin");
   const db = getSupabaseAdmin();
@@ -598,17 +587,16 @@ export async function resetEmailTemplate(input: {
 }
 
 const TestSendInput = z.object({
-  kind: z.enum([
-    "sample_sent",
-    "partial_uploaded",
-    "complete_uploaded",
-    "rof_followup",
-  ]),
+  kind: ALL_KINDS,
   toEmail: z.string().trim().email(),
 });
 
+function isStaffKind(kind: EditableEmailKind): kind is StaffEmailKind {
+  return kind === "staff_invite" || kind === "password_reset";
+}
+
 export async function sendTestEmail(input: {
-  kind: PatientEmailKind;
+  kind: EditableEmailKind;
   toEmail: string;
 }): Promise<ActionResult<{ messageId?: string }>> {
   await requireRole("admin");
@@ -618,6 +606,32 @@ export async function sendTestEmail(input: {
   }
   const key = process.env.RESEND_API_KEY;
   if (!key) return { ok: false, error: "RESEND_API_KEY is not set" };
+
+  // Staff-template test sends use a real Supabase recovery link so the
+  // preview reflects production format (the link won't actually log them
+  // in unless they own the email). Patient sends keep the existing
+  // sample-data renderer.
+  if (isStaffKind(parsed.data.kind)) {
+    const db = getSupabaseAdmin();
+    const { data: link } = await db.auth.admin.generateLink({
+      type: "magiclink",
+      email: parsed.data.toEmail,
+      options: {
+        redirectTo: `${appBaseUrl()}/auth/callback?next=${encodeURIComponent(
+          "/auth/set-password?next=/labs",
+        )}`,
+      },
+    });
+    const magicLink = link?.properties?.action_link ?? "https://example.com/preview-link";
+    const send = await sendStaffEmail({
+      kind: parsed.data.kind,
+      toEmail: parsed.data.toEmail,
+      fullName: null,
+      magicLink,
+    });
+    if (!send.ok) return { ok: false, error: send.error };
+    return { ok: true };
+  }
 
   const rendered = await renderTestEmail({
     kind: parsed.data.kind,

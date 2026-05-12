@@ -2,11 +2,10 @@
 
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { Resend } from "resend";
 import { createSupabaseServerClient } from "@/utils/supabase/server";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { appBaseUrl } from "@/lib/app-url";
-import { loadEmailConfig } from "@/lib/email/render";
+import { sendStaffEmail } from "@/lib/email/staff-sender";
 
 const Input = z.object({
   email: z.string().email(),
@@ -90,58 +89,26 @@ export async function forgotPasswordAction(
     };
   }
 
-  const actionLink = link.properties.action_link;
-  const ctx = await loadEmailConfig();
-  const key = process.env.RESEND_API_KEY;
-  if (!key) {
-    // Last-ditch in dev: surface the link so the developer can copy it.
-    return {
-      ok: false,
-      error: `RESEND_API_KEY not set. Reset link: ${actionLink}`,
-    };
-  }
+  // Look up the user's name (if known) so the password-reset email can
+  // greet them properly. Falls back to "there" inside sendStaffEmail.
+  const { data: appUser } = await db
+    .from("app_users")
+    .select("full_name")
+    .eq("email", parsed.data.email)
+    .maybeSingle();
 
-  const practice = ctx.practiceName || "Lab Tracker";
-  const html = `
-    <p>Hi,</p>
-    <p>We received a request to reset your ${escapeHtml(practice)} password. Click the link below to choose a new one:</p>
-    <p><a href="${actionLink}">${actionLink}</a></p>
-    <p style="color:#6b7a8c;font-size:12px;">If you didn't request this, you can ignore this email — your current password stays active.</p>
-  `;
-  const text = `We received a request to reset your ${practice} password.\n\nReset: ${actionLink}\n\nIf you didn't request this, ignore this email.`;
-
-  try {
-    const resend = new Resend(key);
-    const result = await resend.emails.send({
-      from: ctx.fromHeader,
-      to: [ctx.testRedirect ?? parsed.data.email],
-      replyTo: ctx.replyTo,
-      subject: ctx.testRedirect
-        ? `[TEST → ${parsed.data.email}] Reset your ${practice} password`
-        : `Reset your ${practice} password`,
-      html,
-      text,
-    });
-    if (result.error) {
-      return { ok: false, error: result.error.message };
-    }
-  } catch (err) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : "Could not send reset email",
-    };
+  const send = await sendStaffEmail({
+    kind: "password_reset",
+    toEmail: parsed.data.email,
+    fullName: (appUser?.full_name as string | null) ?? null,
+    magicLink: link.properties.action_link,
+  });
+  if (!send.ok) {
+    return { ok: false, error: send.error };
   }
 
   return {
     ok: true,
     note: "If we have an account with that email, you'll receive a reset link shortly.",
   };
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
