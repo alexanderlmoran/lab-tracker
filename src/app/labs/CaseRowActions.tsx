@@ -9,32 +9,8 @@ import {
   restoreLabCase,
   unarchiveLabCase,
 } from "./actions";
-import { pushLabToPracticeBetter } from "./practicebetter-actions";
-
 export function CaseRowActions({ row }: { row: LabCase }) {
   const [pending, startTransition] = useTransition();
-
-  function onPushPB(kind: "partial" | "complete" | "manual") {
-    startTransition(async () => {
-      const r = await pushLabToPracticeBetter({
-        caseId: row.id,
-        kind,
-        force: true,
-      });
-      if (!r.ok) {
-        alert(`PracticeBetter push failed: ${r.error}`);
-        return;
-      }
-      const d = r.data;
-      if (d?.skippedReason) {
-        alert(`Skipped: ${d.skippedReason} (record ${d.recordId || "—"})`);
-      } else if (d?.createdNewRecord) {
-        alert(`Created new PB client record ${d.recordId} and pushed lab note.`);
-      } else {
-        alert(`Pushed to PB record ${d?.recordId}.`);
-      }
-    });
-  }
 
   function onArchive() {
     if (!confirm(`Archive case for ${row.patient_name}?`)) return;
@@ -114,19 +90,6 @@ export function CaseRowActions({ row }: { row: LabCase }) {
         </>
       ) : (
         <>
-          <button
-            type="button"
-            onClick={() => onPushPB("manual")}
-            disabled={pending}
-            title={
-              row.practicebetter_record_id
-                ? `PB record: ${row.practicebetter_record_id}`
-                : "Looks up PB client by patient email and appends a lab note."
-            }
-            className="rounded-md border border-indigo-200 bg-white px-2.5 py-1 text-xs text-indigo-700 hover:bg-indigo-50 disabled:opacity-60"
-          >
-            Send to PB
-          </button>
           <button
             type="button"
             onClick={onArchive}

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { Resend } from "resend";
-import { requireAdmin } from "@/lib/auth-guard";
+import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { renderEmail } from "@/lib/email/render";
 import { EMAIL_TO_STEP } from "@/lib/email/step-map";
@@ -176,7 +176,7 @@ export async function sendPatientEmail(input: {
   kind: EmailKind;
   alsoMarkStep?: boolean;
 }): Promise<ActionResult<{ messageId?: string; alreadySent?: boolean }>> {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const parsed = SendInput.safeParse({
     caseId: input.caseId,
     kind: input.kind,
@@ -234,7 +234,7 @@ export async function resendPatientEmail(input: {
   caseId: string;
   kind: EmailKind;
 }): Promise<ActionResult<{ messageId?: string }>> {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const parsed = ResendInput.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
@@ -263,7 +263,7 @@ export async function skipPatientEmail(input: {
   caseId: string;
   kind: EmailKind;
 }): Promise<ActionResult> {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const parsed = SkipInput.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
@@ -315,7 +315,7 @@ export async function retryPatientEmail(input: {
   caseId: string;
   kind: EmailKind;
 }): Promise<ActionResult<{ messageId?: string }>> {
-  await requireAdmin();
+  await requireSignedIn();
   const parsed = RetryInput.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
@@ -324,7 +324,7 @@ export async function retryPatientEmail(input: {
 }
 
 export async function listEmailLogs(caseId: string): Promise<EmailLog[]> {
-  await requireAdmin();
+  await requireSignedIn();
   const db = getSupabaseAdmin();
   const { data, error } = await db
     .from("email_logs")

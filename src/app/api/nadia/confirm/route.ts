@@ -69,12 +69,36 @@ export async function GET(request: Request) {
 
   const first = cases[0];
   const alreadyConfirmed = cases.every((c) => c.nadia_confirmed_at);
-  const now = new Date().toISOString();
+  const now = new Date();
+
+  // Token expiry check — links older than 30 days are no good. Existing
+  // confirmed rows still show the success page (idempotent), so re-clicking
+  // an expired-but-already-confirmed link just shows "Already confirmed".
+  const expiry = first.nadia_confirm_expires_at
+    ? new Date(first.nadia_confirm_expires_at)
+    : null;
+  if (!alreadyConfirmed && expiry && now > expiry) {
+    return new NextResponse(
+      htmlPage(
+        "Link expired",
+        `<h1>Link expired</h1>
+         <p>This confirmation link is more than 30 days old and no longer works.</p>
+         <p class="muted">If outreach is still pending, ask the admin to resend the notification from the case detail page.</p>`,
+      ),
+      { status: 410, headers: { "content-type": "text/html; charset=utf-8" } },
+    );
+  }
 
   if (!alreadyConfirmed) {
+    // One-time use: update + clear the token in the same statement so a
+    // second click can't re-flip anything. Idempotent (the next click finds
+    // alreadyConfirmed=true and shows the success page).
     await db
       .from("lab_cases")
-      .update({ nadia_confirmed_at: now })
+      .update({
+        nadia_confirmed_at: now.toISOString(),
+        nadia_confirm_token: null,
+      })
       .eq("nadia_confirm_token", token)
       .is("nadia_confirmed_at", null);
 

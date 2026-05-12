@@ -57,15 +57,18 @@ export async function maybeFireNadiaAllReceived(
   if (hasOutstanding) return;
 
   const token = crypto.randomUUID();
-  const now = new Date().toISOString();
+  const now = new Date();
+  const expires = new Date(now.getTime() + 30 * 86_400_000);
   const siblingIds = siblings.map((c) => c.id);
 
   // Stamp every sibling with the same token so the click confirms the batch.
+  // 30-day expiry caps the blast radius of a stale link.
   await db
     .from("lab_cases")
     .update({
       nadia_confirm_token: token,
-      nadia_confirm_sent_at: now,
+      nadia_confirm_sent_at: now.toISOString(),
+      nadia_confirm_expires_at: expires.toISOString(),
       nadia_confirmed_at: null,
     })
     .in("id", siblingIds);

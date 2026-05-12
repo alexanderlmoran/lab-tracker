@@ -3,7 +3,15 @@
 import { useState, useTransition } from "react";
 import { updateAppSettings, type AppSettings } from "./actions";
 
-export function GeneralSettingsForm({ initial }: { initial: AppSettings }) {
+export function GeneralSettingsForm({
+  initial,
+  testRedirectActive,
+}: {
+  initial: AppSettings;
+  /** Non-null when EMAIL_TEST_REDIRECT env is set on the server. Triggers
+   * the "test mode active" banner so admins notice their emails are caged. */
+  testRedirectActive?: string | null;
+}) {
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [pending, startTransition] = useTransition();
@@ -15,11 +23,23 @@ export function GeneralSettingsForm({ initial }: { initial: AppSettings }) {
     else setSavedAt(Date.now());
   }
 
+  // The server-side check happens on every email send via env. We can't
+  // read process.env from a client component, but we can show the warning
+  // when the prop is populated from server-side render. Threaded via a new
+  // optional prop so this works without extra round-trips.
   return (
     <form
       action={(formData) => startTransition(() => onSubmit(formData))}
       className="space-y-4 rounded-lg border border-zinc-200 bg-white p-6"
     >
+      {testRedirectActive ? (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <strong>Test mode is active.</strong> Every outbound email is being
+          redirected to <code>{testRedirectActive}</code> instead of the real
+          recipient. Clear <code>EMAIL_TEST_REDIRECT</code> in your environment
+          variables to send real patient emails.
+        </div>
+      ) : null}
       <Field
         name="from_email"
         label="Sending-from email"

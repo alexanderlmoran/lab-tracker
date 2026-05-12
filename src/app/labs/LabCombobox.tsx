@@ -39,7 +39,16 @@ function turnaroundLabel(e: LabCatalogEntry): string | null {
  * back to their entry on mount so the combobox shows the canonical display
  * name; mismatches fall back to displaying whatever raw text is on the row.
  */
-export function LabCombobox({ initial }: { initial?: LabCase | null }) {
+export function LabCombobox({
+  initial,
+  onSelectionChange,
+}: {
+  initial?: LabCase | null;
+  /** Fires whenever the user picks a catalog entry (or types free-text that
+   * has no entry). null = no catalog match. Lets the parent form drive UI
+   * defaults like "partial expected" from the selected lab's metadata. */
+  onSelectionChange?: (entry: LabCatalogEntry | null) => void;
+}) {
   const v = initial ?? null;
   const listboxId = useId();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -128,6 +137,7 @@ export function LabCombobox({ initial }: { initial?: LabCase | null }) {
     setDisplay(entryToDisplay(e));
     setOpen(false);
     setActiveIdx(-1);
+    onSelectionChange?.(e);
   }
 
   function onDisplayChange(next: string) {
@@ -138,6 +148,7 @@ export function LabCombobox({ initial }: { initial?: LabCase | null }) {
     setSelected(null);
     setOpen(true);
     setActiveIdx(-1);
+    onSelectionChange?.(null);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {

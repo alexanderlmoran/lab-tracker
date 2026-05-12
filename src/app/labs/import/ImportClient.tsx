@@ -203,14 +203,12 @@ export function ImportClient() {
   }
 
   function pickCandidate(key: string, c: PBSuggestion) {
-    // CSV trumps PB on patient name — only fill email/phone/DOB/recordId
-    // from the picked PB record. Operator can still edit the name field
-    // manually if they want to align it with PB.
+    // CSV trumps the past-patient suggestion on name — only fill in the
+    // contact fields. Operator can still edit the name manually if needed.
     updateDraft(key, {
       patientEmail: c.email,
       patientPhone: c.phone,
       patientDobIso: c.dobIso,
-      practiceBetterRecordId: c.recordId,
       matchKind: "exact_one",
       warning: null,
     });
@@ -289,7 +287,6 @@ export function ImportClient() {
           patientEmail: d.patientEmail!,
           patientPhone: d.patientPhone,
           patientDobIso: d.patientDobIso,
-          practiceBetterRecordId: d.practiceBetterRecordId,
           labName: d.labProvider!,
           labPanel: d.labPanel,
           trackingNumber: d.trackingNumber,

@@ -1,4 +1,4 @@
-import type { EmailKind, StepNumber } from "@/lib/types";
+import type { StepNumber } from "@/lib/types";
 
 /** Patient-facing email kinds that correspond 1-1 with a checklist step. */
 export type PatientEmailKind =
@@ -21,6 +21,6 @@ export const EMAIL_TO_STEP: Record<PatientEmailKind, StepNumber> = {
   rof_followup: 7,
 };
 
-export function emailKindForStep(step: StepNumber): EmailKind | null {
+export function emailKindForStep(step: StepNumber): PatientEmailKind | null {
   return STEP_TO_EMAIL[step] ?? null;
 }

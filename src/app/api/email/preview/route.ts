@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
-import { requireAdmin } from "@/lib/auth-guard";
+import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { renderEmail } from "@/lib/email/render";
 import type { EmailKind, LabCase } from "@/lib/types";
@@ -11,7 +11,7 @@ const Q = z.object({
 });
 
 export async function GET(req: NextRequest) {
-  await requireAdmin();
+  await requireSignedIn();
   const url = new URL(req.url);
   const parsed = Q.safeParse({
     caseId: url.searchParams.get("caseId"),

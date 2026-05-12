@@ -1,6 +1,6 @@
 // Core "refresh tracking for active cases" logic, extracted from the user-
 // facing server action so the Vercel cron route can call it without going
-// through requireAdmin (cron has no user; it auths via CRON_SECRET on the
+// through requireSignedIn (cron has no user; it auths via CRON_SECRET on the
 // route handler).
 //
 // No "use server" directive here on purpose — this is a plain library

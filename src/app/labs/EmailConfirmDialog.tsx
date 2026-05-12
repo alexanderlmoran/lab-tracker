@@ -1,12 +1,12 @@
 "use client";
 
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, useTransition } from "react";
-import type { EmailKind } from "@/lib/types";
+import type { PatientEmailKind } from "@/lib/email/template-data";
 import { sendPatientEmail, skipPatientEmail, resendPatientEmail } from "./email-actions";
 import { getEmailMeta, type EmailMeta } from "./email-meta-action";
 
 export type EmailConfirmHandle = {
-  open: (args: { caseId: string; kind: EmailKind }) => Promise<{
+  open: (args: { caseId: string; kind: PatientEmailKind }) => Promise<{
     sent: boolean;
     skipped: boolean;
     cancelled: boolean;
@@ -36,7 +36,7 @@ export const EmailConfirmDialog = forwardRef<EmailConfirmHandle>(function EmailC
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [state, setState] = useState<{
     caseId: string;
-    kind: EmailKind;
+    kind: PatientEmailKind;
     meta: EmailMeta | null;
     error: string | null;
   } | null>(null);

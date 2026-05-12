@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { requireAdmin } from "@/lib/auth-guard";
+import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { extractPdfText } from "@/lib/inbound/extract-pdf";
 import { parseLabReportWithClaude } from "@/lib/inbound/parse-with-claude";
@@ -20,7 +20,7 @@ const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
 export async function uploadInboundEmail(
   formData: FormData,
 ): Promise<ActionResult<{ id: string }>> {
-  await requireAdmin();
+  await requireSignedIn();
   const file = formData.get("file");
   if (!(file instanceof File)) {
     return { ok: false, error: "No file provided" };
@@ -116,7 +116,7 @@ export async function uploadInboundEmail(
 export async function listInboundEmails(): Promise<
   Array<InboundEmail & { attachments: InboundAttachment[] }>
 > {
-  await requireAdmin();
+  await requireSignedIn();
   const db = getSupabaseAdmin();
   const { data: emails, error } = await db
     .from("inbound_emails")
@@ -156,7 +156,7 @@ export async function applyInboundEmail(input: {
   caseId: string;
   step: 2 | 4;
 }): Promise<ActionResult> {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const parsed = ApplyInput.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
@@ -200,7 +200,7 @@ export async function applyInboundEmail(input: {
 export async function dismissInboundEmail(input: {
   inboundId: string;
 }): Promise<ActionResult> {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const db = getSupabaseAdmin();
   const { error } = await db
     .from("inbound_emails")
@@ -218,7 +218,7 @@ export async function dismissInboundEmail(input: {
 export async function syncGmailNow(): Promise<
   ActionResult<{ processed: number; skipped: number; errors: number }>
 > {
-  await requireAdmin();
+  await requireSignedIn();
   try {
     const { syncGmailInbox } = await import("@/lib/gmail/sync");
     const result = await syncGmailInbox();
@@ -240,7 +240,7 @@ export async function syncGmailNow(): Promise<
 }
 
 export async function disconnectGmail(): Promise<ActionResult> {
-  await requireAdmin();
+  await requireSignedIn();
   const db = getSupabaseAdmin();
   const { error } = await db
     .from("gmail_oauth_tokens")
@@ -256,7 +256,7 @@ export async function getGmailConnectionState(): Promise<{
   email?: string;
   lastSyncedAt?: string | null;
 }> {
-  await requireAdmin();
+  await requireSignedIn();
   const db = getSupabaseAdmin();
   const { data } = await db
     .from("gmail_oauth_tokens")
@@ -276,7 +276,7 @@ export async function rematchInboundEmail(input: {
   inboundId: string;
   caseId: string;
 }): Promise<ActionResult> {
-  await requireAdmin();
+  await requireSignedIn();
   const db = getSupabaseAdmin();
   const { error } = await db
     .from("inbound_emails")

@@ -1,11 +1,11 @@
 import Link from "next/link";
-import { requireAdmin } from "@/lib/auth-guard";
+import { requireSignedIn } from "@/lib/auth-guard";
 import { ImportClient } from "./ImportClient";
 
 export const dynamic = "force-dynamic";
 
 export default async function ImportPage() {
-  await requireAdmin();
+  await requireSignedIn();
   return (
     <div className="min-h-dvh bg-zinc-50">
       <header className="border-b border-zinc-200 bg-white">

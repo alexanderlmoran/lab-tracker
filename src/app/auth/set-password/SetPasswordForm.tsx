@@ -31,10 +31,13 @@ export function SetPasswordForm({ next }: { next?: string }) {
           type="password"
           autoComplete="new-password"
           required
-          minLength={8}
+          minLength={10}
           className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-900 focus:ring-2 focus:ring-zinc-900/10"
         />
-        <p className="mt-1 text-[11px] text-zinc-500">At least 8 characters.</p>
+        <p className="mt-1 text-[11px] text-zinc-500">
+          At least 10 characters, with a lowercase letter, an uppercase
+          letter, and a digit.
+        </p>
       </div>
       <div>
         <label
@@ -49,7 +52,7 @@ export function SetPasswordForm({ next }: { next?: string }) {
           type="password"
           autoComplete="new-password"
           required
-          minLength={8}
+          minLength={10}
           className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-900 focus:ring-2 focus:ring-zinc-900/10"
         />
       </div>

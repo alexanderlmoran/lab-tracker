@@ -78,6 +78,7 @@ export function LabsCatalogPanel({ labs }: { labs: LabsCatalogRow[] }) {
               <th className="px-2 py-2">Provider</th>
               <th className="px-2 py-2">Panel</th>
               <th className="px-2 py-2">Turnaround</th>
+              <th className="px-2 py-2">Partial?</th>
               <th className="px-2 py-2 text-right">Actions</th>
             </tr>
           </thead>
@@ -94,6 +95,15 @@ export function LabsCatalogPanel({ labs }: { labs: LabsCatalogRow[] }) {
                 <td className="px-2 py-2 text-zinc-600">{lab.panel ?? "—"}</td>
                 <td className="px-2 py-2 text-zinc-600">
                   {formatTurnaround(lab.turnaround_days_min, lab.turnaround_days_max)}
+                </td>
+                <td className="px-2 py-2 text-zinc-600">
+                  {lab.partial_expected ? (
+                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-amber-800">
+                      yes
+                    </span>
+                  ) : (
+                    <span className="text-zinc-400">—</span>
+                  )}
                 </td>
                 <td className="px-2 py-2 text-right">
                   <div className="flex justify-end gap-2">
@@ -218,15 +228,29 @@ function EditDialog({
             defaultValue={lab?.turnaround_days_max ?? ""}
           />
         </div>
-        <label className="flex items-center gap-2 text-sm text-zinc-700">
-          <input
-            type="checkbox"
-            name="retired"
-            defaultChecked={lab?.retired ?? false}
-            className="h-4 w-4 rounded border-zinc-300"
-          />
-          Retired (hidden from lab pickers)
-        </label>
+        <div className="space-y-2">
+          <label className="flex items-center gap-2 text-sm text-zinc-700">
+            <input
+              type="checkbox"
+              name="partial_expected"
+              defaultChecked={lab?.partial_expected ?? false}
+              className="h-4 w-4 rounded border-zinc-300"
+            />
+            Partial results expected
+            <span className="text-[11px] text-zinc-500">
+              (pre-ticks the partial flag on new cases for this lab)
+            </span>
+          </label>
+          <label className="flex items-center gap-2 text-sm text-zinc-700">
+            <input
+              type="checkbox"
+              name="retired"
+              defaultChecked={lab?.retired ?? false}
+              className="h-4 w-4 rounded border-zinc-300"
+            />
+            Retired (hidden from lab pickers)
+          </label>
+        </div>
         <DialogField
           name="notes"
           label="Notes (optional)"

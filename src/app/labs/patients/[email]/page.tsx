@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireAdmin } from "@/lib/auth-guard";
+import { requireSignedIn } from "@/lib/auth-guard";
 import { getPatientHistory } from "../../actions";
 import { logoutAction } from "../../../login/actions";
 import { COLUMN_LABEL, getColumnFor } from "@/lib/columns";
@@ -50,7 +50,7 @@ export default async function PatientDetailPage({
 }: {
   params: Promise<{ email: string }>;
 }) {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const { email: rawEmail } = await params;
   const email = decodeURIComponent(rawEmail);
   const history = await getPatientHistory(email);

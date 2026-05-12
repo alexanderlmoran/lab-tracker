@@ -33,11 +33,10 @@ export type ImportDraft = {
   sourceRowNum: number;
   /** Patient name as parsed from the CSV (after multi-patient split). */
   patientName: string;
-  /** Will be filled by server-side PB cache match if available. */
+  /** Filled by server-side enrichment via past-patient lookup if available. */
   patientEmail: string | null;
   patientPhone: string | null;
   patientDobIso: string | null;
-  practiceBetterRecordId: string | null;
   /** Carrier as it appeared in the CSV (lowercased). */
   rawCarrier: string;
   /** Resolved catalog provider, when matched. */
@@ -205,7 +204,6 @@ export function rowToDrafts(row: ShippingCsvRow): ImportDraft[] {
         patientEmail: null,
         patientPhone: null,
         patientDobIso: null,
-        practiceBetterRecordId: null,
         rawCarrier: row.carrier,
         labProvider,
         labPanel,
@@ -227,7 +225,6 @@ export function rowToDrafts(row: ShippingCsvRow): ImportDraft[] {
     patientEmail: null,
     patientPhone: null,
     patientDobIso: null,
-    practiceBetterRecordId: null,
     rawCarrier: row.carrier,
     labProvider,
     labPanel,

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { requireAdmin } from "@/lib/auth-guard";
+import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import type { ActionResult } from "@/lib/types";
 import type { ImportDraft } from "@/lib/labs/import-normalize";
@@ -15,6 +15,10 @@ import type { ImportDraft } from "@/lib/labs/import-normalize";
  */
 export type PatientMatchKind = "exact_one" | "ambiguous" | "none";
 
+// PBSuggestion is kept as a name for back-compat with ImportClient.tsx, but
+// it now describes a past patient pulled from lab_cases rather than the
+// PracticeBetter cache (PB integration abandoned 2026-05-11). `recordId`
+// is the patient_email lowercased — used as the dedup key in the picker.
 export type PBSuggestion = {
   recordId: string;
   firstName: string | null;
@@ -30,49 +34,22 @@ export type EnrichedDraft = ImportDraft & {
   candidates: PBSuggestion[];
 };
 
-type CachedRow = {
-  record_id: string;
-  first_name: string | null;
-  last_name: string | null;
-  email_lowered: string | null;
-  raw: unknown;
+type PastCaseRow = {
+  patient_name: string;
+  patient_email: string;
+  patient_phone: string | null;
+  patient_dob: string | null;
 };
 
-function pickFromRaw(raw: unknown): { phone: string | null; dobIso: string | null } {
-  if (!raw || typeof raw !== "object") return { phone: null, dobIso: null };
-  const r = raw as Record<string, unknown>;
-  const profile = (r.profile ?? {}) as Record<string, unknown>;
-  const client = (r.client ?? {}) as Record<string, unknown>;
-  const phone =
-    (typeof profile.phoneNumber === "string" && profile.phoneNumber) ||
-    (typeof profile.cellPhone === "string" && profile.cellPhone) ||
-    (typeof profile.homePhone === "string" && profile.homePhone) ||
-    (typeof client.phoneNumber === "string" && client.phoneNumber) ||
-    null;
-  const rawDob =
-    (typeof profile.dateOfBirth === "string" && profile.dateOfBirth) ||
-    (typeof profile.dob === "string" && profile.dob) ||
-    null;
-  let dobIso: string | null = null;
-  if (rawDob) {
-    if (/^\d{4}-\d{2}-\d{2}/.test(rawDob)) dobIso = rawDob.slice(0, 10);
-    else if (/^\d{1,2}\/\d{1,2}\/\d{4}/.test(rawDob)) {
-      const [m, d, y] = rawDob.split(" ")[0].split("/");
-      dobIso = `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
-    }
-  }
-  return { phone: phone || null, dobIso };
-}
-
-function rowToSuggestion(r: CachedRow): PBSuggestion {
-  const { phone, dobIso } = pickFromRaw(r.raw);
+function rowToSuggestion(r: PastCaseRow): PBSuggestion {
+  const parts = r.patient_name.trim().split(/\s+/);
   return {
-    recordId: r.record_id,
-    firstName: r.first_name,
-    lastName: r.last_name,
-    email: r.email_lowered,
-    phone,
-    dobIso,
+    recordId: r.patient_email.toLowerCase(),
+    firstName: parts[0] ?? null,
+    lastName: parts.length > 1 ? parts[parts.length - 1] : null,
+    email: r.patient_email,
+    phone: r.patient_phone,
+    dobIso: r.patient_dob,
   };
 }
 
@@ -100,39 +77,50 @@ async function matchPatientToCache(
   if (trimmed.length < 2) return { kind: "none", candidates: [] };
   const db = getSupabaseAdmin();
   const { first, last } = tokenize(trimmed);
+  const safe = trimmed.replace(/[%_,()]/g, " ");
 
-  if (first && last) {
-    const { data, error } = await db
-      .from("practicebetter_clients")
-      .select("record_id, first_name, last_name, email_lowered, raw")
-      .eq("is_child_record", false)
-      .ilike("first_name", `${first}%`)
-      .ilike("last_name", `${last}%`)
-      .limit(8);
-    if (!error && data && data.length === 1) {
-      return { kind: "exact_one", candidates: [rowToSuggestion(data[0] as CachedRow)] };
-    }
-    if (!error && data && data.length > 1) {
-      return { kind: "ambiguous", candidates: (data as CachedRow[]).map(rowToSuggestion) };
-    }
-  }
+  // Search past patients in our own lab_cases table. Dedupe by email so the
+  // same patient with N prior cases shows up once. Preference order:
+  //   1. first + last both match (anywhere in patient_name)
+  //   2. last name only
+  //   3. raw substring of the entered text
+  const { data, error } = await db
+    .from("lab_cases")
+    .select("patient_name, patient_email, patient_phone, patient_dob, updated_at")
+    .ilike("patient_name", `%${safe}%`)
+    .order("updated_at", { ascending: false })
+    .limit(50);
+  if (error || !data) return { kind: "none", candidates: [] };
 
-  // Fallback: last-name only (handles "Smith" alone or first-name typos).
-  const fallbackTerm = last || first;
-  if (!fallbackTerm) return { kind: "none", candidates: [] };
-  const { data: fbData, error: fbErr } = await db
-    .from("practicebetter_clients")
-    .select("record_id, first_name, last_name, email_lowered, raw")
-    .eq("is_child_record", false)
-    .ilike("last_name", `${fallbackTerm}%`)
-    .limit(8);
-  if (fbErr || !fbData || fbData.length === 0) {
-    return { kind: "none", candidates: [] };
+  const byEmail = new Map<string, PastCaseRow>();
+  for (const r of data as PastCaseRow[]) {
+    const key = r.patient_email.toLowerCase();
+    if (!byEmail.has(key)) byEmail.set(key, r);
   }
-  return {
-    kind: fbData.length === 1 ? "ambiguous" : "ambiguous",
-    candidates: (fbData as CachedRow[]).map(rowToSuggestion),
-  };
+  const candidates = [...byEmail.values()].map(rowToSuggestion);
+  if (candidates.length === 0) {
+    // Last-resort: last name only — useful when CSV row has a typo'd first.
+    const fallback = last || first;
+    if (!fallback) return { kind: "none", candidates: [] };
+    const { data: fbData } = await db
+      .from("lab_cases")
+      .select("patient_name, patient_email, patient_phone, patient_dob, updated_at")
+      .ilike("patient_name", `%${fallback}%`)
+      .order("updated_at", { ascending: false })
+      .limit(20);
+    if (!fbData || fbData.length === 0) return { kind: "none", candidates: [] };
+    const fbBy = new Map<string, PastCaseRow>();
+    for (const r of fbData as PastCaseRow[]) {
+      const key = r.patient_email.toLowerCase();
+      if (!fbBy.has(key)) fbBy.set(key, r);
+    }
+    return {
+      kind: "ambiguous",
+      candidates: [...fbBy.values()].map(rowToSuggestion),
+    };
+  }
+  if (candidates.length === 1) return { kind: "exact_one", candidates };
+  return { kind: "ambiguous", candidates };
 }
 
 /**
@@ -143,7 +131,7 @@ async function matchPatientToCache(
 export async function enrichImportDrafts(
   drafts: ImportDraft[],
 ): Promise<ActionResult<EnrichedDraft[]>> {
-  await requireAdmin();
+  await requireSignedIn();
   const enriched: EnrichedDraft[] = [];
   for (const d of drafts) {
     if (d.skipReason) {
@@ -158,7 +146,6 @@ export async function enrichImportDrafts(
         patientEmail: c.email ?? d.patientEmail,
         patientPhone: c.phone ?? d.patientPhone,
         patientDobIso: c.dobIso ?? d.patientDobIso,
-        practiceBetterRecordId: c.recordId,
         matchKind: "exact_one",
         candidates: m.candidates,
         warning: d.warning,
@@ -170,8 +157,8 @@ export async function enrichImportDrafts(
         candidates: m.candidates,
         warning:
           m.kind === "none"
-            ? d.warning ?? "No PB match — enter email manually"
-            : (d.warning ?? "Multiple PB matches — pick one"),
+            ? d.warning ?? "No past patient match — enter email manually"
+            : (d.warning ?? "Multiple matches — pick one"),
       });
     }
   }
@@ -186,7 +173,6 @@ const CommitInput = z.object({
       patientEmail: z.string().email().max(200),
       patientPhone: z.string().max(40).nullable(),
       patientDobIso: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
-      practiceBetterRecordId: z.string().max(100).nullable(),
       labName: z.string().min(1).max(100),
       labPanel: z.string().max(100).nullable(),
       trackingNumber: z.string().max(100).nullable(),
@@ -216,7 +202,6 @@ export async function commitImport(input: {
     patientEmail: string;
     patientPhone: string | null;
     patientDobIso: string | null;
-    practiceBetterRecordId: string | null;
     labName: string;
     labPanel: string | null;
     trackingNumber: string | null;
@@ -226,7 +211,7 @@ export async function commitImport(input: {
     notes: string | null;
   }>;
 }): Promise<ActionResult<CommitImportResult>> {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const parsed = CommitInput.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
@@ -251,7 +236,6 @@ export async function commitImport(input: {
         tracking_number: r.trackingNumber,
         notes: r.notes,
         step1_sample_sent: true,
-        practicebetter_record_id: r.practiceBetterRecordId,
         bulk_import_id: parsed.data.bulkImportId,
         expected_result_at_min: r.expectedResultAtMinIso,
         expected_result_at_max: r.expectedResultAtMaxIso,
@@ -316,7 +300,7 @@ export async function commitImport(input: {
 export async function rollbackImport(
   bulkImportId: string,
 ): Promise<ActionResult<{ deletedCount: number }>> {
-  await requireAdmin();
+  await requireSignedIn();
   const db = getSupabaseAdmin();
   const { data, error } = await db
     .from("lab_cases")
@@ -341,7 +325,7 @@ export type RecentImport = {
  * dataset is bounded; client-side grouping avoids needing a Postgres RPC.
  */
 export async function listRecentImports(): Promise<ActionResult<RecentImport[]>> {
-  await requireAdmin();
+  await requireSignedIn();
   const db = getSupabaseAdmin();
   const { data, error } = await db
     .from("lab_cases")

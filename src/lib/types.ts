@@ -37,6 +37,7 @@ export type LabCase = {
   lab_name: string;
   lab_panel: string | null;
   tracking_number: string | null;
+  pickup_confirmation: string | null;
   collection_date: string | null;
   partial_expected: boolean;
   auto_send_emails: boolean;
@@ -52,7 +53,6 @@ export type LabCase = {
   step9_sales_followup: boolean;
   archived_at: string | null;
   deleted_at: string | null;
-  practicebetter_record_id: string | null;
   expected_result_at_min: string | null;
   expected_result_at_max: string | null;
   bulk_import_id: string | null;
@@ -65,6 +65,7 @@ export type LabCase = {
   tracking_location: string | null;
   nadia_confirm_token: string | null;
   nadia_confirm_sent_at: string | null;
+  nadia_confirm_expires_at: string | null;
   nadia_confirmed_at: string | null;
   allison_rof_emailed_at: string | null;
   created_at: string;
@@ -80,22 +81,6 @@ export type TrackingStatus =
   | "returned"
   | "unknown";
 
-export type PracticeBetterPushKind = "partial" | "complete" | "manual";
-export type PracticeBetterPushStatus = "queued" | "sent" | "failed" | "skipped";
-
-export type PracticeBetterPush = {
-  id: string;
-  case_id: string;
-  kind: PracticeBetterPushKind;
-  status: PracticeBetterPushStatus;
-  record_id: string | null;
-  marker: string;
-  notes_appended: boolean;
-  error_message: string | null;
-  attempted_at: string;
-  succeeded_at: string | null;
-  created_at: string;
-};
 
 export type LabEvent = {
   id: string;

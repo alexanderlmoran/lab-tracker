@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { google } from "googleapis";
-import { requireAdmin } from "@/lib/auth-guard";
+import { requireSignedIn } from "@/lib/auth-guard";
 import {
   GMAIL_SCOPES,
   getOAuthClient,
@@ -10,7 +10,7 @@ import {
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  await requireAdmin();
+  await requireSignedIn();
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const error = url.searchParams.get("error");

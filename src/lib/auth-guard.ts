@@ -78,10 +78,20 @@ export async function requireRole(minRole: AppRole): Promise<SessionUser> {
   return user;
 }
 
-/** Back-compat shim — every existing call site used `requireAdmin` to mean
- * "any logged-in user." After Phase A we preserve that meaning so the old
- * paths (kanban, inbox, case detail) keep working for staff. Routes that
- * actually need admin tighten by calling `requireRole("admin")` directly. */
+/** Any authenticated user — does NOT gate by role. Use this on paths every
+ * signed-in staff member should reach (kanban, inbox, case detail). For
+ * admin-only routes call `requireRole("admin")` instead.
+ *
+ * Replaces the old `requireAdmin` name, which lied about what it did. The
+ * deprecated alias below remains so old call sites keep compiling — the
+ * eslint-disable hint is intentional: we want the lint warning everywhere
+ * `requireAdmin` is still imported so future cleanup is mechanical. */
+export async function requireSignedIn(): Promise<SessionUser> {
+  return requireUser();
+}
+
+/** @deprecated Use `requireSignedIn` (any signed-in user) or
+ *  `requireRole("admin")` (true admin gate). Kept for back-compat. */
 export async function requireAdmin(): Promise<SessionUser> {
   return requireUser();
 }

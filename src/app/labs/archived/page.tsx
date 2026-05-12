@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireAdmin } from "@/lib/auth-guard";
+import { requireSignedIn } from "@/lib/auth-guard";
 import { listLabCases } from "../actions";
 import { logoutAction } from "../../login/actions";
 import { CaseTable } from "../CaseTable";
@@ -7,7 +7,7 @@ import { CaseTable } from "../CaseTable";
 export const dynamic = "force-dynamic";
 
 export default async function ArchivedLabsPage() {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const cases = await listLabCases({ archived: true });
 
   return (

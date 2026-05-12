@@ -9,12 +9,8 @@ import { CaseDialog } from "./CaseDialog";
 import { RefreshLabStatusButton } from "./RefreshLabStatusButton";
 import { RefreshTrackingButton } from "./RefreshTrackingButton";
 import { markCaseClosed } from "./actions";
-import {
-  dumpPracticeBetterNotesForCase,
-  linkCaseToPracticeBetterRecord,
-  probePracticeBetterWriteEndpoints,
-  pushLabToPracticeBetter,
-} from "./practicebetter-actions";
+// PracticeBetter integration removed 2026-05-12 — was abandoned 2026-05-11
+// per the project memo. Staff now upload results to PB manually if needed.
 
 function MarkClosedButton({ caseId, isAlreadyClosed }: { caseId: string; isAlreadyClosed: boolean }) {
   const [pending, start] = useTransition();
@@ -46,169 +42,6 @@ function MarkClosedButton({ caseId, isAlreadyClosed }: { caseId: string; isAlrea
         {pending ? "Saving…" : isAlreadyClosed ? "Protocol received" : "Mark protocol received →"}
       </button>
       {error ? <span className="text-[11px] text-red-600">{error}</span> : null}
-    </div>
-  );
-}
-
-function PracticeBetterLinkRow({ row }: { row: LabCase }) {
-  const [pending, start] = useTransition();
-  const [val, setVal] = useState("");
-  const [status, setStatus] = useState<string | null>(null);
-
-  function onLink() {
-    const recordId = val.trim();
-    if (!recordId) return;
-    setStatus(null);
-    start(async () => {
-      const r = await linkCaseToPracticeBetterRecord({ caseId: row.id, recordId });
-      if (!r.ok) {
-        setStatus(`Error: ${r.error}`);
-        return;
-      }
-      const d = r.data!;
-      setStatus(
-        `Linked to ${d.name ?? "(no name)"}${d.email ? ` <${d.email}>` : ""}.`,
-      );
-      setVal("");
-    });
-  }
-
-  return (
-    <div className="flex flex-col gap-1 py-1">
-      <div className="flex items-center gap-2">
-        <span className="w-24 text-xs uppercase tracking-wide text-zinc-500">
-          PB record
-        </span>
-        {row.practicebetter_record_id ? (
-          <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-700">
-            {row.practicebetter_record_id}
-          </code>
-        ) : (
-          <span className="text-xs text-zinc-500">Not linked</span>
-        )}
-      </div>
-      <div className="flex items-center gap-2 pl-[6.5rem]">
-        <input
-          type="text"
-          value={val}
-          onChange={(e) => setVal(e.target.value)}
-          placeholder="Paste PB record ID"
-          className="flex-1 rounded border border-zinc-300 px-2 py-1 text-xs"
-          disabled={pending}
-        />
-        <button
-          type="button"
-          onClick={onLink}
-          disabled={pending || !val.trim()}
-          className="rounded-md border border-indigo-200 bg-white px-2.5 py-1 text-xs text-indigo-700 hover:bg-indigo-50 disabled:opacity-60"
-        >
-          {pending ? "Linking…" : "Link"}
-        </button>
-      </div>
-      {status ? (
-        <p className="pl-[6.5rem] text-xs text-zinc-600">{status}</p>
-      ) : null}
-    </div>
-  );
-}
-
-function PracticeBetterPushButton({ row }: { row: LabCase }) {
-  const [pending, start] = useTransition();
-  const [dumpOutput, setDumpOutput] = useState<string | null>(null);
-  function onClick() {
-    start(async () => {
-      const r = await pushLabToPracticeBetter({
-        caseId: row.id,
-        kind: "manual",
-        force: true,
-      });
-      if (!r.ok) {
-        alert(`PracticeBetter push failed: ${r.error}`);
-        return;
-      }
-      const d = r.data;
-      const methodInfo = d?.writeMethod
-        ? ` (verified via ${d.writeMethod} ${d.writeStatus})`
-        : "";
-      if (d?.skippedReason) {
-        alert(`Skipped: ${d.skippedReason} (record ${d.recordId || "—"})`);
-      } else if (d?.createdNewRecord) {
-        alert(
-          `Created new PB client record ${d.recordId} for ${row.patient_email} and pushed lab note${methodInfo}.`,
-        );
-      } else {
-        alert(`Pushed to PB record ${d?.recordId}${methodInfo}.`);
-      }
-    });
-  }
-  function onDump() {
-    setDumpOutput("Loading…");
-    start(async () => {
-      const r = await dumpPracticeBetterNotesForCase({ caseId: row.id });
-      if (!r.ok) {
-        setDumpOutput(`Error: ${r.error}`);
-        return;
-      }
-      const d = r.data!;
-      setDumpOutput(
-        `record_id: ${d.recordId}\nprofile keys: ${d.profileKeys.join(", ")}\n\n--- profile.notes (${(d.notes ?? "").length} chars) ---\n${d.notes ?? "(empty)"}`,
-      );
-    });
-  }
-  function onProbeWrites() {
-    setDumpOutput("Probing PB write endpoints…");
-    start(async () => {
-      const r = await probePracticeBetterWriteEndpoints({ caseId: row.id });
-      if (!r.ok) {
-        setDumpOutput(`Error: ${r.error}`);
-        return;
-      }
-      const d = r.data!;
-      setDumpOutput(
-        `POST /consultant/labrequests → ${d.labRequest.status}\n${d.labRequest.body}\n\nPOST /consultant/sessionnotes → ${d.sessionNote.status}\n${d.sessionNote.body}`,
-      );
-    });
-  }
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={onClick}
-          disabled={pending}
-          title={
-            row.practicebetter_record_id
-              ? `Linked to PB record ${row.practicebetter_record_id}`
-              : "Looks up PB client by patient email and appends a lab note."
-          }
-          className="rounded-md border border-indigo-200 bg-white px-2.5 py-1 text-xs text-indigo-700 hover:bg-indigo-50 disabled:opacity-60"
-        >
-          {pending ? "Sending…" : "Send to PracticeBetter"}
-        </button>
-        <button
-          type="button"
-          onClick={onDump}
-          disabled={pending}
-          title="GET the linked PB record and show its profile.notes content."
-          className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
-        >
-          Show PB notes
-        </button>
-        <button
-          type="button"
-          onClick={onProbeWrites}
-          disabled={pending}
-          title="Try POST /consultant/labrequests and POST /consultant/sessionnotes to see which writes PB allows."
-          className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
-        >
-          Probe PB writes
-        </button>
-      </div>
-      {dumpOutput ? (
-        <pre className="max-h-48 overflow-auto rounded border border-zinc-200 bg-zinc-50 p-2 text-[11px] leading-snug text-zinc-800 whitespace-pre-wrap">
-          {dumpOutput}
-        </pre>
-      ) : null}
     </div>
   );
 }
@@ -311,13 +144,6 @@ export function CaseDetail({ row }: { row: LabCase }) {
             </span>
             <RefreshLabStatusButton caseId={row.id} />
           </div>
-          <div className="flex items-center gap-2 py-1">
-            <span className="w-24 text-xs uppercase tracking-wide text-zinc-500">
-              PB push
-            </span>
-            <PracticeBetterPushButton row={row} />
-          </div>
-          <PracticeBetterLinkRow row={row} />
           <Field
             label="Partial?"
             value={row.partial_expected ? "Yes (steps 2 + 3 active)" : "No"}

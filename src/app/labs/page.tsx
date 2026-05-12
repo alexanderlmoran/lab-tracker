@@ -1,27 +1,14 @@
 import { requireUser } from "@/lib/auth-guard";
-import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { listDistinctLabNames, listLabCases } from "./actions";
 import { parseSinceKey, sinceDaysForKey } from "./time-range";
 import { KanbanBoard } from "./KanbanBoard";
 import { LabKanbanBoard } from "./LabKanbanBoard";
+import { TrackingBoard } from "./TrackingBoard";
 import { LabsTabs, type LabsTab } from "./LabsTabs";
 import { TimeRangeTabs } from "./TimeRangeTabs";
 import { SearchBar } from "./SearchBar";
 import { RefreshAllTrackingButton } from "./RefreshAllTrackingButton";
 import { HudPulse } from "./HudPulse";
-
-async function inboxPendingCount(): Promise<number> {
-  try {
-    const db = getSupabaseAdmin();
-    const { count } = await db
-      .from("inbound_emails")
-      .select("id", { count: "exact", head: true })
-      .in("parser_status", ["pending", "parsed", "needs_manual_pull"]);
-    return count ?? 0;
-  } catch {
-    return 0;
-  }
-}
 
 export const dynamic = "force-dynamic";
 
@@ -40,24 +27,24 @@ export default async function LabsPage({
   const q = firstString(sp.q);
   const lab = firstString(sp.lab);
   const tabParam = firstString(sp.tab);
-  const tab: LabsTab = tabParam === "labs" ? "labs" : "patients";
+  const tab: LabsTab =
+    tabParam === "labs" || tabParam === "tracking" ? tabParam : "patients";
   const sinceParam = firstString(sp.since);
   const since = parseSinceKey(sinceParam);
   const sinceDays = sinceDaysForKey(since);
   const hasFilters = Boolean(q || lab || sinceDays);
 
-  const [cases, labNames, inboxCount] = await Promise.all([
+  const [cases, labNames] = await Promise.all([
     listLabCases({
       view: "active",
       filters: { q, lab, sinceDays: sinceDays ?? undefined },
     }),
     listDistinctLabNames(),
-    inboxPendingCount(),
   ]);
 
   return (
     <div className="flex min-h-dvh flex-col bg-zinc-50 lg:h-dvh lg:overflow-hidden">
-      <HudPulse user={user} cases={cases} inboxBadge={inboxCount} />
+      <HudPulse user={user} cases={cases} />
 
       <main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col px-4 pb-16 pt-6 lg:min-h-0 lg:pb-6">
         <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -95,6 +82,8 @@ export default async function LabsPage({
           <div className="flex-1 lg:min-h-0">
             {tab === "labs" ? (
               <LabKanbanBoard rows={cases} />
+            ) : tab === "tracking" ? (
+              <TrackingBoard rows={cases} />
             ) : (
               <KanbanBoard rows={cases} />
             )}

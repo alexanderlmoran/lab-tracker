@@ -7,8 +7,11 @@ import { createSupabaseServerClient } from "@/utils/supabase/server";
 const Input = z.object({
   password: z
     .string()
-    .min(8, "Use at least 8 characters.")
-    .max(200, "Too long."),
+    .min(10, "Use at least 10 characters.")
+    .max(200, "Too long.")
+    .regex(/[a-z]/, "Include at least one lowercase letter.")
+    .regex(/[A-Z]/, "Include at least one uppercase letter.")
+    .regex(/[0-9]/, "Include at least one digit."),
   confirm: z.string(),
   next: z.string().optional(),
 });

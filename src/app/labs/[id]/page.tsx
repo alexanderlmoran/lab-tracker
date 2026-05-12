@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireAdmin } from "@/lib/auth-guard";
+import { requireSignedIn } from "@/lib/auth-guard";
 import { getLabCase } from "../actions";
 import { logoutAction } from "../../login/actions";
 import { CaseDetail } from "../CaseDetail";
@@ -13,7 +13,7 @@ export default async function CaseFullPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const row = await getLabCase(id);
   if (!row) notFound();
 

@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireAdmin } from "@/lib/auth-guard";
+import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import {
   FedExError,
@@ -49,7 +49,7 @@ export async function refreshTrackingForCase(
   eventAtIso: string | null;
   deliveredAtIso: string | null;
 }>> {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   if (!isFedExConfigured()) {
     return {
       ok: false,
@@ -112,13 +112,13 @@ export async function refreshTrackingForCase(
 
 /**
  * Bulk refresh, user-initiated. Wraps the shared core (also called by the
- * Vercel cron route at /api/cron/refresh-tracking) with a requireAdmin gate
+ * Vercel cron route at /api/cron/refresh-tracking) with a requireSignedIn gate
  * and revalidate on finish.
  */
 export async function refreshTrackingForActiveCases(): Promise<
   ActionResult<{ polled: number; updated: number; errors: number }>
 > {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const { refreshTrackingForActiveCasesCore } = await import(
     "@/lib/tracking/refresh-core"
   );

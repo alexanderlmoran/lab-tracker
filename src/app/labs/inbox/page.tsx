@@ -1,16 +1,12 @@
 import Link from "next/link";
-import { requireAdmin } from "@/lib/auth-guard";
+import { requireSignedIn } from "@/lib/auth-guard";
 import { listLabCases } from "../actions";
 import { getGmailConnectionState, listInboundEmails } from "./actions";
 import { logoutAction } from "../../login/actions";
-import { UploadZone } from "./UploadZone";
 import { InboundRowActions } from "./InboundRowActions";
 import { GmailPanel } from "./GmailPanel";
-import { PracticeBetterPanel } from "./PracticeBetterPanel";
-import { pbHealthCheck } from "@/lib/practicebetter/client";
-import { getLatestPracticeBetterSync } from "@/lib/practicebetter/sync";
 import { getPortalUrlForLab } from "@/lib/inbound/detect-notification";
-import { LabPortalLauncher } from "./LabPortalLauncher";
+import { LabPortalLauncher } from "../LabPortalLauncher";
 
 export const dynamic = "force-dynamic";
 
@@ -44,13 +40,11 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 export default async function InboxPage() {
-  const user = await requireAdmin();
-  const [emails, activeCases, gmailState, pbProbe, pbSync] = await Promise.all([
+  const user = await requireSignedIn();
+  const [emails, activeCases, gmailState] = await Promise.all([
     listInboundEmails(),
     listLabCases({ view: "active" }),
     getGmailConnectionState(),
-    pbHealthCheck(),
-    getLatestPracticeBetterSync(),
   ]);
   const caseIndex = new Map(activeCases.map((c) => [c.id, c]));
   const slimCases = activeCases.map((c) => ({
@@ -103,13 +97,11 @@ export default async function InboxPage() {
           initialEmail={gmailState.email}
           initialLastSyncedAt={gmailState.lastSyncedAt}
         />
-        <PracticeBetterPanel initial={pbProbe} initialSync={pbSync} />
         <LabPortalLauncher />
-        <UploadZone />
 
         {emails.length === 0 ? (
           <div className="rounded-lg border border-dashed border-zinc-300 bg-white p-12 text-center text-sm text-zinc-600">
-            No reports yet. Upload a PDF above to get started.
+            No reports yet. Gmail polling will surface notification-only lab emails here as they arrive.
           </div>
         ) : (
           <ul className="space-y-3">

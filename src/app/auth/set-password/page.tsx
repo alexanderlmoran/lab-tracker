@@ -12,13 +12,20 @@ export default async function SetPasswordPage({
   // This page must be reached with a valid Supabase session — either from the
   // /auth/callback code exchange (invite or recovery link), or because the
   // user is already logged in and chose to change their password from the
-  // settings page. If neither is true, bounce to /login.
+  // settings page. If neither is true, the magic link expired or the user
+  // arrived here directly; bounce to /login with a clear message that points
+  // them at "Forgot password" to request a fresh link.
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) {
-    redirect("/login?error=Sign+in+to+set+a+password");
+    redirect(
+      "/login?error=" +
+        encodeURIComponent(
+          "Your invite or reset link has expired. Use “Forgot password?” to request a new one.",
+        ),
+    );
   }
   const { next } = await searchParams;
 

@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/auth-guard";
+import { requireSignedIn } from "@/lib/auth-guard";
 import { GMAIL_SCOPES, getOAuthClient } from "@/lib/gmail/client";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  await requireAdmin();
+  await requireSignedIn();
   const oauth = getOAuthClient();
   const url = oauth.generateAuthUrl({
     access_type: "offline", // ensure we get a refresh_token

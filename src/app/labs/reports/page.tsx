@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireAdmin } from "@/lib/auth-guard";
+import { requireSignedIn } from "@/lib/auth-guard";
 import { getReportData } from "../actions";
 import { logoutAction } from "../../login/actions";
 import { COLUMN_LABEL, COLUMN_ORDER } from "@/lib/columns";
@@ -102,7 +102,7 @@ function SparkBar({
 }
 
 export default async function ReportsPage() {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const data = await getReportData();
   const maxColumn = Math.max(1, ...Object.values(data.columnCounts));
   const maxLab = Math.max(1, ...data.byLab.map((l) => l.count));

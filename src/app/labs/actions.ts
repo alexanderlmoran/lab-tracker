@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { requireAdmin } from "@/lib/auth-guard";
+import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import type { ActionResult, LabCase, LabEvent, StepNumber } from "@/lib/types";
 
@@ -40,6 +40,7 @@ const CaseInput = z.object({
   labName: z.string().trim().min(1).max(100),
   labPanel: z.string().trim().max(100).optional().transform((v) => (v && v.length ? v : null)),
   trackingNumber: z.string().trim().max(100).optional().transform((v) => (v && v.length ? v : null)),
+  pickupConfirmation: z.string().trim().max(100).optional().transform((v) => (v && v.length ? v : null)),
   collectionDate: z
     .string()
     .trim()
@@ -50,7 +51,6 @@ const CaseInput = z.object({
   partialExpected: z.boolean().default(false),
   autoSendEmails: z.boolean().default(true),
   notes: z.string().trim().max(2000).optional().transform((v) => (v && v.length ? v : null)),
-  practiceBetterRecordId: z.string().trim().max(100).optional().transform((v) => (v && v.length ? v : null)),
 });
 
 type ParsedCase = z.infer<typeof CaseInput>;
@@ -65,11 +65,11 @@ function readForm(formData: FormData): unknown {
     labName: formData.get("labName"),
     labPanel: formData.get("labPanel") ?? "",
     trackingNumber: formData.get("trackingNumber") ?? "",
+    pickupConfirmation: formData.get("pickupConfirmation") ?? "",
     collectionDate: formData.get("collectionDate") ?? "",
     partialExpected: formData.get("partialExpected") === "on",
     autoSendEmails: formData.get("autoSendEmails") === "on",
     notes: formData.get("notes") ?? "",
-    practiceBetterRecordId: formData.get("practiceBetterRecordId") ?? "",
   };
 }
 
@@ -83,18 +83,18 @@ function dbColumns(p: ParsedCase) {
     lab_name: p.labName,
     lab_panel: p.labPanel,
     tracking_number: p.trackingNumber,
+    pickup_confirmation: p.pickupConfirmation,
     collection_date: p.collectionDate,
     partial_expected: p.partialExpected,
     auto_send_emails: p.autoSendEmails,
     notes: p.notes,
-    practicebetter_record_id: p.practiceBetterRecordId,
   };
 }
 
 export async function createLabCase(
   formData: FormData,
 ): Promise<ActionResult<{ id: string }>> {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const parsed = CaseInput.safeParse(readForm(formData));
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
@@ -125,7 +125,7 @@ export async function updateLabCase(
   caseId: string,
   formData: FormData,
 ): Promise<ActionResult> {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const parsed = CaseInput.safeParse(readForm(formData));
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
@@ -176,7 +176,7 @@ async function setArchive(
   caseId: string,
   archived: boolean,
 ): Promise<ActionResult> {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const db = getSupabaseAdmin();
   const { error } = await db
     .from("lab_cases")
@@ -208,7 +208,7 @@ async function setDeleted(
   caseId: string,
   deleted: boolean,
 ): Promise<ActionResult> {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const db = getSupabaseAdmin();
   const { error } = await db
     .from("lab_cases")
@@ -244,7 +244,7 @@ const BulkInput = z.object({
 export async function bulkArchive(input: {
   caseIds: string[];
 }): Promise<ActionResult<{ count: number }>> {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const parsed = BulkInput.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
@@ -284,7 +284,7 @@ export async function refreshLabStatus(input: {
     adapter: string | null;
   }>
 > {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const parsed = RefreshInput.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
@@ -340,7 +340,7 @@ export async function refreshLabStatus(input: {
 export async function bulkDelete(input: {
   caseIds: string[];
 }): Promise<ActionResult<{ count: number }>> {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const parsed = BulkInput.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
@@ -381,7 +381,7 @@ export async function setStepCompleted(input: {
   completed: boolean;
   note?: string;
 }): Promise<ActionResult> {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const parsed = StepToggleInput.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
@@ -456,15 +456,11 @@ export async function setStepCompleted(input: {
     });
   }
 
-  // Auto-push to PracticeBetter when final results are marked uploaded.
-  // Best-effort: a PB failure must not block the step toggle.
+  // Step 5 (complete results uploaded) → fire Nadia outreach when all of
+  // the patient's active labs are at step 5. PracticeBetter auto-push lived
+  // here too; removed 2026-05-12 along with the rest of the abandoned PB
+  // integration.
   if (completed && step === 5) {
-    try {
-      const { pushLabToPracticeBetter } = await import("./practicebetter-actions");
-      await pushLabToPracticeBetter({ caseId, kind: "complete" });
-    } catch (err) {
-      console.error("[practicebetter] auto-push failed", err);
-    }
     try {
       const { maybeFireNadiaAllReceived } = await import("@/lib/workflow");
       await maybeFireNadiaAllReceived(caseId, user.email ?? "admin");
@@ -501,7 +497,7 @@ export async function setStepCompleted(input: {
 export async function markCaseClosed(
   caseId: string,
 ): Promise<ActionResult> {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const db = getSupabaseAdmin();
 
   const { data: caseRow, error: fetchErr } = await db
@@ -546,7 +542,7 @@ export async function markCaseClosed(
 }
 
 export async function listLabEvents(caseId: string): Promise<LabEvent[]> {
-  await requireAdmin();
+  await requireSignedIn();
   const db = getSupabaseAdmin();
   const { data, error } = await db
     .from("lab_events")
@@ -559,7 +555,7 @@ export async function listLabEvents(caseId: string): Promise<LabEvent[]> {
 }
 
 export async function getLabCase(caseId: string): Promise<LabCase | null> {
-  await requireAdmin();
+  await requireSignedIn();
   const db = getSupabaseAdmin();
   const { data, error } = await db
     .from("lab_cases")
@@ -594,7 +590,7 @@ export async function listLabCases(opts: {
   /** @deprecated use `view`. Retained so older call sites keep compiling. */
   archived?: boolean;
 }): Promise<LabCase[]> {
-  await requireAdmin();
+  await requireSignedIn();
   const db = getSupabaseAdmin();
   const view: LabCaseView =
     opts.view ?? (opts.archived ? "archived" : "active");
@@ -643,7 +639,7 @@ export async function listLabCases(opts: {
  * over the code catalog. Client-side fallback to the code catalog if this
  * call fails — the dropdown stays useful even when the table is unavailable. */
 export async function listEffectiveLabsForPicker() {
-  await requireAdmin();
+  await requireSignedIn();
   const { listEffectiveLabs } = await import("@/lib/labs/effective");
   const entries = await listEffectiveLabs();
   return entries.map((e) => ({
@@ -653,11 +649,12 @@ export async function listEffectiveLabsForPicker() {
     turnaroundDaysMin: e.turnaroundDaysMin,
     turnaroundDaysMax: e.turnaroundDaysMax,
     retired: e.retired ?? false,
+    partialExpected: e.partialExpected ?? false,
   }));
 }
 
 export async function listDistinctLabNames(): Promise<string[]> {
-  await requireAdmin();
+  await requireSignedIn();
   const db = getSupabaseAdmin();
   const { data, error } = await db
     .from("lab_cases")
@@ -687,7 +684,7 @@ export type PatientSummary = {
 export async function listPatients(opts?: {
   q?: string;
 }): Promise<PatientSummary[]> {
-  await requireAdmin();
+  await requireSignedIn();
   const db = getSupabaseAdmin();
   let query = db
     .from("lab_cases")
@@ -779,7 +776,7 @@ export type ReportData = {
 };
 
 export async function getReportData(): Promise<ReportData> {
-  await requireAdmin();
+  await requireSignedIn();
   const db = getSupabaseAdmin();
 
   const { data: caseRows, error: caseErr } = await db
@@ -850,7 +847,7 @@ export async function getReportData(): Promise<ReportData> {
 export async function getPatientHistory(
   email: string,
 ): Promise<PatientHistory | null> {
-  await requireAdmin();
+  await requireSignedIn();
   const db = getSupabaseAdmin();
   const { data: cases, error: caseErr } = await db
     .from("lab_cases")

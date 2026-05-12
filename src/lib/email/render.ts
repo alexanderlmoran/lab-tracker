@@ -24,31 +24,17 @@ export type RenderedEmail = {
   originalTo: string;
 };
 
-export const SUBJECT: Record<EmailKind, string> = {
-  sample_sent: "Sample Received",
-  partial_uploaded: "Partial Results Received",
-  complete_uploaded: "Complete Results Received",
-  rof_followup: "Thanks for your review — here's what's next",
+// Subject lines for internal (non-patient) email kinds — patient-kind
+// subjects now live in template-data.ts so they're DB-overridable from
+// /labs/settings → Email templates.
+export const INTERNAL_SUBJECT: Record<"nadia_all_received" | "rof_allison", string> = {
   nadia_all_received: "All labs received — please confirm scheduling outreach",
   rof_allison: "ROF booked — please proofread",
 };
 
-// Operational BCC per email kind. These are practice routing rules, not
-// per-environment config — hardcoded so they ship with the template change.
-export const BCC_BY_KIND: Record<EmailKind, string[]> = {
-  sample_sent: [
-    "chrisc@centnerwellness.com",
-    "info@centnerwellness.com",
-  ],
-  partial_uploaded: ["chrisc@centnerwellness.com"],
-  complete_uploaded: [
-    "chrisc@centnerwellness.com",
-    "nadia@centnerwellness.com",
-  ],
-  rof_followup: [],
-  nadia_all_received: [],
-  rof_allison: [],
-};
+// Back-compat alias for src/lib/email/internal.ts which imports `SUBJECT`.
+// Once that path is updated this export can be deleted.
+export const SUBJECT = INTERNAL_SUBJECT;
 
 export function envEmailConfig(overrides?: {
   fromEmail?: string | null;
@@ -238,6 +224,7 @@ export async function renderTestEmail(args: {
     lab_name: "Access",
     lab_panel: "Blood Panel",
     tracking_number: null,
+    pickup_confirmation: null,
     collection_date: null,
     partial_expected: false,
     auto_send_emails: true,
@@ -253,7 +240,6 @@ export async function renderTestEmail(args: {
     step9_sales_followup: false,
     archived_at: null,
     deleted_at: null,
-    practicebetter_record_id: null,
     expected_result_at_min: null,
     expected_result_at_max: null,
     bulk_import_id: null,
@@ -266,6 +252,7 @@ export async function renderTestEmail(args: {
     tracking_location: null,
     nadia_confirm_token: null,
     nadia_confirm_sent_at: null,
+    nadia_confirm_expires_at: null,
     nadia_confirmed_at: null,
     allison_rof_emailed_at: null,
     created_at: new Date().toISOString(),

@@ -3,28 +3,20 @@
 import { useEffect, useId, useRef, useState, useTransition } from "react";
 import type { LabCase } from "@/lib/types";
 import {
-  searchPBClients,
-  type PBClientSuggestion,
+  searchPatients,
+  type PatientSuggestion,
 } from "./patient-search-action";
 
 const inputClass =
   "mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-900 focus:ring-2 focus:ring-zinc-900/10";
 const labelClass = "block text-xs font-medium text-zinc-700";
 
-function formatName(s: PBClientSuggestion): string {
-  return [s.firstName, s.lastName].filter(Boolean).join(" ").trim() || "—";
-}
-
 /**
- * Patient inputs (name/email/phone/DOB) with a typeahead that queries the
- * cached PB client list. Selecting a suggestion fills all four fields plus
- * the hidden `practiceBetterRecordId` so the case is pre-linked to PB. Users
- * can still edit any field after selection — useful for the rare case where
- * PB has a typo or stale info.
- *
- * Why a single component instead of four separate inputs: the autocomplete
- * needs to write into all four at once, and threading that through bare HTML
- * inputs in CaseFormFields would couple form layout to fetch state.
+ * Patient name + email inputs with a typeahead that searches existing
+ * patients in our own lab_cases table. Selecting a suggestion fills name +
+ * email (and carries forward the patient's phone / DOB silently as hidden
+ * inputs so they're not lost on re-save). DOB / phone / address are not
+ * user-editable on this form per UX decision 2026-05-12.
  */
 export function PatientPicker({ initial }: { initial?: LabCase | null }) {
   const v = initial ?? null;
@@ -34,38 +26,32 @@ export function PatientPicker({ initial }: { initial?: LabCase | null }) {
   const [email, setEmail] = useState(v?.patient_email ?? "");
   const [phone, setPhone] = useState(v?.patient_phone ?? "");
   const [dob, setDob] = useState(v?.patient_dob ?? "");
-  const [recordId, setRecordId] = useState(v?.practicebetter_record_id ?? "");
 
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<PBClientSuggestion[]>([]);
+  const [results, setResults] = useState<PatientSuggestion[]>([]);
   const [open, setOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(-1);
   const [, startSearch] = useTransition();
 
   const containerRef = useRef<HTMLDivElement | null>(null);
-  // Track the latest in-flight query so a slower earlier response can't
-  // overwrite a faster later response (race fix without AbortController,
-  // which server actions don't expose).
-  const latestQueryRef = useRef("");
 
-  // Debounce the network search — fire 250ms after the user stops typing.
+  // Debounced lookup. 200ms is enough to feel instant without firing on
+  // every keystroke for a slow typer.
   useEffect(() => {
     if (query.trim().length < 2) {
       setResults([]);
       return;
     }
     const handle = setTimeout(() => {
-      latestQueryRef.current = query;
       startSearch(async () => {
-        const r = await searchPBClients({ query });
-        if (latestQueryRef.current !== query) return;
+        const r = await searchPatients({ query });
         if (r.ok) setResults(r.data ?? []);
       });
-    }, 250);
+    }, 200);
     return () => clearTimeout(handle);
   }, [query]);
 
-  // Close the suggestion panel on outside click.
+  // Close the suggestion list when the user clicks outside the picker.
   useEffect(() => {
     if (!open) return;
     function onDoc(e: MouseEvent) {
@@ -78,13 +64,11 @@ export function PatientPicker({ initial }: { initial?: LabCase | null }) {
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open]);
 
-  function applySuggestion(s: PBClientSuggestion) {
-    const fullName = formatName(s);
-    setName(fullName);
+  function applySuggestion(s: PatientSuggestion) {
+    if (s.name) setName(s.name);
     if (s.email) setEmail(s.email);
-    if (s.phone) setPhone(s.phone);
-    if (s.dobIso) setDob(s.dobIso);
-    setRecordId(s.recordId);
+    setPhone(s.phone ?? "");
+    setDob(s.dobIso ?? "");
     setOpen(false);
     setActiveIdx(-1);
     setQuery("");
@@ -95,10 +79,6 @@ export function PatientPicker({ initial }: { initial?: LabCase | null }) {
     setQuery(next);
     setOpen(true);
     setActiveIdx(-1);
-    // If the user types a new name after a previous selection, clear the PB
-    // link — it almost certainly no longer applies. Don't clear email/phone
-    // automatically; they may want to keep reusing those.
-    if (recordId) setRecordId("");
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -124,7 +104,7 @@ export function PatientPicker({ initial }: { initial?: LabCase | null }) {
         <label htmlFor="patientName" className={labelClass}>
           Name <span className="text-red-600">*</span>
           <span className="ml-2 text-[10px] font-normal text-zinc-400">
-            type to search Practice Better
+            type to search past patients
           </span>
         </label>
         <input
@@ -154,7 +134,7 @@ export function PatientPicker({ initial }: { initial?: LabCase | null }) {
           >
             {results.map((s, i) => (
               <li
-                key={s.recordId}
+                key={s.key}
                 id={`${listboxId}-opt-${i}`}
                 role="option"
                 aria-selected={i === activeIdx}
@@ -167,7 +147,7 @@ export function PatientPicker({ initial }: { initial?: LabCase | null }) {
                   i === activeIdx ? "bg-zinc-100" : "hover:bg-zinc-50"
                 }`}
               >
-                <div className="font-medium text-zinc-900">{formatName(s)}</div>
+                <div className="font-medium text-zinc-900">{s.name ?? "—"}</div>
                 <div className="text-xs text-zinc-500">
                   {s.email ?? "no email on file"}
                 </div>
@@ -177,7 +157,7 @@ export function PatientPicker({ initial }: { initial?: LabCase | null }) {
         ) : null}
       </div>
 
-      <div>
+      <div className="sm:col-span-2">
         <label htmlFor="patientEmail" className={labelClass}>
           Email <span className="text-red-600">*</span>
         </label>
@@ -193,41 +173,11 @@ export function PatientPicker({ initial }: { initial?: LabCase | null }) {
         />
       </div>
 
-      <div>
-        <label htmlFor="patientPhone" className={labelClass}>
-          Phone
-        </label>
-        <input
-          id="patientPhone"
-          name="patientPhone"
-          type="tel"
-          maxLength={40}
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          className={inputClass}
-        />
-      </div>
-
-      <div>
-        <label htmlFor="patientDob" className={labelClass}>
-          DOB
-        </label>
-        <input
-          id="patientDob"
-          name="patientDob"
-          type="date"
-          value={dob}
-          onChange={(e) => setDob(e.target.value)}
-          className={inputClass}
-        />
-      </div>
-
-      <input
-        type="hidden"
-        name="practiceBetterRecordId"
-        value={recordId}
-        readOnly
-      />
+      {/* DOB / phone are no longer user-editable from the case form. Hidden
+          inputs preserve any value pre-filled from the typeahead (or from
+          the existing row on edit) so we don't blow away historical data. */}
+      <input type="hidden" name="patientPhone" value={phone} readOnly />
+      <input type="hidden" name="patientDob" value={dob} readOnly />
     </div>
   );
 }

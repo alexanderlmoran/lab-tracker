@@ -26,6 +26,7 @@ type DbRow = {
   turnaround_days_min: number | null;
   turnaround_days_max: number | null;
   retired: boolean;
+  partial_expected: boolean;
   notes: string | null;
 };
 
@@ -41,6 +42,7 @@ function rowToEntry(row: DbRow): LabCatalogEntry {
     turnaroundDaysMin: row.turnaround_days_min,
     turnaroundDaysMax: row.turnaround_days_max,
     retired: row.retired || undefined,
+    partialExpected: row.partial_expected || undefined,
     aliases: codeMatch?.aliases,
   };
 }
@@ -51,7 +53,7 @@ async function loadDbCatalog(): Promise<DbRow[]> {
     const { data } = await db
       .from("labs_catalog")
       .select(
-        "id, name, provider, panel, turnaround_days_min, turnaround_days_max, retired, notes",
+        "id, name, provider, panel, turnaround_days_min, turnaround_days_max, retired, partial_expected, notes",
       );
     return (data ?? []) as DbRow[];
   } catch {

@@ -192,32 +192,44 @@ export async function inviteAppUser(input: {
   let userId: string | null = null;
   let isNew = false;
 
-  // 1) Create the auth.users row if missing. We use `inviteUserByEmail` for
-  //    its convenient user-creation semantics, but we IGNORE Supabase's
-  //    built-in email send — it relies on Supabase's default SMTP which
-  //    is rate-limited and doesn't deliver reliably in prod.
-  const { data: invited, error: inviteErr } = await db.auth.admin.inviteUserByEmail(
-    parsed.data.email,
-    { data: { full_name: parsed.data.fullName ?? null }, redirectTo },
-  );
-  if (!inviteErr && invited?.user?.id) {
-    userId = invited.user.id;
+  // 1) Create the auth.users row (pre-confirmed so they don't need a
+  //    separate email-verification step). createUser does NOT send any
+  //    email — that's the key: previously we used inviteUserByEmail which
+  //    auto-fires through Supabase's own SMTP and produced a second magic
+  //    link with a different token that competed with ours. Single token,
+  //    single email path now.
+  const { data: created, error: createErr } = await db.auth.admin.createUser({
+    email: parsed.data.email,
+    email_confirm: true,
+    user_metadata: { full_name: parsed.data.fullName ?? null },
+  });
+  if (!createErr && created?.user?.id) {
+    userId = created.user.id;
     isNew = true;
+  } else if (createErr) {
+    // Most common non-fatal: "User already registered". We continue to
+    // generateLink and email a fresh magic link to whoever the existing
+    // user is — same flow as the "regenerate magic link" button.
+    const msg = createErr.message.toLowerCase();
+    const isAlreadyExists =
+      msg.includes("already") || msg.includes("registered") || msg.includes("duplicate");
+    if (!isAlreadyExists) {
+      return { ok: false, error: createErr.message };
+    }
   }
 
-  // 2) Generate a magic-link URL we can email ourselves. Works for both the
-  //    just-created user (gives them a sign-in link) and for existing users
-  //    (the invite call above will have errored — that's expected).
-  const linkType = isNew ? "invite" : "magiclink";
+  // 2) Generate a magic-link URL. With email_confirm:true above (or the
+  //    pre-existing user case), `magiclink` is the right type — it's a
+  //    sign-in link, not an email-verification link.
   const { data: link, error: linkErr } = await db.auth.admin.generateLink({
-    type: linkType,
+    type: "magiclink",
     email: parsed.data.email,
     options: { redirectTo },
   });
   if (linkErr || !link?.user?.id) {
     return {
       ok: false,
-      error: (inviteErr ?? linkErr)?.message ?? "Could not generate magic link",
+      error: linkErr?.message ?? "Could not generate magic link",
     };
   }
   userId = link.user.id;
@@ -364,6 +376,7 @@ export type LabsCatalogRow = {
   turnaround_days_min: number | null;
   turnaround_days_max: number | null;
   retired: boolean;
+  partial_expected: boolean;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -389,6 +402,7 @@ const LabInput = z.object({
   turnaround_days_min: z.coerce.number().int().min(0).max(365).or(z.literal("")).optional(),
   turnaround_days_max: z.coerce.number().int().min(0).max(365).or(z.literal("")).optional(),
   retired: z.boolean().default(false),
+  partial_expected: z.boolean().default(false),
   notes: z.string().trim().max(1000).or(z.literal("")).transform((v) => v || null),
 });
 
@@ -402,6 +416,7 @@ export async function upsertLab(formData: FormData): Promise<ActionResult<{ id: 
     turnaround_days_min: formData.get("turnaround_days_min") ?? "",
     turnaround_days_max: formData.get("turnaround_days_max") ?? "",
     retired: formData.get("retired") === "on",
+    partial_expected: formData.get("partial_expected") === "on",
     notes: formData.get("notes") ?? "",
   };
   const parsed = LabInput.safeParse(raw);
@@ -469,6 +484,7 @@ export async function seedLabsCatalogFromCode(): Promise<
     turnaround_days_min: e.turnaroundDaysMin,
     turnaround_days_max: e.turnaroundDaysMax,
     retired: Boolean(e.retired),
+    partial_expected: Boolean(e.partialExpected),
     notes: null,
   }));
   if (toInsert.length === 0) {

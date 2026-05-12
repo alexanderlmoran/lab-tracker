@@ -1,7 +1,8 @@
-import type { LabCase, StepNumber, EmailKind } from "./types";
+import type { LabCase, StepNumber } from "./types";
 import type { ColumnKey } from "./columns";
 import { stepIsComplete } from "./columns";
 import { emailKindForStep } from "./email/step-map";
+import type { PatientEmailKind } from "./email/step-map";
 
 // What does it take to make a card sit in the target column?
 // We tick the column's "defining step(s)" if not already done. Earlier
@@ -21,7 +22,7 @@ const COLUMN_DEFINING_STEPS: Record<ColumnKey, StepNumber[]> = {
 export type StepPlan = {
   step: StepNumber;
   isEmailStep: boolean;
-  emailKind: EmailKind | null;
+  emailKind: PatientEmailKind | null;
   alreadyComplete: boolean;
 };
 

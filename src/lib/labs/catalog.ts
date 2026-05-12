@@ -25,13 +25,17 @@ export type LabCatalogEntry = {
   turnaroundDaysMax: number | null;
   /** Retired panels still imported for historical rows but greyed in dropdown. */
   retired?: boolean;
+  /** Default for whether this lab returns partial results before the complete
+   * panel. Used to pre-tick the "partial expected" checkbox on new cases.
+   * Only Access Blood Panel is true by default at time of writing. */
+  partialExpected?: boolean;
   /** Spelling variants matched by normalizeLabKey() — case/whitespace/punctuation insensitive. */
   aliases?: string[];
 };
 
 export const LAB_CATALOG: LabCatalogEntry[] = [
   // ── Access ────────────────────────────────────────────────────────────
-  { name: "Access Blood Panel", provider: "Access", panel: "Blood Panel", turnaroundDaysMin: 5, turnaroundDaysMax: 7, aliases: ["access", "Labs - Access Blood Panel"] },
+  { name: "Access Blood Panel", provider: "Access", panel: "Blood Panel", turnaroundDaysMin: 5, turnaroundDaysMax: 7, partialExpected: true, aliases: ["access", "Labs - Access Blood Panel"] },
 
   // ── CancerCheck ───────────────────────────────────────────────────────
   { name: "CancerCheck", provider: "CancerCheck", panel: null, turnaroundDaysMin: 28, turnaroundDaysMax: 42, aliases: ["cancer check", "Labs - CancerCheck"] },

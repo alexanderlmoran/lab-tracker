@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireAdmin } from "@/lib/auth-guard";
+import { requireSignedIn } from "@/lib/auth-guard";
 import { listPatients } from "../actions";
 import { logoutAction } from "../../login/actions";
 import { PatientSearch } from "./PatientSearch";
@@ -24,7 +24,7 @@ export default async function PatientsPage({
 }: {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
-  const user = await requireAdmin();
+  const user = await requireSignedIn();
   const sp = await searchParams;
   const q = firstString(sp.q);
   const patients = await listPatients({ q });

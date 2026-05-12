@@ -1,10 +1,14 @@
 "use server";
 
 import { z } from "zod";
-import { requireAdmin } from "@/lib/auth-guard";
+import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
-import { BCC_BY_KIND, SUBJECT, loadEmailConfig } from "@/lib/email/render";
-import type { EmailKind, LabCase } from "@/lib/types";
+import { loadEmailConfig } from "@/lib/email/render";
+import {
+  loadAllPatientTemplates,
+  type PatientEmailKind,
+} from "@/lib/email/template-data";
+import type { LabCase } from "@/lib/types";
 
 const Input = z.object({
   caseId: z.string().uuid(),
@@ -29,11 +33,14 @@ export type EmailMeta = {
   priorSend: PriorSend | null;
 };
 
+/** Preview of the exact subject + BCC list + recipient that the next send
+ * will use. Reads from the same merged template source as render.ts so the
+ * preview drawer never drifts from what actually goes out. */
 export async function getEmailMeta(input: {
   caseId: string;
-  kind: EmailKind;
+  kind: PatientEmailKind;
 }): Promise<{ ok: true; data: EmailMeta } | { ok: false; error: string }> {
-  await requireAdmin();
+  await requireSignedIn();
   const parsed = Input.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
@@ -63,10 +70,14 @@ export async function getEmailMeta(input: {
   const latest = priorList[0] ?? null;
   const sentCount = priorList.filter((r) => r.status === "sent").length;
 
-  const ctx = await loadEmailConfig();
+  const [ctx, templates] = await Promise.all([
+    loadEmailConfig(),
+    loadAllPatientTemplates(),
+  ]);
+  const template = templates[parsed.data.kind];
   const subject = ctx.testRedirect
-    ? `[TEST → ${row.patient_email}] ${SUBJECT[parsed.data.kind]}`
-    : SUBJECT[parsed.data.kind];
+    ? `[TEST → ${row.patient_email}] ${template.subject}`
+    : template.subject;
 
   return {
     ok: true,
@@ -74,7 +85,7 @@ export async function getEmailMeta(input: {
       to: ctx.testRedirect ?? row.patient_email,
       from: ctx.fromHeader,
       replyTo: ctx.replyTo ?? null,
-      bcc: ctx.testRedirect ? [] : BCC_BY_KIND[parsed.data.kind],
+      bcc: ctx.testRedirect ? [] : template.bcc,
       subject,
       isTestRedirect: Boolean(ctx.testRedirect),
       testRedirectTarget: ctx.testRedirect,
