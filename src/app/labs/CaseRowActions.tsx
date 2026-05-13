@@ -1,6 +1,7 @@
 "use client";
 
 import { useTransition } from "react";
+import { useRouter } from "next/navigation";
 import type { LabCase } from "@/lib/types";
 import { CaseDialog } from "./CaseDialog";
 import {
@@ -10,20 +11,29 @@ import {
   unarchiveLabCase,
 } from "./actions";
 export function CaseRowActions({ row }: { row: LabCase }) {
+  const router = useRouter();
   const [pending, startTransition] = useTransition();
 
   function onArchive() {
     if (!confirm(`Archive case for ${row.patient_name}?`)) return;
     startTransition(async () => {
       const r = await archiveLabCase(row.id);
-      if (!r.ok) alert(r.error);
+      if (!r.ok) {
+        alert(r.error);
+        return;
+      }
+      router.refresh();
     });
   }
 
   function onUnarchive() {
     startTransition(async () => {
       const r = await unarchiveLabCase(row.id);
-      if (!r.ok) alert(r.error);
+      if (!r.ok) {
+        alert(r.error);
+        return;
+      }
+      router.refresh();
     });
   }
 
@@ -36,14 +46,22 @@ export function CaseRowActions({ row }: { row: LabCase }) {
       return;
     startTransition(async () => {
       const r = await deleteLabCase(row.id);
-      if (!r.ok) alert(r.error);
+      if (!r.ok) {
+        alert(r.error);
+        return;
+      }
+      router.refresh();
     });
   }
 
   function onRestore() {
     startTransition(async () => {
       const r = await restoreLabCase(row.id);
-      if (!r.ok) alert(r.error);
+      if (!r.ok) {
+        alert(r.error);
+        return;
+      }
+      router.refresh();
     });
   }
 

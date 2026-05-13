@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import type { LabCase, ActionResult } from "@/lib/types";
 import { CaseFormFields } from "./CaseFormFields";
 import { createLabCase, updateLabCase } from "./actions";
@@ -19,6 +20,7 @@ export function CaseDialog({
   triggerClassName,
 }: Props) {
   const ref = useRef<HTMLDialogElement | null>(null);
+  const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -51,6 +53,7 @@ export function CaseDialog({
         return;
       }
       close();
+      router.refresh();
     });
   }
 

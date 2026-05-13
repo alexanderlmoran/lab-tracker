@@ -4,6 +4,7 @@ import {
   getAppSettings,
   listAppUsers,
   listEmailTemplates,
+  listLabPortals,
   listLabsCatalog,
 } from "./actions";
 import { listLabCases } from "../actions";
@@ -11,10 +12,10 @@ import { GeneralSettingsForm } from "./GeneralSettingsForm";
 import { AccountsPanel } from "./AccountsPanel";
 import { LabsCatalogPanel } from "./LabsCatalogPanel";
 import { EmailTemplatesPanel } from "./EmailTemplatesPanel";
-import { LabPortalLauncher } from "../LabPortalLauncher";
+import { LabPortalsPanel } from "./LabPortalsPanel";
 import { SettingsTabs } from "./SettingsTabs";
 import { parseSettingsTab } from "./tab";
-import { CaseTable } from "../CaseTable";
+import { BulkRecoveryTable } from "../BulkRecoveryTable";
 import { logoutAction } from "../../login/actions";
 
 export const dynamic = "force-dynamic";
@@ -40,6 +41,7 @@ export default async function SettingsPage({
   const wantsLabs = tab === "labs";
   const wantsArchived = tab === "archived";
   const wantsDeleted = tab === "deleted";
+  const wantsPortals = tab === "portals";
 
   const [
     settings,
@@ -48,6 +50,7 @@ export default async function SettingsPage({
     emailTemplates,
     archivedCases,
     deletedCases,
+    portals,
   ] = await Promise.all([
     wantsGeneral ? getAppSettings() : Promise.resolve(null),
     wantsAccounts ? listAppUsers() : Promise.resolve(null),
@@ -57,6 +60,7 @@ export default async function SettingsPage({
       ? listLabCases({ view: "archived" })
       : Promise.resolve(null),
     wantsDeleted ? listLabCases({ view: "deleted" }) : Promise.resolve(null),
+    wantsPortals ? listLabPortals() : Promise.resolve(null),
   ]);
 
   return (
@@ -137,38 +141,30 @@ export default async function SettingsPage({
           </Section>
         ) : null}
 
-        {tab === "portals" ? (
+        {wantsPortals && portals ? (
           <Section
             title="Lab portals"
-            description="Quick-launch the sign-in page for each lab. Updates here propagate to the per-row buttons on inbox emails."
+            description="Edit per-lab sign-in URLs. The lab key must match the lab_name used on cases — these power the portal buttons on the case detail card."
           >
-            <LabPortalLauncher />
+            <LabPortalsPanel portals={portals} />
           </Section>
         ) : null}
 
         {wantsArchived && archivedCases ? (
           <Section
             title="Archived cases"
-            description="Read-only history. Restore from a case's detail view."
+            description="Select multiple to unarchive in bulk, or use the row action."
           >
-            <p className="mb-3 text-xs text-zinc-500">
-              {archivedCases.length}{" "}
-              {archivedCases.length === 1 ? "case" : "cases"}
-            </p>
-            <CaseTable rows={archivedCases} />
+            <BulkRecoveryTable rows={archivedCases} mode="archived" />
           </Section>
         ) : null}
 
         {wantsDeleted && deletedCases ? (
           <Section
             title="Deleted cases"
-            description="Soft-deleted rows. Restore from a case's detail view if recovered in error."
+            description="Select multiple to restore in bulk, or use the row action."
           >
-            <p className="mb-3 text-xs text-zinc-500">
-              {deletedCases.length}{" "}
-              {deletedCases.length === 1 ? "case" : "cases"}
-            </p>
-            <CaseTable rows={deletedCases} />
+            <BulkRecoveryTable rows={deletedCases} mode="deleted" />
           </Section>
         ) : null}
       </main>

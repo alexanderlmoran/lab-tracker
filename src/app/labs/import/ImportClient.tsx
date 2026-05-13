@@ -9,6 +9,7 @@ import {
 } from "@/lib/labs/import-normalize";
 import { LAB_CATALOG, findLabByName } from "@/lib/labs/catalog";
 import {
+  aiNormalizeImportDrafts,
   commitImport,
   enrichImportDrafts,
   listRecentImports,
@@ -17,6 +18,11 @@ import {
   type PBSuggestion,
   type RecentImport,
 } from "./actions";
+import type { NormalizeResult } from "@/lib/ai/normalize-import";
+
+const AI_AUTO_APPLY_THRESHOLD = 0.9;
+
+type AiStatus = "idle" | "running" | "done" | "failed" | "skipped";
 
 type Phase = "upload" | "preview" | "committing" | "done";
 
@@ -143,7 +149,7 @@ function RollbackByIdSection() {
   );
 }
 
-const TARGET_YEAR = 2026;
+const MIN_YEAR = 2025;
 
 function newUuid(): string {
   // Browser-side: prefer crypto.randomUUID; fall back to a timestamp-rand mix
@@ -170,11 +176,23 @@ export function ImportClient() {
   const [bulkImportId, setBulkImportId] = useState<string | null>(null);
   const [rollbackMessage, setRollbackMessage] = useState<string | null>(null);
   const [, startRollback] = useTransition();
+  const [aiStatus, setAiStatus] = useState<AiStatus>("idle");
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiSuggestions, setAiSuggestions] = useState<
+    Record<string, NormalizeResult>
+  >({});
+  const [aiStats, setAiStats] = useState<{
+    autoApplied: number;
+    needsReview: number;
+  }>({ autoApplied: 0, needsReview: 0 });
 
   async function onFile(file: File) {
     const text = await file.text();
     const table = parseCsv(text);
-    const { rows, totalDataRows } = extractShippingRowsForYear(table, TARGET_YEAR);
+    const { rows, totalDataRows } = extractShippingRowsForYear(table, {
+      kind: "min",
+      year: MIN_YEAR,
+    });
 
     const localDrafts: ImportDraft[] = [];
     for (const r of rows) localDrafts.push(...rowToDrafts(r));
@@ -187,13 +205,138 @@ export function ImportClient() {
 
     startEnrich(async () => {
       const result = await enrichImportDrafts(localDrafts);
-      if (result.ok) {
-        setDrafts(result.data ?? []);
-        setPhase("preview");
-      } else {
+      if (!result.ok) {
         alert(`Enrichment failed: ${result.error}`);
+        return;
       }
+      const enriched = result.data ?? [];
+      setDrafts(enriched);
+      setPhase("preview");
+      // Kick off AI normalization in the background — high-confidence
+      // suggestions auto-apply, low-confidence ones surface as inline hints.
+      void runAiNormalization(enriched);
     });
+  }
+
+  async function runAiNormalization(enriched: EnrichedDraft[]) {
+    setAiStatus("running");
+    setAiError(null);
+    const eligible = enriched.filter((d) => !d.skipReason);
+    if (eligible.length === 0) {
+      setAiStatus("skipped");
+      return;
+    }
+    const r = await aiNormalizeImportDrafts({
+      drafts: eligible.map((d) => ({
+        draftKey: d.draftKey,
+        rawLab: d.rawCarrier,
+        patientName: d.patientName,
+      })),
+    });
+    if (!r.ok) {
+      setAiStatus("failed");
+      setAiError(r.error);
+      return;
+    }
+    const results = r.data ?? [];
+    const suggestionMap: Record<string, NormalizeResult> = {};
+    let auto = 0;
+    let review = 0;
+
+    // Apply high-confidence suggestions; collect the rest for inline review.
+    setDrafts((prev) => {
+      const next = [...prev];
+      for (const res of results) {
+        suggestionMap[res.rowKey] = res;
+        const i = next.findIndex((d) => d.draftKey === res.rowKey);
+        if (i === -1) continue;
+        const d = next[i];
+
+        let touched = false;
+        const patch: Partial<EnrichedDraft> = {};
+
+        // Patient name: auto-apply if confident and different.
+        if (
+          res.patientSuggested &&
+          res.patientConfidence >= AI_AUTO_APPLY_THRESHOLD &&
+          res.patientSuggested !== d.patientName
+        ) {
+          patch.patientName = res.patientSuggested;
+          touched = true;
+        }
+
+        // Lab: auto-apply only when the suggestion maps to a known catalog
+        // entry. Resolve catalog by provider name (case-insensitive).
+        if (
+          res.labSuggested &&
+          res.labConfidence >= AI_AUTO_APPLY_THRESHOLD
+        ) {
+          const entry = LAB_CATALOG.find(
+            (e) =>
+              e.provider.toLowerCase() === res.labSuggested!.toLowerCase(),
+          );
+          if (entry && entry.provider !== d.labProvider) {
+            patch.labProvider = entry.provider;
+            patch.labPanel = entry.panel;
+            // Recompute expected dates from the auto-applied lab's turnaround.
+            if (
+              d.sampleSentAtIso &&
+              (entry.turnaroundDaysMin != null ||
+                entry.turnaroundDaysMax != null)
+            ) {
+              const start = new Date(
+                d.sampleSentAtIso + "T00:00:00",
+              ).getTime();
+              if (entry.turnaroundDaysMin != null) {
+                const dt = new Date(start + entry.turnaroundDaysMin * 86_400_000);
+                patch.expectedResultAtMinIso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+              }
+              if (entry.turnaroundDaysMax != null) {
+                const dt = new Date(start + entry.turnaroundDaysMax * 86_400_000);
+                patch.expectedResultAtMaxIso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+              }
+            }
+            patch.warning = null;
+            touched = true;
+          }
+        }
+
+        if (touched) {
+          next[i] = { ...d, ...patch };
+          auto++;
+        } else if (
+          (res.patientSuggested &&
+            res.patientConfidence > 0 &&
+            res.patientConfidence < AI_AUTO_APPLY_THRESHOLD) ||
+          (res.labSuggested &&
+            res.labConfidence > 0 &&
+            res.labConfidence < AI_AUTO_APPLY_THRESHOLD)
+        ) {
+          review++;
+        }
+      }
+      return next;
+    });
+
+    setAiSuggestions(suggestionMap);
+    setAiStats({ autoApplied: auto, needsReview: review });
+    setAiStatus("done");
+  }
+
+  function acceptAiPatient(key: string) {
+    const s = aiSuggestions[key];
+    if (!s || !s.patientSuggested) return;
+    updateDraft(key, { patientName: s.patientSuggested });
+  }
+
+  function acceptAiLab(key: string) {
+    const s = aiSuggestions[key];
+    if (!s || !s.labSuggested) return;
+    const entry = LAB_CATALOG.find(
+      (e) => e.provider.toLowerCase() === s.labSuggested!.toLowerCase(),
+    );
+    if (!entry) return;
+    setLabFromCatalogName(key, entry.name);
   }
 
   function updateDraft(key: string, patch: Partial<EnrichedDraft>) {
@@ -301,13 +444,17 @@ export function ImportClient() {
         setPhase("preview");
         return;
       }
-      const { insertedCount, failed } = result.data!;
+      const { insertedCount, failed, skippedDuplicates } = result.data!;
       const failTail =
         failed.length > 0
           ? ` · ${failed.length} failed (${failed.slice(0, 3).map((f) => f.patientName).join(", ")}${failed.length > 3 ? "…" : ""})`
           : "";
+      const dupTail =
+        skippedDuplicates && skippedDuplicates.length > 0
+          ? ` · ${skippedDuplicates.length} duplicate${skippedDuplicates.length === 1 ? "" : "s"} skipped (${skippedDuplicates.slice(0, 3).map((d) => `${d.patientName}/${d.labName}`).join(", ")}${skippedDuplicates.length > 3 ? "…" : ""})`
+          : "";
       setCommitMessage(
-        `Imported ${insertedCount} case${insertedCount === 1 ? "" : "s"}.${failTail}`,
+        `Imported ${insertedCount} case${insertedCount === 1 ? "" : "s"}.${failTail}${dupTail}`,
       );
       setPhase("done");
     });
@@ -338,7 +485,9 @@ export function ImportClient() {
             />
           </label>
           <p className="mt-4 text-[11px] text-zinc-400">
-            Only rows dated in {TARGET_YEAR} will be imported.
+            Only rows dated {MIN_YEAR} or later will be imported. Duplicates
+            (matching tracking number, or same patient + lab + collection date)
+            are skipped automatically.
           </p>
         </div>
 
@@ -425,7 +574,7 @@ export function ImportClient() {
           {parseStats ? (
             <>
               <span>{parseStats.totalDataRows} CSV data rows</span>
-              <span>{parseStats.inYearRows} in {TARGET_YEAR}</span>
+              <span>{parseStats.inYearRows} dated {MIN_YEAR}+</span>
               <span>{parseStats.draftCount} after multi-patient split</span>
             </>
           ) : null}
@@ -441,6 +590,34 @@ export function ImportClient() {
             </span>
           </span>
         </div>
+      </div>
+
+      <div
+        className={`rounded-md border px-3 py-2 text-xs ${
+          aiStatus === "running"
+            ? "border-blue-200 bg-blue-50 text-blue-800"
+            : aiStatus === "done"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+              : aiStatus === "failed"
+                ? "border-amber-200 bg-amber-50 text-amber-800"
+                : "hidden"
+        }`}
+      >
+        {aiStatus === "running" ? (
+          <span>✨ AI normalizing patient & lab names…</span>
+        ) : aiStatus === "done" ? (
+          <span>
+            ✨ AI normalize: <strong>{aiStats.autoApplied}</strong>{" "}
+            auto-applied at ≥{Math.round(AI_AUTO_APPLY_THRESHOLD * 100)}%
+            confidence · <strong>{aiStats.needsReview}</strong> low-confidence
+            suggestions surfaced inline for review.
+          </span>
+        ) : aiStatus === "failed" ? (
+          <span>
+            ✨ AI normalize failed ({aiError}). You can still review and import
+            manually.
+          </span>
+        ) : null}
       </div>
 
       <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white">
@@ -475,6 +652,29 @@ export function ImportClient() {
                     disabled={!!d.skipReason}
                     className="w-44 rounded border border-zinc-200 bg-white px-2 py-1 text-zinc-900"
                   />
+                  {(() => {
+                    const s = aiSuggestions[d.draftKey];
+                    if (
+                      !s ||
+                      !s.patientSuggested ||
+                      s.patientSuggested === d.patientName ||
+                      s.patientConfidence >= AI_AUTO_APPLY_THRESHOLD ||
+                      s.patientConfidence <= 0
+                    ) {
+                      return null;
+                    }
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => acceptAiPatient(d.draftKey)}
+                        className="mt-1 inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-800 hover:bg-blue-100"
+                        title={s.reason}
+                      >
+                        ✨ {s.patientSuggested} (
+                        {Math.round(s.patientConfidence * 100)}%) ✓
+                      </button>
+                    );
+                  })()}
                   {d.matchKind === "ambiguous" && d.candidates.length > 0 ? (
                     <div className="mt-1 flex flex-wrap gap-1">
                       {d.candidates.map((c) => (
@@ -534,6 +734,30 @@ export function ImportClient() {
                       raw: {d.rawCarrier}
                     </p>
                   ) : null}
+                  {(() => {
+                    const s = aiSuggestions[d.draftKey];
+                    if (
+                      !s ||
+                      !s.labSuggested ||
+                      s.labConfidence >= AI_AUTO_APPLY_THRESHOLD ||
+                      s.labConfidence <= 0 ||
+                      s.labSuggested.toLowerCase() ===
+                        (d.labProvider ?? "").toLowerCase()
+                    ) {
+                      return null;
+                    }
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => acceptAiLab(d.draftKey)}
+                        className="mt-1 inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-800 hover:bg-blue-100"
+                        title={s.reason}
+                      >
+                        ✨ {s.labSuggested} (
+                        {Math.round(s.labConfidence * 100)}%) ✓
+                      </button>
+                    );
+                  })()}
                 </td>
                 <td className="px-3 py-2 align-top">
                   <span className="font-mono text-[11px] text-zinc-700">

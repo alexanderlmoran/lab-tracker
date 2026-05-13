@@ -148,6 +148,7 @@ type DbRow = {
   heading: string | null;
   paragraphs: string | null;
   bcc: string | null;
+  enabled?: boolean | null;
 };
 
 function parseBccList(raw: string | null | undefined): string[] | null {
@@ -195,11 +196,26 @@ async function loadAllTemplateRows(): Promise<Map<string, DbRow>> {
     const db = getSupabaseAdmin();
     const { data } = await db
       .from("email_templates")
-      .select("kind, subject, heading, paragraphs, bcc");
+      .select("kind, subject, heading, paragraphs, bcc, enabled");
     return new Map(((data ?? []) as DbRow[]).map((r) => [r.kind, r]));
   } catch {
     // Table missing pre-migration — fall back to defaults.
     return new Map();
+  }
+}
+
+/** Centralized "is this kind currently enabled?" check. Default = true so
+ * a missing row (template never customized) doesn't accidentally block sends. */
+export async function isEmailKindEnabled(
+  kind: EditableEmailKind,
+): Promise<boolean> {
+  try {
+    const byKind = await loadAllTemplateRows();
+    const row = byKind.get(kind);
+    if (!row) return true;
+    return row.enabled !== false;
+  } catch {
+    return true;
   }
 }
 

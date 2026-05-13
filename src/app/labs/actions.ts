@@ -4,7 +4,16 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
+import { getAllPortalsForLab as getAllPortalsForLabDb } from "@/lib/lab-portals/server";
+import type { LabPortal } from "@/lib/inbound/detect-notification";
 import type { ActionResult, LabCase, LabEvent, StepNumber } from "@/lib/types";
+
+export async function fetchPortalsForLab(
+  labName: string,
+): Promise<LabPortal[]> {
+  await requireSignedIn();
+  return getAllPortalsForLabDb(labName);
+}
 
 const STEP_TO_DB_COL: Record<StepNumber, keyof LabCase> = {
   1: "step1_sample_sent",
@@ -193,6 +202,7 @@ async function setArchive(
 
   revalidatePath("/labs");
   revalidatePath("/labs/archived");
+  revalidatePath("/labs/settings");
   return { ok: true };
 }
 
@@ -226,6 +236,7 @@ async function setDeleted(
   revalidatePath("/labs");
   revalidatePath("/labs/archived");
   revalidatePath("/labs/deleted");
+  revalidatePath("/labs/settings");
   return { ok: true };
 }
 
@@ -268,6 +279,68 @@ export async function bulkArchive(input: {
 
   revalidatePath("/labs");
   revalidatePath("/labs/archived");
+  revalidatePath("/labs/settings");
+  return { ok: true, data: { count: parsed.data.caseIds.length } };
+}
+
+export async function bulkUnarchive(input: {
+  caseIds: string[];
+}): Promise<ActionResult<{ count: number }>> {
+  const user = await requireSignedIn();
+  const parsed = BulkInput.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+  const db = getSupabaseAdmin();
+  const { error } = await db
+    .from("lab_cases")
+    .update({ archived_at: null })
+    .in("id", parsed.data.caseIds);
+  if (error) return { ok: false, error: error.message };
+
+  await db.from("lab_events").insert(
+    parsed.data.caseIds.map((id) => ({
+      case_id: id,
+      kind: "case_unarchived" as const,
+      actor: user.email ?? "admin",
+      meta: { bulk: true },
+    })),
+  );
+
+  revalidatePath("/labs");
+  revalidatePath("/labs/archived");
+  revalidatePath("/labs/settings");
+  return { ok: true, data: { count: parsed.data.caseIds.length } };
+}
+
+export async function bulkRestore(input: {
+  caseIds: string[];
+}): Promise<ActionResult<{ count: number }>> {
+  const user = await requireSignedIn();
+  const parsed = BulkInput.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+  const db = getSupabaseAdmin();
+  const { error } = await db
+    .from("lab_cases")
+    .update({ deleted_at: null })
+    .in("id", parsed.data.caseIds);
+  if (error) return { ok: false, error: error.message };
+
+  await db.from("lab_events").insert(
+    parsed.data.caseIds.map((id) => ({
+      case_id: id,
+      kind: "case_restored" as const,
+      actor: user.email ?? "admin",
+      meta: { bulk: true },
+    })),
+  );
+
+  revalidatePath("/labs");
+  revalidatePath("/labs/archived");
+  revalidatePath("/labs/deleted");
+  revalidatePath("/labs/settings");
   return { ok: true, data: { count: parsed.data.caseIds.length } };
 }
 
@@ -365,6 +438,7 @@ export async function bulkDelete(input: {
   revalidatePath("/labs");
   revalidatePath("/labs/archived");
   revalidatePath("/labs/deleted");
+  revalidatePath("/labs/settings");
   return { ok: true, data: { count: parsed.data.caseIds.length } };
 }
 

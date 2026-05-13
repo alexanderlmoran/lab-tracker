@@ -101,6 +101,37 @@ async function dispatchEmail(args: {
   if (!row) return { ok: false, error: "Case not found" };
 
   const db = getSupabaseAdmin();
+
+  // Honor the per-template "in use" toggle from Settings → Email templates.
+  // Only the editable kinds have a toggle; the auto-fired kinds
+  // ("nadia_all_received", "rof_allison") aren't user-configurable and
+  // always dispatch.
+  const { isEmailKindEnabled, PATIENT_EMAIL_KINDS, STAFF_EMAIL_KINDS } =
+    await import("@/lib/email/template-data");
+  const editableKinds = new Set<string>([
+    ...PATIENT_EMAIL_KINDS,
+    ...STAFF_EMAIL_KINDS,
+  ]);
+  if (
+    editableKinds.has(kind) &&
+    !(await isEmailKindEnabled(kind as Parameters<typeof isEmailKindEnabled>[0]))
+  ) {
+    await db.from("email_logs").insert({
+      case_id: caseId,
+      kind,
+      status: "skipped",
+      to_address: row.patient_email ?? "",
+      error_message: "Template disabled in Settings → Email templates",
+    });
+    await db.from("lab_events").insert({
+      case_id: caseId,
+      kind: "email_skipped",
+      actor,
+      meta: { emailKind: kind, reason: "template_disabled" },
+    });
+    return { ok: true, data: {} };
+  }
+
   const rendered = await renderEmail(row, kind);
 
   // Always clear prior FAILED rows so the table doesn't accumulate dead weight.

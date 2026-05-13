@@ -7,6 +7,12 @@ import { hasRole, requireRole, type AppRole, type SessionUser } from "@/lib/auth
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { LAB_CATALOG } from "@/lib/labs/catalog";
 import { invalidateEffectiveCatalogCache } from "@/lib/labs/effective";
+import { LAB_PORTALS } from "@/lib/inbound/detect-notification";
+import {
+  invalidateLabPortalsCache,
+  listLabPortalsFromDb,
+  type LabPortalRow,
+} from "@/lib/lab-portals/server";
 import { renderTestEmail } from "@/lib/email/render";
 import {
   EMAIL_DEFAULTS,
@@ -448,6 +454,123 @@ export async function seedLabsCatalogFromCode(): Promise<
   return { ok: true, data: { inserted: toInsert.length } };
 }
 
+// ── Lab portals (DB-backed, editable) ─────────────────────────────────
+
+export type { LabPortalRow } from "@/lib/lab-portals/server";
+
+export async function listLabPortals(): Promise<LabPortalRow[]> {
+  await requireRole("admin");
+  return listLabPortalsFromDb();
+}
+
+const PortalInput = z.object({
+  id: z.string().uuid().optional(),
+  lab_key: z.string().trim().min(1).max(100),
+  label: z.string().trim().min(1).max(200),
+  url: z.string().trim().url().max(1000),
+  audience: z
+    .enum(["patient", "provider"])
+    .or(z.literal(""))
+    .transform((v) => (v === "" ? null : v)),
+  sort_order: z.coerce.number().int().min(0).max(1000).default(0),
+  notes: z
+    .string()
+    .trim()
+    .max(1000)
+    .or(z.literal(""))
+    .transform((v) => v || null),
+});
+
+export async function upsertLabPortal(
+  formData: FormData,
+): Promise<ActionResult<{ id: string }>> {
+  await requireRole("admin");
+  const raw = {
+    id: (formData.get("id") as string | null) || undefined,
+    lab_key: formData.get("lab_key") ?? "",
+    label: formData.get("label") ?? "",
+    url: formData.get("url") ?? "",
+    audience: formData.get("audience") ?? "",
+    sort_order: formData.get("sort_order") ?? 0,
+    notes: formData.get("notes") ?? "",
+  };
+  const parsed = PortalInput.safeParse(raw);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: parsed.error.issues[0]?.message ?? "Invalid input",
+    };
+  }
+  const { id, ...row } = parsed.data;
+  const db = getSupabaseAdmin();
+  if (id) {
+    const { error } = await db.from("lab_portals").update(row).eq("id", id);
+    if (error) return { ok: false, error: error.message };
+    invalidateLabPortalsCache();
+    revalidatePath("/labs/settings");
+    return { ok: true, data: { id } };
+  }
+  const { data, error } = await db
+    .from("lab_portals")
+    .insert(row)
+    .select("id")
+    .single();
+  if (error || !data) {
+    return { ok: false, error: error?.message ?? "Insert failed" };
+  }
+  invalidateLabPortalsCache();
+  revalidatePath("/labs/settings");
+  return { ok: true, data: { id: data.id } };
+}
+
+export async function deleteLabPortal(input: {
+  id: string;
+}): Promise<ActionResult> {
+  await requireRole("admin");
+  const db = getSupabaseAdmin();
+  const { error } = await db.from("lab_portals").delete().eq("id", input.id);
+  if (error) return { ok: false, error: error.message };
+  invalidateLabPortalsCache();
+  revalidatePath("/labs/settings");
+  return { ok: true };
+}
+
+/** First-run helper: copies the code constant into the DB so admins have
+ * something to edit. Skips lab_key+url pairs already present so it's safe
+ * to re-run. */
+export async function seedLabPortalsFromCode(): Promise<
+  ActionResult<{ inserted: number }>
+> {
+  await requireRole("admin");
+  const db = getSupabaseAdmin();
+  const { data: existing } = await db
+    .from("lab_portals")
+    .select("lab_key, url");
+  const have = new Set(
+    ((existing ?? []) as Array<{ lab_key: string; url: string }>).map(
+      (r) => `${r.lab_key}::${r.url}`,
+    ),
+  );
+  const toInsert = LAB_PORTALS.filter(
+    (p) => !have.has(`${p.key}::${p.url}`),
+  ).map((p, i) => ({
+    lab_key: p.key,
+    label: p.label,
+    url: p.url,
+    audience: p.audience ?? null,
+    sort_order: i,
+    notes: null,
+  }));
+  if (toInsert.length === 0) {
+    return { ok: true, data: { inserted: 0 } };
+  }
+  const { error } = await db.from("lab_portals").insert(toInsert);
+  if (error) return { ok: false, error: error.message };
+  invalidateLabPortalsCache();
+  revalidatePath("/labs/settings");
+  return { ok: true, data: { inserted: toInsert.length } };
+}
+
 // ── Email templates (DB-overridable copy — patient + staff) ───────────
 
 export type EmailTemplateGroup = "patient" | "staff";
@@ -464,6 +587,8 @@ export type EmailTemplateRow = {
    * help text lists the right ones per email. */
   placeholders: string[];
   isCustomised: boolean;
+  /** When false, the email send path skips dispatch (logs a skipped event). */
+  enabled: boolean;
 };
 
 const PLACEHOLDERS_BY_GROUP: Record<EmailTemplateGroup, string[]> = {
@@ -489,6 +614,7 @@ function buildRow(
   kind: EditableEmailKind,
   effective: EmailTemplate,
   group: EmailTemplateGroup,
+  enabled: boolean,
 ): EmailTemplateRow {
   const def = EMAIL_DEFAULTS[kind];
   const isCustomised =
@@ -506,18 +632,36 @@ function buildRow(
     bcc: effective.bcc,
     placeholders: PLACEHOLDERS_BY_GROUP[group],
     isCustomised,
+    enabled,
   };
 }
 
 export async function listEmailTemplates(): Promise<EmailTemplateRow[]> {
   await requireRole("admin");
-  const [patient, staff] = await Promise.all([
+  const db = getSupabaseAdmin();
+  const [patient, staff, enabledRows] = await Promise.all([
     loadAllPatientTemplates(),
     loadAllStaffTemplates(),
+    db.from("email_templates").select("kind, enabled"),
   ]);
+  const enabledByKind = new Map<string, boolean>();
+  for (const r of (enabledRows.data ?? []) as Array<{
+    kind: string;
+    enabled: boolean | null;
+  }>) {
+    enabledByKind.set(r.kind, r.enabled !== false);
+  }
+  // Default to enabled when no row exists (template never touched).
+  const isEnabled = (k: EditableEmailKind) =>
+    enabledByKind.has(k) ? enabledByKind.get(k)! : true;
+
   return [
-    ...PATIENT_EMAIL_KINDS.map((k) => buildRow(k, patient[k], "patient")),
-    ...STAFF_EMAIL_KINDS.map((k) => buildRow(k, staff[k], "staff")),
+    ...PATIENT_EMAIL_KINDS.map((k) =>
+      buildRow(k, patient[k], "patient", isEnabled(k)),
+    ),
+    ...STAFF_EMAIL_KINDS.map((k) =>
+      buildRow(k, staff[k], "staff", isEnabled(k)),
+    ),
   ];
 }
 
@@ -563,6 +707,30 @@ export async function updateEmailTemplate(input: {
       heading: parsed.data.heading,
       paragraphs: parsed.data.paragraphs || null,
       bcc: parsed.data.bcc || null,
+      updated_by: actor.id,
+    },
+    { onConflict: "kind" },
+  );
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/labs/settings");
+  return { ok: true };
+}
+
+export async function setEmailTemplateEnabled(input: {
+  kind: EditableEmailKind;
+  enabled: boolean;
+}): Promise<ActionResult> {
+  const actor = await requireRole("admin");
+  const parsed = ALL_KINDS.safeParse(input.kind);
+  if (!parsed.success) {
+    return { ok: false, error: "Invalid kind" };
+  }
+  const db = getSupabaseAdmin();
+  // Upsert so a never-customized template still gets a row with the toggle.
+  const { error } = await db.from("email_templates").upsert(
+    {
+      kind: parsed.data,
+      enabled: input.enabled,
       updated_by: actor.id,
     },
     { onConflict: "kind" },

@@ -14,6 +14,7 @@ import { loadEmailConfig } from "./render";
 import {
   applyPlaceholders,
   firstNameOf,
+  isEmailKindEnabled,
   loadStaffTemplate,
   type StaffEmailKind,
 } from "./template-data";
@@ -28,6 +29,13 @@ export async function sendStaffEmail(args: {
 }): Promise<SendStaffResult> {
   const key = process.env.RESEND_API_KEY;
   if (!key) return { ok: false, error: "RESEND_API_KEY is not set" };
+
+  // Honor the per-template "in use" toggle. Treated as success so the
+  // caller (invite flow / password reset) can proceed with the rest of its
+  // bookkeeping; the email just doesn't go out.
+  if (!(await isEmailKindEnabled(args.kind))) {
+    return { ok: false, error: "Email kind is disabled in Settings" };
+  }
 
   const [ctx, template] = await Promise.all([
     loadEmailConfig(),

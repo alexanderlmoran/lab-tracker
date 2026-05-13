@@ -6,6 +6,7 @@ import { COLUMN_LABEL, COLUMN_ORDER, completedStepCount, getColumnFor } from "@/
 import { StepChecklist } from "./StepChecklist";
 import { ActivityLog } from "./ActivityLog";
 import { CaseDialog } from "./CaseDialog";
+import { LabPortalLinks } from "./LabPortalLinks";
 import { RefreshLabStatusButton } from "./RefreshLabStatusButton";
 import { RefreshTrackingButton } from "./RefreshTrackingButton";
 import { markCaseClosed } from "./actions";
@@ -94,14 +95,12 @@ export function CaseDetail({ row }: { row: LabCase }) {
         </div>
         <div className="space-y-1.5">
           <Field label="Email" value={row.patient_email} />
-          <Field label="Phone" value={row.patient_phone} />
           <Field
             label="DOB"
             value={
               row.patient_dob ? `${row.patient_dob}${ageFromDob(row.patient_dob)}` : null
             }
           />
-          <Field label="Address" value={row.patient_address} />
         </div>
       </section>
 
@@ -110,10 +109,15 @@ export function CaseDetail({ row }: { row: LabCase }) {
           Case
         </h3>
         <div className="space-y-1.5">
-          <Field
-            label="Lab"
-            value={row.lab_panel ? `${row.lab_name} · ${row.lab_panel}` : row.lab_name}
-          />
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+            <span className="w-24 shrink-0 text-xs uppercase tracking-wide text-zinc-500">
+              Lab
+            </span>
+            <span className="text-zinc-900">
+              {row.lab_panel ? `${row.lab_name} · ${row.lab_panel}` : row.lab_name}
+            </span>
+            <LabPortalLinks labName={row.lab_name} />
+          </div>
           <Field label="Collected" value={row.collection_date} />
           <Field label="Tracking" value={row.tracking_number} />
           {row.tracking_number ? (

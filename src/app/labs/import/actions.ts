@@ -6,6 +6,11 @@ import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import type { ActionResult } from "@/lib/types";
 import type { ImportDraft } from "@/lib/labs/import-normalize";
+import {
+  aiNormalizeDrafts,
+  type NormalizeResult,
+} from "@/lib/ai/normalize-import";
+import { listEffectiveLabs } from "@/lib/labs/effective";
 
 /**
  * Patient match outcome attached to a draft. "exact_one" — single PB record
@@ -165,6 +170,80 @@ export async function enrichImportDrafts(
   return { ok: true, data: enriched };
 }
 
+/**
+ * AI normalization pass — fuzzy-matches each draft's raw lab/patient name
+ * against the canonical lists. Single batched Claude call per upload.
+ *
+ * Returns one result per draft. Callers auto-apply suggestions with
+ * confidence >= 0.9 and surface the rest as low-confidence flags so the
+ * operator can review before commit.
+ */
+export type AiNormalizeRow = NormalizeResult & {
+  /** Whether the suggestion was auto-applied client-side. Set by the caller
+   * after thresholding so the UI badge reflects truth. We just pass through
+   * raw model output here. */
+  autoApplied?: boolean;
+};
+
+export async function aiNormalizeImportDrafts(input: {
+  drafts: Array<{
+    draftKey: string;
+    rawLab: string;
+    patientName: string;
+  }>;
+}): Promise<ActionResult<NormalizeResult[]>> {
+  await requireSignedIn();
+  if (input.drafts.length === 0) return { ok: true, data: [] };
+
+  const db = getSupabaseAdmin();
+
+  // Canonical labs from the effective catalog (DB overrides + code fallback).
+  let knownLabs: string[] = [];
+  try {
+    const labs = await listEffectiveLabs();
+    knownLabs = Array.from(new Set(labs.map((l) => l.provider))).filter(Boolean);
+  } catch {
+    knownLabs = [];
+  }
+
+  // Recent distinct patient names — bounded query (most recent 500).
+  let knownPatients: string[] = [];
+  try {
+    const { data } = await db
+      .from("lab_cases")
+      .select("patient_name, updated_at")
+      .is("deleted_at", null)
+      .order("updated_at", { ascending: false })
+      .limit(500);
+    const seen = new Set<string>();
+    for (const r of (data ?? []) as Array<{ patient_name: string }>) {
+      const n = r.patient_name?.trim();
+      if (n && !seen.has(n.toLowerCase())) {
+        seen.add(n.toLowerCase());
+        knownPatients.push(n);
+      }
+    }
+  } catch {
+    knownPatients = [];
+  }
+
+  try {
+    const results = await aiNormalizeDrafts({
+      rows: input.drafts.map((d) => ({
+        rowKey: d.draftKey,
+        rawLab: d.rawLab,
+        rawPatient: d.patientName,
+      })),
+      knownLabs,
+      knownPatients,
+    });
+    return { ok: true, data: results };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "AI call failed";
+    return { ok: false, error: msg };
+  }
+}
+
 const CommitInput = z.object({
   bulkImportId: z.string().uuid(),
   rows: z.array(
@@ -188,7 +267,69 @@ export type CommitImportResult = {
   bulkImportId: string;
   insertedCount: number;
   failed: { patientName: string; reason: string }[];
+  skippedDuplicates: {
+    patientName: string;
+    labName: string;
+    matchedOn: "tracking_number" | "patient_email+lab+date";
+  }[];
 };
+
+/**
+ * A row already exists if EITHER:
+ *   • same `tracking_number` (when present) — strongest unique key on shipments;
+ *   • same patient_email + lab_name + collection_date — covers re-imports where
+ *     the tracking number is missing.
+ * We only look at non-deleted rows so previously-rolled-back imports re-import
+ * cleanly.
+ */
+async function findDuplicates(
+  db: ReturnType<typeof getSupabaseAdmin>,
+  rows: Array<{
+    patientEmail: string;
+    labName: string;
+    trackingNumber: string | null;
+    sampleSentAtIso: string | null;
+  }>,
+): Promise<Set<number>> {
+  const dup = new Set<number>();
+  const trackingNumbers = rows
+    .map((r, i) => ({ tn: r.trackingNumber, i }))
+    .filter((x): x is { tn: string; i: number } => !!x.tn);
+  if (trackingNumbers.length > 0) {
+    const { data } = await db
+      .from("lab_cases")
+      .select("tracking_number")
+      .in(
+        "tracking_number",
+        trackingNumbers.map((x) => x.tn),
+      )
+      .is("deleted_at", null);
+    const have = new Set(
+      ((data ?? []) as Array<{ tracking_number: string | null }>)
+        .map((r) => r.tracking_number)
+        .filter(Boolean) as string[],
+    );
+    for (const { tn, i } of trackingNumbers) {
+      if (have.has(tn)) dup.add(i);
+    }
+  }
+  // Fallback dedupe by (email + lab + date) only for rows not already flagged.
+  for (let i = 0; i < rows.length; i++) {
+    if (dup.has(i)) continue;
+    const r = rows[i];
+    if (!r.sampleSentAtIso) continue;
+    const { data } = await db
+      .from("lab_cases")
+      .select("id")
+      .eq("patient_email", r.patientEmail)
+      .eq("lab_name", r.labName)
+      .eq("collection_date", r.sampleSentAtIso)
+      .is("deleted_at", null)
+      .limit(1);
+    if ((data ?? []).length > 0) dup.add(i);
+  }
+  return dup;
+}
 
 /**
  * Insert all accepted rows as new lab_cases with step1_sample_sent = true,
@@ -219,11 +360,25 @@ export async function commitImport(input: {
 
   const db = getSupabaseAdmin();
   const failed: { patientName: string; reason: string }[] = [];
+  const skippedDuplicates: CommitImportResult["skippedDuplicates"] = [];
   let inserted = 0;
+
+  const dupIdx = await findDuplicates(db, parsed.data.rows);
 
   // Per-row insert so a single bad row (constraint, etc.) doesn't abort the
   // whole batch. Throughput is not a concern at <500 rows.
-  for (const r of parsed.data.rows) {
+  for (let i = 0; i < parsed.data.rows.length; i++) {
+    const r = parsed.data.rows[i];
+    if (dupIdx.has(i)) {
+      skippedDuplicates.push({
+        patientName: r.patientName,
+        labName: r.labName,
+        matchedOn: r.trackingNumber
+          ? "tracking_number"
+          : "patient_email+lab+date",
+      });
+      continue;
+    }
     const { data, error } = await db
       .from("lab_cases")
       .insert({
@@ -234,6 +389,7 @@ export async function commitImport(input: {
         lab_name: r.labName,
         lab_panel: r.labPanel,
         tracking_number: r.trackingNumber,
+        collection_date: r.sampleSentAtIso,
         notes: r.notes,
         step1_sample_sent: true,
         bulk_import_id: parsed.data.bulkImportId,
@@ -288,6 +444,7 @@ export async function commitImport(input: {
       bulkImportId: parsed.data.bulkImportId,
       insertedCount: inserted,
       failed,
+      skippedDuplicates,
     },
   };
 }

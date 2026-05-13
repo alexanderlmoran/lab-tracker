@@ -74,14 +74,18 @@ export function CaseFormFields({ initial }: { initial?: LabCase | null }) {
               className={inputClass}
             />
             <p className="mt-1 text-[11px] text-zinc-500">
-              When the sample was drawn. Anchors the expected-results estimate.
+              When the sample was drawn. Anchors the expected-results estimate.{" "}
+              <span className="text-zinc-400">CSV column: “Date Shipped”.</span>
             </p>
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label htmlFor="trackingNumber" className={labelClass}>
-                Tracking number
+                Tracking number{" "}
+                <span className="font-normal text-zinc-400">
+                  (CSV: “Tracking Number”)
+                </span>
               </label>
               <div className="mt-1 flex gap-2">
                 <input
@@ -112,7 +116,10 @@ export function CaseFormFields({ initial }: { initial?: LabCase | null }) {
 
             <div>
               <label htmlFor="pickupConfirmation" className={labelClass}>
-                Pickup confirmation #
+                Pickup confirmation #{" "}
+                <span className="font-normal text-zinc-400">
+                  (CSV: “Confirmation Number”)
+                </span>
               </label>
               <input
                 id="pickupConfirmation"

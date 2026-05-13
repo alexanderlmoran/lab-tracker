@@ -2,7 +2,7 @@ import Link from "next/link";
 import { requireSignedIn } from "@/lib/auth-guard";
 import { listLabCases } from "../actions";
 import { logoutAction } from "../../login/actions";
-import { CaseTable } from "../CaseTable";
+import { BulkRecoveryTable } from "../BulkRecoveryTable";
 
 export const dynamic = "force-dynamic";
 
@@ -52,7 +52,7 @@ export default async function DeletedLabsPage() {
         <h2 className="mb-4 text-sm font-semibold text-zinc-900">
           {cases.length} deleted {cases.length === 1 ? "case" : "cases"}
         </h2>
-        <CaseTable rows={cases} />
+        <BulkRecoveryTable rows={cases} mode="deleted" />
       </main>
     </div>
   );

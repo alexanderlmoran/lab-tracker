@@ -63,6 +63,12 @@ function ProgressDots({ row }: { row: LabCase }) {
   );
 }
 
+function formatShortDate(iso: string): string {
+  const d = new Date(iso + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 function formatExpectedRange(min: string | null, max: string | null): string | null {
   if (!min && !max) return null;
   const fmt = (iso: string) => {
@@ -168,7 +174,7 @@ function LabRow({
           </span>
         ) : null}
       </div>
-      {(row.tracking_number || expected || row.tracking_status) ? (
+      {(row.tracking_number || expected || row.tracking_status || row.collection_date) ? (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-zinc-400">
           {row.tracking_status ? (
             <span
@@ -179,6 +185,11 @@ function LabRow({
             >
               {TRACKING_BADGE[row.tracking_status]?.label ?? row.tracking_status}
               {row.tracking_location ? ` · ${row.tracking_location}` : ""}
+            </span>
+          ) : null}
+          {row.collection_date ? (
+            <span title="Collection date">
+              Drawn {formatShortDate(row.collection_date)}
             </span>
           ) : null}
           {row.tracking_number ? <span>TRK {row.tracking_number}</span> : null}

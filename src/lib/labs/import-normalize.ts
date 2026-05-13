@@ -72,10 +72,16 @@ const HEADER_ROW_INDEX = 0; // 0-based: header is the first row
  * The Lab Shipping CSV has 11 named columns; rows with fewer fields are
  * tolerated (defaults to "") so a trailing-comma quirk doesn't break import.
  */
+export type YearFilter =
+  | { kind: "exact"; year: number }
+  | { kind: "min"; year: number };
+
 export function extractShippingRowsForYear(
   table: string[][],
-  year: number,
+  filter: number | YearFilter,
 ): RawCsvRowsByYear {
+  const f: YearFilter =
+    typeof filter === "number" ? { kind: "exact", year: filter } : filter;
   const rows: ShippingCsvRow[] = [];
   let totalDataRows = 0;
   for (let i = 0; i < table.length; i++) {
@@ -86,7 +92,9 @@ export function extractShippingRowsForYear(
     const get = (col: number) => (r[col] ?? "").trim();
     const date = get(0);
     const yearOf = parseDate(date)?.getFullYear() ?? null;
-    if (yearOf !== year) continue;
+    if (yearOf == null) continue;
+    if (f.kind === "exact" && yearOf !== f.year) continue;
+    if (f.kind === "min" && yearOf < f.year) continue;
     rows.push({
       rowNum: i + 1,
       date,
