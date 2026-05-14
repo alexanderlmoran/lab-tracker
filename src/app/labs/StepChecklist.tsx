@@ -28,28 +28,13 @@ export function StepChecklist({ initial }: { initial: LabCase }) {
   const [, startTransition] = useTransition();
   const emailDialogRef = useRef<EmailConfirmHandle | null>(null);
 
-  async function onToggle(step: StepNumber, next: boolean) {
+  // Step toggles just toggle. Patient emails are sent via the explicit
+  // "Send email" button next to each email step — clicking the step itself
+  // never fires email. This was a UX request: the auto-prompt on tick felt
+  // like the email was going out on click, and made it tedious to backfill
+  // completed steps after the fact.
+  function onToggle(step: StepNumber, next: boolean) {
     setError(null);
-
-    // Email gate: ticking an email step opens the confirmation dialog.
-    // The dialog handles sending + step-marking via its own server actions
-    // (sendPatientEmail / skipPatientEmail), so we just refresh the local
-    // boolean from the result and don't call setStepCompleted ourselves.
-    if (next && isEmailStep(step)) {
-      const kind = emailKindForStep(step);
-      if (kind && emailDialogRef.current) {
-        const result = await emailDialogRef.current.open({
-          caseId: c.id,
-          kind,
-        });
-        if (result.cancelled) return;
-        // Either sent or skipped — both flip the step server-side.
-        setC((prev) => ({ ...prev, [DB_COL[step]]: true }) as LabCase);
-        return;
-      }
-    }
-
-    // Non-email step OR unticking — write directly.
     setPendingStep(step);
     setC((prev) => ({ ...prev, [DB_COL[step]]: next }) as LabCase);
     startTransition(async () => {
@@ -66,6 +51,16 @@ export function StepChecklist({ initial }: { initial: LabCase }) {
     });
   }
 
+  async function onSendEmail(step: StepNumber) {
+    const kind = emailKindForStep(step);
+    if (!kind || !emailDialogRef.current) return;
+    setError(null);
+    const result = await emailDialogRef.current.open({ caseId: c.id, kind });
+    if (result.cancelled) return;
+    // Both sent and skipped flip the step server-side — mirror locally.
+    setC((prev) => ({ ...prev, [DB_COL[step]]: true }) as LabCase);
+  }
+
   return (
     <>
       <div className="space-y-1">
@@ -76,43 +71,53 @@ export function StepChecklist({ initial }: { initial: LabCase }) {
           const isPending = pendingStep === step;
 
           return (
-            <label
+            <div
               key={step}
               className={`flex items-start gap-3 rounded-md px-2 py-2 text-sm ${
-                partialDisabled
-                  ? "cursor-not-allowed opacity-50"
-                  : "hover:bg-zinc-50"
+                partialDisabled ? "opacity-50" : "hover:bg-zinc-50"
               }`}
             >
-              <input
-                type="checkbox"
-                className="mt-0.5 h-4 w-4 rounded border-zinc-300"
-                checked={checked}
-                disabled={partialDisabled || isPending}
-                onChange={(e) => {
-                  void onToggle(step, e.target.checked);
-                }}
-              />
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`text-zinc-900 ${
-                      checked ? "line-through decoration-zinc-400" : ""
-                    }`}
-                  >
-                    {step}. {stepLabel(step)}
-                  </span>
-                  {isEmail ? (
-                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800">
-                      email confirm
+              <label
+                className={`flex flex-1 items-start gap-3 ${
+                  partialDisabled ? "cursor-not-allowed" : "cursor-pointer"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 rounded border-zinc-300"
+                  checked={checked}
+                  disabled={partialDisabled || isPending}
+                  onChange={(e) => {
+                    onToggle(step, e.target.checked);
+                  }}
+                />
+                <div className="flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`text-zinc-900 ${
+                        checked ? "line-through decoration-zinc-400" : ""
+                      }`}
+                    >
+                      {step}. {stepLabel(step)}
                     </span>
-                  ) : null}
-                  {partialDisabled ? (
-                    <span className="text-[11px] text-zinc-500">(skip)</span>
-                  ) : null}
+                    {partialDisabled ? (
+                      <span className="text-[11px] text-zinc-500">(skip)</span>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            </label>
+              </label>
+              {isEmail && !partialDisabled ? (
+                <button
+                  type="button"
+                  onClick={() => void onSendEmail(step)}
+                  disabled={isPending}
+                  className="shrink-0 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                  title="Open the email confirmation dialog"
+                >
+                  {checked ? "Resend email" : "Send email"}
+                </button>
+              ) : null}
+            </div>
           );
         })}
         {error ? (

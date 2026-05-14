@@ -17,6 +17,41 @@ function formatDateTime(iso: string): string {
   });
 }
 
+function formatCollectionDate(iso: string | null): string {
+  if (!iso) return "No collection date";
+  const d = new Date(iso + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+/** Group cases by collection_date so labs drawn on the same day cluster
+ * under one header. Order: most-recent date first; cases without a
+ * collection date land last so the timeline stays sensible. */
+function groupCasesByCollectionDate<T extends { collection_date: string | null }>(
+  cases: T[],
+): Array<{ date: string | null; rows: T[] }> {
+  const buckets = new Map<string, T[]>();
+  for (const c of cases) {
+    const key = c.collection_date ?? "";
+    const arr = buckets.get(key) ?? [];
+    arr.push(c);
+    buckets.set(key, arr);
+  }
+  return Array.from(buckets.entries())
+    .sort(([a], [b]) => {
+      if (!a && !b) return 0;
+      if (!a) return 1;
+      if (!b) return -1;
+      return b.localeCompare(a);
+    })
+    .map(([date, rows]) => ({ date: date || null, rows }));
+}
+
 function StatusPill({
   archived,
   deleted,
@@ -120,40 +155,53 @@ export default async function PatientDetailPage({
             <h2 className="mb-3 text-sm font-semibold text-zinc-900">
               Cases ({history.cases.length})
             </h2>
-            <ul className="space-y-2">
-              {history.cases.map((c) => {
-                const col = getColumnFor(c);
-                return (
-                  <li
-                    key={c.id}
-                    className="flex items-center justify-between rounded-md border border-zinc-200 px-3 py-2"
-                  >
-                    <div className="min-w-0">
-                      <Link
-                        href={`/labs/${c.id}`}
-                        className="text-sm font-medium text-zinc-900 hover:underline"
-                      >
-                        {c.lab_name}
-                        {c.lab_panel ? ` · ${c.lab_panel}` : ""}
-                      </Link>
-                      <p className="mt-0.5 truncate text-xs text-zinc-500">
-                        {c.tracking_number ? `Tracking: ${c.tracking_number} · ` : ""}
-                        Created {formatDateTime(c.created_at)}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-700">
-                        {COLUMN_LABEL[col]}
-                      </span>
-                      <StatusPill
-                        archived={c.archived_at}
-                        deleted={c.deleted_at}
-                      />
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+            <div className="space-y-4">
+              {groupCasesByCollectionDate(history.cases).map((group) => (
+                <div key={group.date ?? "no-date"}>
+                  <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                    {formatCollectionDate(group.date)}
+                    <span className="ml-2 font-normal normal-case text-zinc-400">
+                      {group.rows.length} lab
+                      {group.rows.length === 1 ? "" : "s"}
+                    </span>
+                  </h3>
+                  <ul className="space-y-2">
+                    {group.rows.map((c) => {
+                      const col = getColumnFor(c);
+                      return (
+                        <li
+                          key={c.id}
+                          className="flex items-center justify-between rounded-md border border-zinc-200 px-3 py-2"
+                        >
+                          <div className="min-w-0">
+                            <Link
+                              href={`/labs/${c.id}`}
+                              className="text-sm font-medium text-zinc-900 hover:underline"
+                            >
+                              {c.lab_name}
+                              {c.lab_panel ? ` · ${c.lab_panel}` : ""}
+                            </Link>
+                            <p className="mt-0.5 truncate text-xs text-zinc-500">
+                              {c.tracking_number ? `Tracking: ${c.tracking_number} · ` : ""}
+                              Created {formatDateTime(c.created_at)}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-700">
+                              {COLUMN_LABEL[col]}
+                            </span>
+                            <StatusPill
+                              archived={c.archived_at}
+                              deleted={c.deleted_at}
+                            />
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ))}
+            </div>
           </div>
 
           <div className="rounded-lg border border-zinc-200 bg-white p-4">

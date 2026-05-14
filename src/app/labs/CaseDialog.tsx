@@ -4,7 +4,8 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { LabCase, ActionResult } from "@/lib/types";
 import { CaseFormFields } from "./CaseFormFields";
-import { createLabCase, updateLabCase } from "./actions";
+import { NewCaseFormFields } from "./NewCaseFormFields";
+import { createLabCases, updateLabCase } from "./actions";
 
 type Props = {
   mode: "create" | "edit";
@@ -23,9 +24,14 @@ export function CaseDialog({
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  // Bumped each time the dialog opens so the inner form remounts with fresh
+  // state — otherwise the previous patient's name/email/lab linger on the
+  // next "New case" click (the <dialog> element doesn't unmount on close).
+  const [formKey, setFormKey] = useState(0);
 
   function open() {
     setError(null);
+    if (mode === "create") setFormKey((k) => k + 1);
     ref.current?.showModal();
   }
 
@@ -46,7 +52,7 @@ export function CaseDialog({
     startTransition(async () => {
       const result: ActionResult<unknown> =
         mode === "create"
-          ? await createLabCase(formData)
+          ? await createLabCases(formData)
           : await updateLabCase(initial!.id, formData);
       if (!result.ok) {
         setError(result.error);
@@ -90,7 +96,11 @@ export function CaseDialog({
           </div>
 
           <div className="overflow-y-auto px-6 py-4">
-            <CaseFormFields initial={initial} />
+            {mode === "create" ? (
+              <NewCaseFormFields key={formKey} />
+            ) : (
+              <CaseFormFields key={formKey} initial={initial} />
+            )}
             {error ? (
               <p className="mt-4 text-sm text-red-600" role="alert">
                 {error}
@@ -115,7 +125,7 @@ export function CaseDialog({
               {pending
                 ? "Saving…"
                 : mode === "create"
-                  ? "Create case"
+                  ? "Create cases"
                   : "Save changes"}
             </button>
           </div>

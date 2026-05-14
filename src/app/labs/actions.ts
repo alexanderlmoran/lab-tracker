@@ -130,6 +130,119 @@ export async function createLabCase(
   return { ok: true, data: { id: data.id } };
 }
 
+const LabRowSchema = z.object({
+  labName: z.string().trim().min(1).max(100),
+  labPanel: z.string().trim().max(100).nullable().optional(),
+  trackingNumber: z.string().trim().max(100).nullable().optional(),
+  pickupConfirmation: z.string().trim().max(100).nullable().optional(),
+  collectionDate: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
+    .nullable()
+    .optional(),
+  partialExpected: z.boolean().default(false),
+});
+
+/** Bulk create: one patient, N labs from a single submission. The form
+ * serializes the lab array as JSON in a hidden `labsJson` input — keeps the
+ * server contract simple and avoids inventing bracketed FormData keys. */
+export async function createLabCases(
+  formData: FormData,
+): Promise<ActionResult<{ count: number; ids: string[] }>> {
+  const user = await requireSignedIn();
+
+  const patient = z
+    .object({
+      patientName: z.string().trim().min(1).max(200),
+      patientEmail: z.string().trim().email().max(200),
+      patientPhone: z
+        .string()
+        .trim()
+        .max(40)
+        .optional()
+        .transform((v) => (v && v.length ? v : null)),
+      patientDob: z
+        .string()
+        .trim()
+        .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
+        .optional()
+        .or(z.literal(""))
+        .transform((v) => (v && v.length ? v : null)),
+      patientAddress: optionalNonEmpty,
+      autoSendEmails: z.boolean().default(true),
+      notes: z
+        .string()
+        .trim()
+        .max(2000)
+        .optional()
+        .transform((v) => (v && v.length ? v : null)),
+    })
+    .safeParse({
+      patientName: formData.get("patientName"),
+      patientEmail: formData.get("patientEmail"),
+      patientPhone: formData.get("patientPhone") ?? "",
+      patientDob: formData.get("patientDob") ?? "",
+      patientAddress: formData.get("patientAddress") ?? "",
+      autoSendEmails: formData.get("autoSendEmails") === "on",
+      notes: formData.get("notes") ?? "",
+    });
+  if (!patient.success) {
+    return { ok: false, error: patient.error.issues[0]?.message ?? "Invalid patient" };
+  }
+
+  const rawJson = formData.get("labsJson");
+  if (typeof rawJson !== "string" || rawJson.trim().length === 0) {
+    return { ok: false, error: "Add at least one lab." };
+  }
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(rawJson);
+  } catch {
+    return { ok: false, error: "Lab list was malformed." };
+  }
+  const labs = z.array(LabRowSchema).min(1).max(20).safeParse(parsedJson);
+  if (!labs.success) {
+    return { ok: false, error: labs.error.issues[0]?.message ?? "Invalid labs" };
+  }
+
+  const rows = labs.data.map((lab) => ({
+    patient_name: patient.data.patientName,
+    patient_email: patient.data.patientEmail,
+    patient_phone: patient.data.patientPhone,
+    patient_dob: patient.data.patientDob,
+    patient_address: patient.data.patientAddress,
+    lab_name: lab.labName,
+    lab_panel: lab.labPanel ?? null,
+    tracking_number: lab.trackingNumber ?? null,
+    pickup_confirmation: lab.pickupConfirmation ?? null,
+    collection_date: lab.collectionDate ?? null,
+    partial_expected: lab.partialExpected,
+    auto_send_emails: patient.data.autoSendEmails,
+    notes: patient.data.notes,
+  }));
+
+  const db = getSupabaseAdmin();
+  const { data, error } = await db.from("lab_cases").insert(rows).select("id");
+  if (error || !data) {
+    return { ok: false, error: error?.message ?? "Insert failed" };
+  }
+
+  await db.from("lab_events").insert(
+    data.map((d) => ({
+      case_id: (d as { id: string }).id,
+      kind: "case_created" as const,
+      actor: user.email ?? "admin",
+    })),
+  );
+
+  revalidatePath("/labs");
+  return {
+    ok: true,
+    data: { count: data.length, ids: (data as { id: string }[]).map((d) => d.id) },
+  };
+}
+
 export async function updateLabCase(
   caseId: string,
   formData: FormData,
