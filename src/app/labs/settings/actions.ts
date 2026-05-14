@@ -32,7 +32,12 @@ import type { ActionResult } from "@/lib/types";
 
 // ── App settings ──────────────────────────────────────────────────────
 
-const SETTING_KEYS = ["reply_to_email", "from_email", "practice_name"] as const;
+const SETTING_KEYS = [
+  "reply_to_email",
+  "from_email",
+  "practice_name",
+  "digest_email",
+] as const;
 export type AppSettingKey = (typeof SETTING_KEYS)[number];
 
 export type AppSettings = Record<AppSettingKey, string | null>;
@@ -56,6 +61,7 @@ const SettingsInput = z.object({
   reply_to_email: z.string().trim().email().or(z.literal("")).transform((v) => v || null),
   from_email: z.string().trim().email().or(z.literal("")).transform((v) => v || null),
   practice_name: z.string().trim().max(200).or(z.literal("")).transform((v) => v || null),
+  digest_email: z.string().trim().email().or(z.literal("")).transform((v) => v || null),
 });
 
 export async function updateAppSettings(
@@ -66,6 +72,7 @@ export async function updateAppSettings(
     reply_to_email: formData.get("reply_to_email") ?? "",
     from_email: formData.get("from_email") ?? "",
     practice_name: formData.get("practice_name") ?? "",
+    digest_email: formData.get("digest_email") ?? "",
   });
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };

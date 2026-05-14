@@ -22,9 +22,29 @@ function getResend(): Resend {
   return new Resend(key);
 }
 
-/** Single configurable digest recipient. Falls back to NADIA_EMAIL so a
- * default install with the standard env still sends something useful. */
-function digestRecipient(): string {
+/**
+ * Single configurable digest recipient. Resolution order:
+ *   1. app_settings.digest_email (admin-editable in /labs/settings)
+ *   2. DIGEST_EMAIL env var
+ *   3. NADIA_EMAIL env var
+ *   4. Hardcoded fallback
+ *
+ * The DB read is async; the env-only fallback is sync. Keep both available
+ * so callers that can't await (rare) still get a working value.
+ */
+async function digestRecipient(): Promise<string> {
+  try {
+    const db = getSupabaseAdmin();
+    const { data } = await db
+      .from("app_settings")
+      .select("value")
+      .eq("key", "digest_email")
+      .maybeSingle();
+    const fromDb = ((data as { value: string | null } | null)?.value ?? "").trim();
+    if (fromDb) return fromDb;
+  } catch {
+    // Fall through to env-only resolution.
+  }
   return (
     process.env.DIGEST_EMAIL?.trim() ||
     process.env.NADIA_EMAIL?.trim() ||
@@ -98,6 +118,7 @@ export async function runStaleDigest(opts: {
   thresholdDays?: number;
 }): Promise<StaleDigestSummary> {
   const threshold = opts.thresholdDays ?? getStaleDaysThreshold();
+  const recipient = await digestRecipient();
   const db = getSupabaseAdmin();
   const { data, error } = await db
     .from("lab_cases")
@@ -109,7 +130,7 @@ export async function runStaleDigest(opts: {
       ok: false,
       staleCount: 0,
       patientCount: 0,
-      recipient: digestRecipient(),
+      recipient,
       emailError: error.message,
     };
   }
@@ -135,7 +156,7 @@ export async function runStaleDigest(opts: {
       ok: true,
       staleCount: 0,
       patientCount: 0,
-      recipient: digestRecipient(),
+      recipient,
     };
   }
 
@@ -169,7 +190,7 @@ export async function runStaleDigest(opts: {
     `\n\nOpen the board to act: ${process.env.NEXT_PUBLIC_APP_URL ?? "https://labs"}/labs?stale=1\n`;
 
   const send = await dispatchInternal({
-    to: digestRecipient(),
+    to: recipient,
     subject: INTERNAL_SUBJECT.stale_digest,
     html,
     text,
@@ -179,7 +200,7 @@ export async function runStaleDigest(opts: {
     ok: send.ok,
     staleCount: stale.length,
     patientCount,
-    recipient: digestRecipient(),
+    recipient,
     emailMessageId: send.ok ? send.messageId : undefined,
     emailError: send.ok ? undefined : send.error,
   };
@@ -216,7 +237,7 @@ const ROF_REMINDER_COOLDOWN_DAYS = 5;
  */
 export async function runRofReminders(): Promise<RofReminderSummary> {
   const db = getSupabaseAdmin();
-  const recipient = digestRecipient();
+  const recipient = await digestRecipient();
   const cutoffIso = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
 
   const { data, error } = await db

@@ -63,6 +63,14 @@ export function GeneralSettingsForm({
         defaultValue={initial.practice_name ?? ""}
         hint="Shown in the email footer and From: display name."
       />
+      <Field
+        name="digest_email"
+        label="Digest recipient"
+        type="email"
+        placeholder="nadia@centnerwellness.com"
+        defaultValue={initial.digest_email ?? ""}
+        hint="Where the daily stale-case digest and ROF reminder emails go. Falls back to the DIGEST_EMAIL env var, then NADIA_EMAIL."
+      />
 
       <div className="flex items-center justify-between pt-2">
         <div className="text-xs">
