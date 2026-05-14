@@ -7,7 +7,9 @@ export type EmailKind =
   | "complete_uploaded"
   | "rof_followup"
   | "nadia_all_received"
-  | "rof_allison";
+  | "rof_allison"
+  | "stale_digest"
+  | "rof_reminder";
 
 export type EmailStatus = "queued" | "sent" | "failed" | "skipped";
 
