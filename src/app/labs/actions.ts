@@ -523,6 +523,74 @@ export async function refreshLabStatus(input: {
   };
 }
 
+const BulkStepInput = z.object({
+  caseIds: z.array(z.string().uuid()).min(1).max(200),
+  step: z.number().int().min(1).max(9),
+  completed: z.boolean(),
+});
+
+/**
+ * Bulk-toggle a single step across many cases in one click. Used by the
+ * KanbanBoard select mode "Advance step" menu — when staff ship a batch of
+ * 10 samples FedEx together, marking step 1 on each one is tedious.
+ *
+ * Does NOT fire any patient or staff emails (Nadia/Allison triggers are
+ * deliberately skipped) because a bulk advance is administrative, not the
+ * organic step-by-step workflow those emails are designed to track.
+ * Predicted result-date range IS computed when step 1 → true, so cards land
+ * with their expected dates set.
+ */
+export async function bulkSetStepCompleted(input: {
+  caseIds: string[];
+  step: number;
+  completed: boolean;
+}): Promise<ActionResult<{ count: number }>> {
+  const user = await requireSignedIn();
+  const parsed = BulkStepInput.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+  const { caseIds, step, completed } = parsed.data;
+  const stepNum = step as StepNumber;
+  const dbCol = STEP_TO_DB_COL[stepNum];
+  const db = getSupabaseAdmin();
+
+  // Step 1 toggles also touch the expected-date range; rather than reproduce
+  // that whole calculation here, fall back to per-row setStepCompleted for
+  // step 1. The per-row helper already skips emails (those only fire from
+  // step 5/6) so the "no emails fire" guarantee still holds.
+  if (stepNum === 1) {
+    let count = 0;
+    for (const id of caseIds) {
+      const r = await setStepCompleted({ caseId: id, step, completed });
+      if (r.ok) count += 1;
+    }
+    revalidatePath("/labs");
+    return { ok: true, data: { count } };
+  }
+
+  const { error } = await db
+    .from("lab_cases")
+    .update({ [dbCol]: completed })
+    .in("id", caseIds);
+  if (error) return { ok: false, error: error.message };
+
+  await db.from("lab_events").insert(
+    caseIds.map((id) => ({
+      case_id: id,
+      kind: "step_toggled" as const,
+      step,
+      completed,
+      actor: user.email ?? "admin",
+      meta: { bulk: true },
+      note: `Bulk ${completed ? "advanced" : "rolled back"} step ${step}`,
+    })),
+  );
+
+  revalidatePath("/labs");
+  return { ok: true, data: { count: caseIds.length } };
+}
+
 export async function bulkDelete(input: {
   caseIds: string[];
 }): Promise<ActionResult<{ count: number }>> {
@@ -584,11 +652,12 @@ export async function setStepCompleted(input: {
   // don't pay the extra fetch on every check.
   const updatePayload: Record<string, unknown> = { [dbCol]: completed };
   let expectedDatesEvent: { min: string | null; max: string | null } | null = null;
+  let armTracking = false; // see post-update step below
   if (stepNum === 1) {
     if (completed) {
       const { data: caseRow } = await db
         .from("lab_cases")
-        .select("lab_name, lab_panel, collection_date")
+        .select("lab_name, lab_panel, collection_date, tracking_number, tracking_polled_at")
         .eq("id", caseId)
         .maybeSingle();
       if (caseRow?.lab_name) {
@@ -612,6 +681,16 @@ export async function setStepCompleted(input: {
           updatePayload.expected_result_at_max = maxIso;
           if (minIso || maxIso) expectedDatesEvent = { min: minIso, max: maxIso };
         }
+      }
+      // Auto-arm a FedEx poll when sample-sent is checked and we have a
+      // tracking number on file — skips waiting for the once-a-day cron.
+      // Skipped when we polled in the last hour to avoid hammering FedEx if
+      // the user clicks-and-unclicks.
+      if (caseRow?.tracking_number) {
+        const polledAt = caseRow.tracking_polled_at
+          ? new Date(caseRow.tracking_polled_at).getTime()
+          : 0;
+        if (Date.now() - polledAt > 60 * 60 * 1000) armTracking = true;
       }
     } else {
       updatePayload.expected_result_at_min = null;
@@ -641,6 +720,19 @@ export async function setStepCompleted(input: {
       actor: user.email ?? "admin",
       note: `Predicted: ${expectedDatesEvent.min ?? "—"} to ${expectedDatesEvent.max ?? "—"}`,
     });
+  }
+
+  // Best-effort: when step 1 just flipped true and the case has a tracking
+  // number that hasn't been polled in the last hour, kick off a FedEx
+  // refresh now instead of waiting for the next cron tick. Failures here
+  // must not block the step toggle — log and move on.
+  if (armTracking) {
+    try {
+      const { refreshTrackingForCase } = await import("./tracking-actions");
+      await refreshTrackingForCase(caseId);
+    } catch (err) {
+      console.error("[step1] auto-arm tracking failed", err);
+    }
   }
 
   // Step 5 (complete results uploaded) → fire Nadia outreach when all of
@@ -726,6 +818,82 @@ export async function markCaseClosed(
   revalidatePath("/labs");
   revalidatePath(`/labs/${caseId}`);
   return { ok: true };
+}
+
+const AttachScanInput = z.object({
+  caseId: z.string().uuid(),
+  trackingNumber: z.string().trim().min(3).max(100),
+});
+
+/**
+ * "Scan kit barcode at intake": attaches a tracking number to a case AND,
+ * when step 1 isn't already ticked, advances step 1 + arms a FedEx poll.
+ * Designed for the case-detail Scan button — staff scans the kit they're
+ * shipping, and the case lands in "Sample sent" in one motion.
+ *
+ * Idempotent on the tracking number: scanning the same code twice is a no-op
+ * (won't re-fire the event log).
+ */
+export async function attachTrackingFromScan(input: {
+  caseId: string;
+  trackingNumber: string;
+}): Promise<
+  ActionResult<{ advancedStep1: boolean; trackingChanged: boolean }>
+> {
+  const user = await requireSignedIn();
+  const parsed = AttachScanInput.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+  const { caseId, trackingNumber } = parsed.data;
+  const db = getSupabaseAdmin();
+
+  const { data: row, error: fetchErr } = await db
+    .from("lab_cases")
+    .select("id, tracking_number, step1_sample_sent")
+    .eq("id", caseId)
+    .maybeSingle();
+  if (fetchErr || !row) {
+    return { ok: false, error: fetchErr?.message ?? "Case not found" };
+  }
+
+  const trackingChanged = row.tracking_number !== trackingNumber;
+  const advancedStep1 = !row.step1_sample_sent;
+
+  if (trackingChanged) {
+    const { error: updErr } = await db
+      .from("lab_cases")
+      .update({ tracking_number: trackingNumber })
+      .eq("id", caseId);
+    if (updErr) return { ok: false, error: updErr.message };
+    await db.from("lab_events").insert({
+      case_id: caseId,
+      kind: "case_edited",
+      actor: user.email ?? "admin",
+      meta: {
+        scan: true,
+        from: row.tracking_number,
+        to: trackingNumber,
+      },
+      note: "Tracking number attached by barcode scan",
+    });
+  }
+
+  if (advancedStep1) {
+    // setStepCompleted handles the expected-date prediction + best-effort
+    // FedEx auto-arm; reuse it so the bookkeeping stays in one place.
+    const stepRes = await setStepCompleted({
+      caseId,
+      step: 1,
+      completed: true,
+      note: "Auto-advanced by barcode scan at intake",
+    });
+    if (!stepRes.ok) return { ok: false, error: stepRes.error };
+  }
+
+  revalidatePath("/labs");
+  revalidatePath(`/labs/${caseId}`);
+  return { ok: true, data: { advancedStep1, trackingChanged } };
 }
 
 export async function listLabEvents(caseId: string): Promise<LabEvent[]> {

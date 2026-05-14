@@ -11,7 +11,15 @@ import {
   type PatientGroup,
 } from "@/lib/columns";
 import { PatientCard } from "./PatientCard";
-import { bulkArchive, bulkDelete } from "./actions";
+import { bulkArchive, bulkDelete, bulkSetStepCompleted } from "./actions";
+
+const BULK_STEP_OPTIONS: Array<{ step: 1 | 4 | 5 | 6 | 7; label: string }> = [
+  { step: 1, label: "Sample sent" },
+  { step: 4, label: "Complete results received" },
+  { step: 5, label: "Complete uploaded" },
+  { step: 6, label: "ROF scheduled" },
+  { step: 7, label: "ROF completed" },
+];
 
 function StaticColumn({
   col,
@@ -143,6 +151,27 @@ export function KanbanBoard({ rows }: { rows: LabCase[] }) {
     });
   }
 
+  function onBulkAdvanceStep(step: number, stepLabel: string) {
+    if (selected.size === 0) return;
+    if (
+      !confirm(
+        `Mark "${stepLabel}" complete on ${selected.size} case${
+          selected.size === 1 ? "" : "s"
+        }?\n\nNo patient or staff emails will fire — this is administrative.`,
+      )
+    )
+      return;
+    startBulk(async () => {
+      const r = await bulkSetStepCompleted({
+        caseIds: [...selected],
+        step,
+        completed: true,
+      });
+      if (!r.ok) alert(r.error);
+      exitSelectMode();
+    });
+  }
+
   const groups = groupByPatient(rows);
   const grouped: Record<ColumnKey, PatientGroup[]> = {
     untouched: [],
@@ -227,6 +256,22 @@ export function KanbanBoard({ rows }: { rows: LabCase[] }) {
           <span className="px-2 text-sm font-medium text-zinc-900">
             {selected.size} selected
           </span>
+          <select
+            onChange={(e) => {
+              const step = Number(e.target.value);
+              const found = BULK_STEP_OPTIONS.find((o) => o.step === step);
+              e.currentTarget.selectedIndex = 0;
+              if (found) onBulkAdvanceStep(found.step, found.label);
+            }}
+            className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+          >
+            <option value="">Advance step…</option>
+            {BULK_STEP_OPTIONS.map((opt) => (
+              <option key={opt.step} value={opt.step}>
+                Mark step {opt.step}: {opt.label}
+              </option>
+            ))}
+          </select>
           <button
             type="button"
             onClick={onBulkArchive}

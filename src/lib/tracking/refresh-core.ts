@@ -18,7 +18,45 @@ type CaseRow = {
   id: string;
   tracking_number: string | null;
   tracking_status: TrackingStatus | null;
+  step1_sample_sent?: boolean;
 };
+
+/**
+ * Called when a case's tracking status transitions to `delivered` (i.e. the
+ * sample just reached the lab). Two effects:
+ *   1. If step 1 ("Sample sent to lab") isn't already ticked, mark it true.
+ *      Staff sometimes forget to tick it manually; FedEx delivery is definitive
+ *      proof the sample shipped, so this closes the gap without staff action.
+ *   2. Insert a `step_toggled` audit event so the timeline records that
+ *      automation (not a human) advanced the step.
+ *
+ * Best-effort: any error is logged and swallowed so the calling refresh loop
+ * doesn't blow up on one bad row.
+ */
+async function onDeliveredTransition(args: {
+  db: ReturnType<typeof getSupabaseAdmin>;
+  caseId: string;
+  actor: string;
+  step1AlreadyDone: boolean;
+}): Promise<void> {
+  if (args.step1AlreadyDone) return;
+  try {
+    await args.db
+      .from("lab_cases")
+      .update({ step1_sample_sent: true })
+      .eq("id", args.caseId);
+    await args.db.from("lab_events").insert({
+      case_id: args.caseId,
+      kind: "step_toggled",
+      step: 1,
+      completed: true,
+      actor: args.actor,
+      note: "Auto-advanced: FedEx delivered sample to lab",
+    });
+  } catch (err) {
+    console.error("[tracking] onDeliveredTransition failed", err);
+  }
+}
 
 function mergeUpdate(result: FedExTrackResult, existing: CaseRow) {
   if (result.status === "unknown" && existing.tracking_status === "delivered") {
@@ -64,7 +102,7 @@ export async function refreshTrackingForActiveCasesCore(opts: {
 
   const { data, error } = await db
     .from("lab_cases")
-    .select("id, tracking_number, tracking_status")
+    .select("id, tracking_number, tracking_status, step1_sample_sent")
     .is("deleted_at", null)
     .is("archived_at", null)
     .not("tracking_number", "is", null)
@@ -115,6 +153,15 @@ export async function refreshTrackingForActiveCasesCore(opts: {
         actor: opts.actor,
         note: `${r.status}${r.location ? ` · ${r.location}` : ""}${r.statusDetail ? ` — ${r.statusDetail}` : ""}`,
       });
+      // First-time delivered transition: ensure step 1 is ticked.
+      if (r.status === "delivered" && c.tracking_status !== "delivered") {
+        await onDeliveredTransition({
+          db,
+          caseId: c.id,
+          actor: opts.actor,
+          step1AlreadyDone: Boolean(c.step1_sample_sent),
+        });
+      }
     }
   }
 

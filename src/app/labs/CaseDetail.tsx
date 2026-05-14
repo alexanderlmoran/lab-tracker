@@ -5,11 +5,12 @@ import type { LabCase } from "@/lib/types";
 import { COLUMN_LABEL, COLUMN_ORDER, completedStepCount, getColumnFor } from "@/lib/columns";
 import { StepChecklist } from "./StepChecklist";
 import { ActivityLog } from "./ActivityLog";
+import { BarcodeScanner } from "./BarcodeScanner";
 import { CaseDialog } from "./CaseDialog";
 import { LabPortalLinks } from "./LabPortalLinks";
 import { RefreshLabStatusButton } from "./RefreshLabStatusButton";
 import { RefreshTrackingButton } from "./RefreshTrackingButton";
-import { markCaseClosed } from "./actions";
+import { attachTrackingFromScan, markCaseClosed } from "./actions";
 import { getLabDestination, trackingDestinationWarning } from "@/lib/labs/catalog";
 // PracticeBetter integration removed 2026-05-12 — was abandoned 2026-05-11
 // per the project memo. Staff now upload results to PB manually if needed.
@@ -45,6 +46,67 @@ function MarkClosedButton({ caseId, isAlreadyClosed }: { caseId: string; isAlrea
       </button>
       {error ? <span className="text-[11px] text-red-600">{error}</span> : null}
     </div>
+  );
+}
+
+function ScanKitButton({
+  caseId,
+  hasTracking,
+  step1Done,
+}: {
+  caseId: string;
+  hasTracking: boolean;
+  step1Done: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pending, start] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+
+  function onDetect(code: string) {
+    setOpen(false);
+    setMsg(null);
+    start(async () => {
+      const r = await attachTrackingFromScan({
+        caseId,
+        trackingNumber: code,
+      });
+      if (!r.ok) {
+        setMsg(r.error);
+        return;
+      }
+      const bits: string[] = [];
+      if (r.data?.trackingChanged) bits.push(`TRK ${code} attached`);
+      if (r.data?.advancedStep1) bits.push("step 1 marked");
+      setMsg(bits.length > 0 ? bits.join(" · ") : "No changes (already on file)");
+    });
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        disabled={pending}
+        className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+        title={
+          step1Done && hasTracking
+            ? "Re-scan to attach a new tracking number"
+            : "Scan to attach tracking and advance Step 1"
+        }
+      >
+        Scan kit
+      </button>
+      {msg ? (
+        <span className="text-[11px] text-emerald-700">{msg}</span>
+      ) : null}
+      {open ? (
+        <BarcodeScanner
+          title="Scan kit barcode"
+          onClose={() => setOpen(false)}
+          onDetect={onDetect}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -143,7 +205,17 @@ export function CaseDetail({ row }: { row: LabCase }) {
             </div>
           ) : null}
           <Field label="Collected" value={row.collection_date} />
-          <Field label="Tracking" value={row.tracking_number} />
+          <div className="flex items-center gap-2 py-1">
+            <span className="w-24 shrink-0 text-xs uppercase tracking-wide text-zinc-500">
+              Tracking
+            </span>
+            <span className="text-zinc-900">{row.tracking_number || "—"}</span>
+            <ScanKitButton
+              caseId={row.id}
+              hasTracking={Boolean(row.tracking_number)}
+              step1Done={Boolean(row.step1_sample_sent)}
+            />
+          </div>
           {row.tracking_number ? (
             <div className="flex items-start gap-2 py-1">
               <span className="w-24 shrink-0 text-xs uppercase tracking-wide text-zinc-500">

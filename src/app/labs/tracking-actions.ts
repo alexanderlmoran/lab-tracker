@@ -59,7 +59,7 @@ export async function refreshTrackingForCase(
   const db = getSupabaseAdmin();
   const { data: row, error: fetchErr } = await db
     .from("lab_cases")
-    .select("id, tracking_number, tracking_status")
+    .select("id, tracking_number, tracking_status, step1_sample_sent")
     .eq("id", caseId)
     .maybeSingle();
   if (fetchErr || !row) {
@@ -94,6 +94,27 @@ export async function refreshTrackingForCase(
     actor: user.email ?? "admin",
     note: `${r.status}${r.location ? ` · ${r.location}` : ""}${r.statusDetail ? ` — ${r.statusDetail}` : ""}`,
   });
+
+  // First-time delivered transition: ensure step 1 is ticked. Mirrors the
+  // logic in refresh-core.ts so both manual and cron paths behave the same.
+  if (r.status === "delivered" && row.tracking_status !== "delivered" && !row.step1_sample_sent) {
+    try {
+      await db
+        .from("lab_cases")
+        .update({ step1_sample_sent: true })
+        .eq("id", caseId);
+      await db.from("lab_events").insert({
+        case_id: caseId,
+        kind: "step_toggled",
+        step: 1,
+        completed: true,
+        actor: user.email ?? "admin",
+        note: "Auto-advanced: FedEx delivered sample to lab",
+      });
+    } catch (err) {
+      console.error("[tracking] manual-refresh delivered transition failed", err);
+    }
+  }
 
   revalidatePath("/labs");
   revalidatePath(`/labs/${caseId}`);
