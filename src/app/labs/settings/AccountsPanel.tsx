@@ -7,6 +7,7 @@ import {
   inviteAppUser,
   regenerateInviteLink,
   setAppUserRole,
+  setTempPassword,
   type AppUserRow,
 } from "./actions";
 
@@ -151,6 +152,7 @@ function UserRow({
   const [error, setError] = useState<string | null>(null);
   const [magicLink, setMagicLink] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [tempPassword, setTempPasswordValue] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   const isSelf = user.user_id === currentUser.id;
@@ -196,6 +198,7 @@ function UserRow({
                 setError(null);
                 setMagicLink(null);
                 setNote(null);
+                setTempPasswordValue(null);
                 const res = await regenerateInviteLink({ email: user.email });
                 if (!res.ok) {
                   setError(res.error);
@@ -208,6 +211,34 @@ function UserRow({
             className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50"
           >
             New magic link
+          </button>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => {
+              if (
+                !confirm(
+                  `Generate a temporary password for ${user.email}?\n\nThis replaces their current password immediately. Share the password with them and have them change it at /labs/account after signing in.`,
+                )
+              ) {
+                return;
+              }
+              startTransition(async () => {
+                setError(null);
+                setMagicLink(null);
+                setNote(null);
+                setTempPasswordValue(null);
+                const res = await setTempPassword({ userId: user.user_id });
+                if (!res.ok) {
+                  setError(res.error);
+                  return;
+                }
+                setTempPasswordValue(res.data?.password ?? null);
+              });
+            }}
+            className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-100"
+          >
+            Set temp password
           </button>
           {!isSelf ? (
             <button
@@ -240,6 +271,21 @@ function UserRow({
             ) : null}
             <p className="break-all font-mono text-[11px] text-zinc-700">
               {magicLink}
+            </p>
+          </div>
+        ) : null}
+        {tempPassword ? (
+          <div className="mt-1 space-y-1 rounded-md bg-amber-50 p-2 text-left">
+            <p className="text-[11px] font-medium text-amber-900">
+              Temp password for {user.email}
+            </p>
+            <p className="select-all break-all font-mono text-xs text-zinc-900">
+              {tempPassword}
+            </p>
+            <p className="text-[11px] text-amber-700">
+              Share it directly. They sign in at /login with their email + this
+              password, then change it at /labs/account. It won&apos;t be shown
+              again.
             </p>
           </div>
         ) : null}

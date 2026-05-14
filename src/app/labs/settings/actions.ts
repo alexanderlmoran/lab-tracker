@@ -323,6 +323,53 @@ export async function deleteAppUser(input: {
   return { ok: true };
 }
 
+// Avoids ambiguous characters (0/O/1/l/I) so the admin can read it aloud.
+const TEMP_PASSWORD_ALPHABET =
+  "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+
+function generateTempPassword(length = 12): string {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) {
+    out += TEMP_PASSWORD_ALPHABET[bytes[i] % TEMP_PASSWORD_ALPHABET.length];
+  }
+  return out;
+}
+
+const TempPasswordInput = z.object({
+  userId: z.string().uuid(),
+});
+
+/** Set a fresh random password on a user and return it so the admin can read
+ * it out to them. Use when the magic-link flow didn't work for the user — they
+ * sign in with email + this password, then change it at /labs/account. */
+export async function setTempPassword(input: {
+  userId: string;
+}): Promise<ActionResult<{ password: string; email: string }>> {
+  await requireRole("admin");
+  const parsed = TempPasswordInput.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+  const db = getSupabaseAdmin();
+  const { data: appUser, error: lookupErr } = await db
+    .from("app_users")
+    .select("email")
+    .eq("user_id", parsed.data.userId)
+    .maybeSingle();
+  if (lookupErr || !appUser?.email) {
+    return { ok: false, error: "User not found." };
+  }
+  const password = generateTempPassword();
+  const { error } = await db.auth.admin.updateUserById(parsed.data.userId, {
+    password,
+    email_confirm: true,
+  });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: { password, email: appUser.email as string } };
+}
+
 // ── Labs catalog (DB-backed) ──────────────────────────────────────────
 
 export type LabsCatalogRow = {
