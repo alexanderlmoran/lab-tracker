@@ -1,5 +1,5 @@
-import Link from "next/link";
 import { requireRole } from "@/lib/auth-guard";
+import { HudPulse } from "../HudPulse";
 import {
   getAppSettings,
   listAppUsers,
@@ -16,7 +16,6 @@ import { LabPortalsPanel } from "./LabPortalsPanel";
 import { SettingsTabs } from "./SettingsTabs";
 import { parseSettingsTab } from "./tab";
 import { BulkRecoveryTable } from "../BulkRecoveryTable";
-import { logoutAction } from "../../login/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -65,36 +64,16 @@ export default async function SettingsPage({
 
   return (
     <div className="flex min-h-dvh flex-col bg-zinc-50">
-      <header className="border-b border-zinc-200 bg-white">
-        <div className="mx-auto flex max-w-screen-xl items-center justify-between px-6 py-4">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight text-zinc-900">
-              Settings
-            </h1>
-            <p className="text-xs text-zinc-500">
-              Signed in as {user.email} ({user.role})
-            </p>
-          </div>
-          <div className="flex items-center gap-3 text-sm">
-            <Link
-              href="/labs"
-              className="text-xs text-zinc-600 underline-offset-2 hover:text-zinc-900 hover:underline"
-            >
-              ← Back to labs
-            </Link>
-            <form action={logoutAction}>
-              <button
-                type="submit"
-                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
-              >
-                Sign out
-              </button>
-            </form>
-          </div>
+      <HudPulse user={user} />
+      <main className="mx-auto w-full max-w-screen-xl flex-1 space-y-5 px-4 py-4">
+        <div>
+          <h1 className="text-base font-semibold tracking-tight text-zinc-900">
+            Settings
+          </h1>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            Signed in as {user.email} ({user.role})
+          </p>
         </div>
-      </header>
-
-      <main className="mx-auto w-full max-w-screen-xl flex-1 space-y-6 px-4 py-8">
         <SettingsTabs tab={tab} />
 
         {wantsGeneral && settings ? (

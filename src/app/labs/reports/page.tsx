@@ -1,8 +1,7 @@
-import Link from "next/link";
-import { requireSignedIn } from "@/lib/auth-guard";
+import { requireUser } from "@/lib/auth-guard";
 import { getReportData } from "../actions";
-import { logoutAction } from "../../login/actions";
 import { COLUMN_LABEL, COLUMN_ORDER } from "@/lib/columns";
+import { HudPulse } from "../HudPulse";
 
 export const dynamic = "force-dynamic";
 
@@ -102,7 +101,7 @@ function SparkBar({
 }
 
 export default async function ReportsPage() {
-  const user = await requireSignedIn();
+  const user = await requireUser();
   const data = await getReportData();
   const maxColumn = Math.max(1, ...Object.values(data.columnCounts));
   const maxLab = Math.max(1, ...data.byLab.map((l) => l.count));
@@ -115,35 +114,16 @@ export default async function ReportsPage() {
 
   return (
     <div className="min-h-dvh bg-zinc-50">
-      <header className="border-b border-zinc-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight text-zinc-900">
-              Reports
-            </h1>
-            <p className="text-xs text-zinc-500">Snapshot of all-time data.</p>
-          </div>
-          <div className="flex items-center gap-3 text-sm">
-            <Link
-              href="/labs"
-              className="text-xs text-zinc-600 underline-offset-2 hover:text-zinc-900 hover:underline"
-            >
-              ← Cases
-            </Link>
-            <span className="text-zinc-600">{user.email}</span>
-            <form action={logoutAction}>
-              <button
-                type="submit"
-                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
-              >
-                Sign out
-              </button>
-            </form>
-          </div>
+      <HudPulse user={user} />
+      <main className="mx-auto max-w-7xl space-y-5 px-6 py-4 pb-16">
+        <div>
+          <h1 className="text-base font-semibold tracking-tight text-zinc-900">
+            Reports
+          </h1>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            Snapshot of all-time data.
+          </p>
         </div>
-      </header>
-
-      <main className="mx-auto mt-6 max-w-7xl space-y-6 px-6 pb-16">
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <StatCard
             label="Active cases"

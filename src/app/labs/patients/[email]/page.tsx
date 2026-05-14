@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireSignedIn } from "@/lib/auth-guard";
+import { requireUser } from "@/lib/auth-guard";
 import { getPatientHistory } from "../../actions";
-import { logoutAction } from "../../../login/actions";
 import { COLUMN_LABEL, getColumnFor } from "@/lib/columns";
+import { HudPulse } from "../../HudPulse";
 
 export const dynamic = "force-dynamic";
 
@@ -85,7 +85,7 @@ export default async function PatientDetailPage({
 }: {
   params: Promise<{ email: string }>;
 }) {
-  const user = await requireSignedIn();
+  const user = await requireUser();
   const { email: rawEmail } = await params;
   const email = decodeURIComponent(rawEmail);
   const history = await getPatientHistory(email);
@@ -95,41 +95,25 @@ export default async function PatientDetailPage({
 
   return (
     <div className="min-h-dvh bg-zinc-50">
-      <header className="border-b border-zinc-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-6 py-2.5">
+      <HudPulse user={user} />
+      <main className="mx-auto max-w-7xl px-6 py-4 pb-16">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="truncate text-[15px] font-semibold leading-tight tracking-tight text-zinc-900">
-              {primary.patient_name}
-            </h1>
-            <p className="truncate text-[11px] text-zinc-500">{history.email}</p>
-          </div>
-          <div className="flex shrink-0 items-center gap-3 text-sm">
-            <Link
-              href="/labs"
-              className="text-[11.5px] text-zinc-600 underline-offset-2 hover:text-zinc-900 hover:underline"
-            >
-              ← Board
-            </Link>
             <Link
               href="/labs/patients"
               className="text-[11.5px] text-zinc-600 underline-offset-2 hover:text-zinc-900 hover:underline"
             >
-              Patients
+              ← Patients
             </Link>
-            <span className="text-[11.5px] text-zinc-600">{user.email}</span>
-            <form action={logoutAction}>
-              <button
-                type="submit"
-                className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11.5px] font-medium text-zinc-700 hover:bg-zinc-50"
-              >
-                Sign out
-              </button>
-            </form>
+            <h1 className="mt-0.5 truncate text-base font-semibold leading-tight tracking-tight text-zinc-900">
+              {primary.patient_name}
+            </h1>
+            <p className="truncate text-[11px] text-zinc-500">
+              {history.email}
+            </p>
           </div>
         </div>
-      </header>
-
-      <main className="mx-auto mt-4 grid max-w-7xl gap-4 px-6 pb-16 lg:grid-cols-3">
+        <div className="grid gap-4 lg:grid-cols-3">
         <section className="lg:col-span-2 space-y-4">
           <div className="rounded-lg border border-zinc-200 bg-white p-3">
             <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
@@ -295,6 +279,7 @@ export default async function PatientDetailPage({
             </ol>
           )}
         </aside>
+        </div>
       </main>
     </div>
   );

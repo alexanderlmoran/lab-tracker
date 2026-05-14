@@ -44,10 +44,16 @@ function timeAgo(iso: string | null): string | null {
 
 export type HudPulseProps = {
   user: SessionUser;
-  cases: LabCase[];
+  /** Active cases for the pipeline stats + flow strip. Omit on secondary
+   * tabs (Import, Reports, Settings, Inbox, etc.) — the HUD still renders
+   * the brand, nav, user chip, and New-case button; the count chip and
+   * coloured flow strip are suppressed when no cases are passed. */
+  cases?: LabCase[];
 };
 
 export function HudPulse({ user, cases }: HudPulseProps) {
+  const hasCases = Array.isArray(cases);
+  const safeCases = cases ?? [];
   // ── Stats ─────────────────────────────────────────────────────────
   // Bucket every visible case by column. "Active" excludes the terminal
   // "Protocol received" bucket — that's the design's choice and matches
@@ -63,7 +69,7 @@ export function HudPulse({ user, cases }: HudPulseProps) {
   };
   let staleCount = 0;
   let latestSync: string | null = null;
-  for (const c of cases) {
+  for (const c of safeCases) {
     const col = getColumnFor(c);
     counts[col] += 1;
     if (getCaseStaleness(c).stale) staleCount += 1;
@@ -74,7 +80,7 @@ export function HudPulse({ user, cases }: HudPulseProps) {
       latestSync = c.tracking_polled_at;
     }
   }
-  const totalAcrossAll = cases.length;
+  const totalAcrossAll = safeCases.length;
   const totalActive = totalAcrossAll - counts.closed;
   const lastSyncLabel = timeAgo(latestSync);
 
@@ -101,10 +107,12 @@ export function HudPulse({ user, cases }: HudPulseProps) {
           </div>
         </div>
 
-        <span className="count-chip" title="Active cases (everything except Protocol received)">
-          <span className="n">{totalActive}</span>
-          <span className="lbl">active</span>
-        </span>
+        {hasCases ? (
+          <span className="count-chip" title="Active cases (everything except Protocol received)">
+            <span className="n">{totalActive}</span>
+            <span className="lbl">active</span>
+          </span>
+        ) : null}
 
         <nav className="nav" aria-label="Lab tracker sections">
           {navItems
@@ -119,24 +127,26 @@ export function HudPulse({ user, cases }: HudPulseProps) {
 
         <span className="spacer" />
 
-        <span className="glance">
-          {staleCount > 0 ? (
-            <span
-              className="chip stale"
-              title={`${staleCount} ${staleCount === 1 ? "case" : "cases"} idle past the stale threshold`}
-            >
-              <span className="dot" />
-              <span className="num">{staleCount}</span>
-              <span>stale</span>
-            </span>
-          ) : null}
-          {lastSyncLabel ? (
-            <span className="chip sync" title="Most recent tracking refresh in the visible queue">
-              <span className="dot" />
-              Synced {lastSyncLabel}
-            </span>
-          ) : null}
-        </span>
+        {hasCases ? (
+          <span className="glance">
+            {staleCount > 0 ? (
+              <span
+                className="chip stale"
+                title={`${staleCount} ${staleCount === 1 ? "case" : "cases"} idle past the stale threshold`}
+              >
+                <span className="dot" />
+                <span className="num">{staleCount}</span>
+                <span>stale</span>
+              </span>
+            ) : null}
+            {lastSyncLabel ? (
+              <span className="chip sync" title="Most recent tracking refresh in the visible queue">
+                <span className="dot" />
+                Synced {lastSyncLabel}
+              </span>
+            ) : null}
+          </span>
+        ) : null}
 
         <CaseDialog
           mode="create"
@@ -165,7 +175,7 @@ export function HudPulse({ user, cases }: HudPulseProps) {
         </form>
       </div>
 
-      <FlowStrip counts={counts} />
+      {hasCases ? <FlowStrip counts={counts} /> : null}
     </header>
   );
 }
