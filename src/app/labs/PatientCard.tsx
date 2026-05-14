@@ -6,11 +6,13 @@ import type { LabCase } from "@/lib/types";
 import {
   COLUMN_LABEL,
   completedStepCount,
+  expectedCountdown,
   getCaseStaleness,
   getColumnFor,
   type PatientGroup,
   stepIsComplete,
 } from "@/lib/columns";
+import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { CaseDetail } from "./CaseDetail";
 
 function timeAgo(iso: string) {
@@ -134,6 +136,13 @@ function LabRow({
     row.expected_result_at_max,
   );
   const probablyReady = isProbablyReady(row);
+  const countdown = expectedCountdown(row);
+  const destWarning = trackingDestinationWarning({
+    labName: row.lab_name,
+    labPanel: row.lab_panel,
+    trackingStatus: row.tracking_status,
+    trackingLocation: row.tracking_location,
+  });
 
   return (
     <button
@@ -142,7 +151,7 @@ function LabRow({
         e.stopPropagation();
         onOpen(row);
       }}
-      className={`flex w-full flex-col gap-1 rounded-md border px-2 py-1.5 text-left transition-colors hover:bg-zinc-50 ${
+      className={`flex w-full flex-col gap-0.5 rounded-md border px-1.5 py-1 text-left transition-colors hover:bg-zinc-50 ${
         probablyReady
           ? "border-purple-300 bg-purple-50"
           : isLaggard
@@ -150,50 +159,84 @@ function LabRow({
             : "border-zinc-200 bg-white"
       }`}
     >
-      <div className="flex items-start justify-between gap-2">
-        <p className="min-w-0 flex-1 break-words text-[12px] font-medium leading-tight text-zinc-800">
+      <div className="flex items-center justify-between gap-2">
+        <p className="min-w-0 flex-1 truncate text-[11.5px] font-medium leading-tight text-zinc-800">
           {labLabel}
         </p>
         <span className="shrink-0 text-[10px] tabular-nums text-zinc-500">
           {done}/9
         </span>
       </div>
-      {probablyReady ? (
-        <p className="text-[10px] font-medium uppercase tracking-wide text-purple-700">
-          ↻ Likely ready — check lab portal
-        </p>
-      ) : null}
       <div className="flex items-center justify-between gap-2">
         <ProgressDots row={row} />
-        {staleness.stale ? (
-          <span
-            title={`No progress in ${staleness.daysSinceProgress} days`}
-            className="rounded bg-amber-100 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-800"
-          >
-            {staleness.daysSinceProgress}d
-          </span>
-        ) : null}
-      </div>
-      {(row.tracking_number || expected || row.tracking_status || row.collection_date) ? (
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-zinc-400">
+        <div className="flex items-center gap-1">
+          {countdown ? (
+            <span
+              title={
+                countdown.tone === "overdue"
+                  ? `Expected by ${row.expected_result_at_max} — past`
+                  : `Expected by ${row.expected_result_at_max}`
+              }
+              className={`rounded px-1 py-0.5 text-[9px] font-medium tabular-nums tracking-wide ${
+                countdown.tone === "overdue"
+                  ? "bg-rose-100 text-rose-700"
+                  : countdown.tone === "due"
+                    ? "bg-amber-100 text-amber-800"
+                    : "bg-zinc-100 text-zinc-600"
+              }`}
+            >
+              {countdown.label}
+            </span>
+          ) : null}
+          {destWarning ? (
+            <span
+              title={destWarning}
+              className="rounded bg-orange-100 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-orange-800"
+            >
+              wrong city?
+            </span>
+          ) : null}
+          {probablyReady ? (
+            <span
+              title="Likely ready — check lab portal"
+              className="rounded bg-purple-100 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-purple-700"
+            >
+              ready?
+            </span>
+          ) : null}
           {row.tracking_status ? (
             <span
               className={`rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
                 TRACKING_BADGE[row.tracking_status]?.className ?? "bg-zinc-100 text-zinc-500"
               }`}
-              title={row.tracking_status_detail ?? undefined}
+              title={
+                (TRACKING_BADGE[row.tracking_status]?.label ?? row.tracking_status) +
+                (row.tracking_location ? ` · ${row.tracking_location}` : "") +
+                (row.tracking_status_detail ? ` — ${row.tracking_status_detail}` : "")
+              }
             >
               {TRACKING_BADGE[row.tracking_status]?.label ?? row.tracking_status}
-              {row.tracking_location ? ` · ${row.tracking_location}` : ""}
             </span>
           ) : null}
+          {staleness.stale ? (
+            <span
+              title={`No progress in ${staleness.daysSinceProgress} days`}
+              className="rounded bg-amber-100 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-800"
+            >
+              {staleness.daysSinceProgress}d
+            </span>
+          ) : null}
+        </div>
+      </div>
+      {(row.collection_date || expected || row.tracking_number) ? (
+        <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-zinc-400">
           {row.collection_date ? (
             <span title="Collection date">
               Drawn {formatShortDate(row.collection_date)}
             </span>
           ) : null}
-          {row.tracking_number ? <span>TRK {row.tracking_number}</span> : null}
           {expected ? <span>↳ {expected}</span> : null}
+          {row.tracking_number ? <span className="truncate">TRK {row.tracking_number}</span> : null}
         </div>
       ) : null}
     </button>
@@ -246,22 +289,22 @@ export function PatientCard({ group }: { group: PatientGroup }) {
 
   return (
     <>
-      <div className="rounded-md border border-zinc-200 bg-white p-3 shadow-sm transition-shadow hover:shadow">
+      <div className="rounded-md border border-zinc-200 bg-white p-1.5 shadow-sm transition-shadow hover:shadow">
         <Link
           href={`/labs/patients/${encodeURIComponent(group.patientEmail)}`}
-          className="-mx-1 -mt-1 mb-2 block rounded px-1 py-1 transition-colors hover:bg-zinc-50"
+          className="-mx-0.5 -mt-0.5 mb-1 block rounded px-1 py-0.5 transition-colors hover:bg-zinc-50"
         >
-          <h4 className="break-words text-sm font-medium leading-tight text-zinc-900">
-            {group.patientName}
-          </h4>
-          <p className="truncate text-[11px] text-zinc-500">
-            {group.cases.length} lab{group.cases.length === 1 ? "" : "s"}
-            {" · "}
-            {group.patientEmail}
-          </p>
+          <div className="flex items-baseline justify-between gap-2">
+            <h4 className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-tight text-zinc-900">
+              {group.patientName}
+            </h4>
+            <span className="shrink-0 text-[10px] tabular-nums text-zinc-500">
+              {group.cases.length} lab{group.cases.length === 1 ? "" : "s"}
+            </span>
+          </div>
         </Link>
 
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-0.5">
           {group.cases.map((c) => (
             <LabRow
               key={c.id}
@@ -273,8 +316,8 @@ export function PatientCard({ group }: { group: PatientGroup }) {
         </div>
 
         {lastUpdated ? (
-          <p className="mt-2 text-[10px] text-zinc-400">
-            Last update <RelativeTime iso={lastUpdated} />
+          <p className="mt-1 text-[9.5px] text-zinc-400">
+            <RelativeTime iso={lastUpdated} />
           </p>
         ) : null}
       </div>

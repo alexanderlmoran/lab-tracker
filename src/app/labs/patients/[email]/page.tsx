@@ -96,25 +96,31 @@ export default async function PatientDetailPage({
   return (
     <div className="min-h-dvh bg-zinc-50">
       <header className="border-b border-zinc-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight text-zinc-900">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-6 py-2.5">
+          <div className="min-w-0">
+            <h1 className="truncate text-[15px] font-semibold leading-tight tracking-tight text-zinc-900">
               {primary.patient_name}
             </h1>
-            <p className="text-xs text-zinc-500">{history.email}</p>
+            <p className="truncate text-[11px] text-zinc-500">{history.email}</p>
           </div>
-          <div className="flex items-center gap-3 text-sm">
+          <div className="flex shrink-0 items-center gap-3 text-sm">
+            <Link
+              href="/labs"
+              className="text-[11.5px] text-zinc-600 underline-offset-2 hover:text-zinc-900 hover:underline"
+            >
+              ← Board
+            </Link>
             <Link
               href="/labs/patients"
-              className="text-xs text-zinc-600 underline-offset-2 hover:text-zinc-900 hover:underline"
+              className="text-[11.5px] text-zinc-600 underline-offset-2 hover:text-zinc-900 hover:underline"
             >
-              ← Patients
+              Patients
             </Link>
-            <span className="text-zinc-600">{user.email}</span>
+            <span className="text-[11.5px] text-zinc-600">{user.email}</span>
             <form action={logoutAction}>
               <button
                 type="submit"
-                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+                className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11.5px] font-medium text-zinc-700 hover:bg-zinc-50"
               >
                 Sign out
               </button>
@@ -123,26 +129,26 @@ export default async function PatientDetailPage({
         </div>
       </header>
 
-      <main className="mx-auto mt-6 grid max-w-7xl gap-6 px-6 pb-16 lg:grid-cols-3">
-        <section className="lg:col-span-2 space-y-6">
-          <div className="rounded-lg border border-zinc-200 bg-white p-4">
-            <h2 className="mb-3 text-sm font-semibold text-zinc-900">
+      <main className="mx-auto mt-4 grid max-w-7xl gap-4 px-6 pb-16 lg:grid-cols-3">
+        <section className="lg:col-span-2 space-y-4">
+          <div className="rounded-lg border border-zinc-200 bg-white p-3">
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
               Contact
             </h2>
-            <dl className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-1.5 text-sm">
-              <dt className="text-xs uppercase tracking-wide text-zinc-500">
+            <dl className="grid grid-cols-[90px_1fr] gap-x-3 gap-y-1 text-[13px]">
+              <dt className="text-[11px] uppercase tracking-wide text-zinc-500">
                 Email
               </dt>
               <dd className="text-zinc-900">{history.email}</dd>
-              <dt className="text-xs uppercase tracking-wide text-zinc-500">
+              <dt className="text-[11px] uppercase tracking-wide text-zinc-500">
                 Phone
               </dt>
               <dd className="text-zinc-900">{primary.patient_phone ?? "—"}</dd>
-              <dt className="text-xs uppercase tracking-wide text-zinc-500">
+              <dt className="text-[11px] uppercase tracking-wide text-zinc-500">
                 DOB
               </dt>
               <dd className="text-zinc-900">{primary.patient_dob ?? "—"}</dd>
-              <dt className="text-xs uppercase tracking-wide text-zinc-500">
+              <dt className="text-[11px] uppercase tracking-wide text-zinc-500">
                 Address
               </dt>
               <dd className="whitespace-pre-wrap text-zinc-900">
@@ -151,43 +157,44 @@ export default async function PatientDetailPage({
             </dl>
           </div>
 
-          <div className="rounded-lg border border-zinc-200 bg-white p-4">
-            <h2 className="mb-3 text-sm font-semibold text-zinc-900">
+          <div className="rounded-lg border border-zinc-200 bg-white p-3">
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
               Cases ({history.cases.length})
             </h2>
-            <div className="space-y-4">
+            <div className="space-y-2.5">
               {groupCasesByCollectionDate(history.cases).map((group) => (
                 <div key={group.date ?? "no-date"}>
-                  <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                  <h3 className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-zinc-500">
                     {formatCollectionDate(group.date)}
                     <span className="ml-2 font-normal normal-case text-zinc-400">
                       {group.rows.length} lab
                       {group.rows.length === 1 ? "" : "s"}
                     </span>
                   </h3>
-                  <ul className="space-y-2">
+                  <ul className="space-y-1">
                     {group.rows.map((c) => {
                       const col = getColumnFor(c);
                       return (
                         <li
                           key={c.id}
-                          className="flex items-center justify-between rounded-md border border-zinc-200 px-3 py-2"
+                          className="flex items-center justify-between gap-2 rounded-md border border-zinc-200 px-2 py-1"
                         >
-                          <div className="min-w-0">
+                          <div className="min-w-0 flex-1">
                             <Link
                               href={`/labs/${c.id}`}
-                              className="text-sm font-medium text-zinc-900 hover:underline"
+                              className="block truncate text-[12.5px] font-medium text-zinc-900 hover:underline"
                             >
                               {c.lab_name}
                               {c.lab_panel ? ` · ${c.lab_panel}` : ""}
                             </Link>
-                            <p className="mt-0.5 truncate text-xs text-zinc-500">
-                              {c.tracking_number ? `Tracking: ${c.tracking_number} · ` : ""}
-                              Created {formatDateTime(c.created_at)}
-                            </p>
+                            {c.tracking_number ? (
+                              <p className="truncate text-[10.5px] text-zinc-500">
+                                TRK {c.tracking_number}
+                              </p>
+                            ) : null}
                           </div>
-                          <div className="flex items-center gap-2">
-                            <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-700">
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[9.5px] font-medium uppercase tracking-wide text-zinc-700">
                               {COLUMN_LABEL[col]}
                             </span>
                             <StatusPill
@@ -204,8 +211,8 @@ export default async function PatientDetailPage({
             </div>
           </div>
 
-          <div className="rounded-lg border border-zinc-200 bg-white p-4">
-            <h2 className="mb-3 text-sm font-semibold text-zinc-900">
+          <div className="rounded-lg border border-zinc-200 bg-white p-3">
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
               Email history ({history.emailLogs.length})
             </h2>
             {history.emailLogs.length === 0 ? (
@@ -256,8 +263,8 @@ export default async function PatientDetailPage({
           </div>
         </section>
 
-        <aside className="rounded-lg border border-zinc-200 bg-white p-4">
-          <h2 className="mb-3 text-sm font-semibold text-zinc-900">
+        <aside className="rounded-lg border border-zinc-200 bg-white p-3">
+          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
             Activity timeline
           </h2>
           {history.events.length === 0 ? (

@@ -46,8 +46,8 @@ export default async function LabsPage({
     <div className="flex min-h-dvh flex-col bg-zinc-50 lg:h-dvh lg:overflow-hidden">
       <HudPulse user={user} cases={cases} />
 
-      <main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col px-4 pb-16 pt-6 lg:min-h-0 lg:pb-6">
-        <div className="mb-4 flex flex-wrap items-center gap-3">
+      <main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col px-4 pb-16 pt-3 lg:min-h-0 lg:pb-4">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
           <div className="text-xs text-zinc-500">
             {hasFilters
               ? `${cases.length} matching ${cases.length === 1 ? "case" : "cases"}`

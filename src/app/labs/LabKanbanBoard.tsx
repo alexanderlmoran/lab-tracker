@@ -9,10 +9,12 @@ import {
   COLUMN_ORDER,
   type ColumnKey,
   completedStepCount,
+  expectedCountdown,
   getCaseStaleness,
   getColumnFor,
   stepIsComplete,
 } from "@/lib/columns";
+import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { CaseDetail } from "./CaseDetail";
 
 function formatExpectedRange(min: string | null, max: string | null): string | null {
@@ -81,6 +83,13 @@ function LabCard({
   );
   const stale = getCaseStaleness(row);
   const probablyReady = isProbablyReady(row);
+  const countdown = expectedCountdown(row);
+  const destWarning = trackingDestinationWarning({
+    labName: row.lab_name,
+    labPanel: row.lab_panel,
+    trackingStatus: row.tracking_status,
+    trackingLocation: row.tracking_location,
+  });
   const labLabel = row.lab_panel
     ? `${row.lab_name} · ${row.lab_panel}`
     : row.lab_name;
@@ -89,32 +98,55 @@ function LabCard({
     <button
       type="button"
       onClick={() => onOpen(row)}
-      className={`flex w-full flex-col gap-1.5 rounded-md border bg-white p-2.5 text-left shadow-sm transition-shadow hover:shadow ${
+      className={`flex w-full flex-col gap-0.5 rounded-md border bg-white p-1.5 text-left shadow-sm transition-shadow hover:shadow ${
         probablyReady ? "border-purple-300 bg-purple-50" : "border-zinc-200"
       }`}
     >
-      <div>
-        <p className="break-words text-[12px] font-medium leading-tight text-zinc-900">
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="min-w-0 flex-1 truncate text-[12px] font-medium leading-tight text-zinc-900">
           {labLabel}
         </p>
-        <p className="mt-0.5 truncate text-[11px] text-zinc-500">
-          {row.patient_name}
-        </p>
+        <span className="shrink-0 text-[10px] tabular-nums text-zinc-500">{done}/9</span>
       </div>
-
-      {probablyReady ? (
-        <p className="text-[10px] font-medium uppercase tracking-wide text-purple-700">
-          ↻ Likely ready — check lab portal
-        </p>
-      ) : null}
+      <p className="truncate text-[11px] text-zinc-500">{row.patient_name}</p>
 
       <div className="flex items-center justify-between gap-2">
         <ProgressDots row={row} />
-        <span className="text-[10px] tabular-nums text-zinc-500">{done}/9</span>
-      </div>
-
-      {(row.tracking_status || row.tracking_number || expected || stale.stale) ? (
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-zinc-500">
+        <div className="flex items-center gap-1">
+          {countdown ? (
+            <span
+              title={
+                countdown.tone === "overdue"
+                  ? `Expected by ${row.expected_result_at_max} — past`
+                  : `Expected by ${row.expected_result_at_max}`
+              }
+              className={`rounded px-1 py-0.5 text-[9px] font-medium tabular-nums tracking-wide ${
+                countdown.tone === "overdue"
+                  ? "bg-rose-100 text-rose-700"
+                  : countdown.tone === "due"
+                    ? "bg-amber-100 text-amber-800"
+                    : "bg-zinc-100 text-zinc-600"
+              }`}
+            >
+              {countdown.label}
+            </span>
+          ) : null}
+          {destWarning ? (
+            <span
+              title={destWarning}
+              className="rounded bg-orange-100 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-orange-800"
+            >
+              wrong city?
+            </span>
+          ) : null}
+          {probablyReady ? (
+            <span
+              title="Likely ready — check lab portal"
+              className="rounded bg-purple-100 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-purple-700"
+            >
+              ready?
+            </span>
+          ) : null}
           {row.tracking_status ? (
             <span
               className={`rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
@@ -126,13 +158,18 @@ function LabCard({
               {TRACKING_BADGE[row.tracking_status]?.label ?? row.tracking_status}
             </span>
           ) : null}
-          {row.tracking_number ? <span>TRK {row.tracking_number}</span> : null}
-          {expected ? <span>↳ {expected}</span> : null}
           {stale.stale ? (
             <span className="rounded bg-amber-100 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-800">
               {stale.daysSinceProgress}d
             </span>
           ) : null}
+        </div>
+      </div>
+
+      {(row.tracking_number || expected) ? (
+        <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-zinc-400">
+          {expected ? <span>↳ {expected}</span> : null}
+          {row.tracking_number ? <span className="truncate">TRK {row.tracking_number}</span> : null}
         </div>
       ) : null}
     </button>
@@ -150,14 +187,14 @@ function StaticColumn({
 }) {
   return (
     <section
-      className="kanban-col flex flex-col p-2 lg:min-h-0"
+      className="kanban-col flex flex-col p-1.5 lg:min-h-0"
       data-col={col}
     >
-      <header className="flex items-center justify-between px-2 py-1.5">
+      <header className="flex items-center justify-between px-1.5 py-1">
         <h3 className="col-head-title">{COLUMN_LABEL[col]}</h3>
         <span className="col-head-count">{count}</span>
       </header>
-      <div className="flex min-h-[40px] flex-col gap-2 p-1 lg:flex-1 lg:overflow-y-auto">
+      <div className="flex min-h-[40px] flex-col gap-1.5 p-0.5 lg:flex-1 lg:overflow-y-auto">
         {children}
       </div>
     </section>
@@ -283,7 +320,7 @@ export function LabKanbanBoard({ rows }: { rows: LabCase[] }) {
         filtered={filtered.length}
       />
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3 lg:grid-cols-7 lg:flex-1 lg:min-h-0">
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-3 lg:grid-cols-7 lg:flex-1 lg:min-h-0">
         {COLUMN_ORDER.map((col) => {
           const colRows = grouped[col];
           return (

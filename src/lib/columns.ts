@@ -167,6 +167,36 @@ export type CaseStaleness = {
   daysSinceProgress: number;
 };
 
+/** Days from local-today to an ISO date (YYYY-MM-DD). Negative = past. */
+export function daysFromTodayIso(iso: string): number {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(iso + "T00:00:00");
+  if (Number.isNaN(target.getTime())) return 0;
+  return Math.round((target.getTime() - today.getTime()) / 86_400_000);
+}
+
+export type ExpectedCountdown = {
+  label: string;
+  tone: "ok" | "due" | "overdue";
+  days: number;
+};
+
+/**
+ * "How long until / since the expected result date." Returns null when the
+ * case already has complete results in (step 4), or when there's no expected
+ * date on file. Tones drive card badge colors.
+ */
+export function expectedCountdown(c: LabCase): ExpectedCountdown | null {
+  if (c.step4_complete_received) return null;
+  if (!c.expected_result_at_max) return null;
+  const d = daysFromTodayIso(c.expected_result_at_max);
+  if (d < 0) return { label: `overdue ${Math.abs(d)}d`, tone: "overdue", days: d };
+  if (d === 0) return { label: "due today", tone: "due", days: 0 };
+  if (d <= 2) return { label: `in ${d}d`, tone: "due", days: d };
+  return { label: `in ${d}d`, tone: "ok", days: d };
+}
+
 /** Cases not yet fully closed and idle (`updated_at` is older than threshold)
  * are flagged stale. updated_at advances on any case mutation, so it's a
  * good proxy for "last progress." */

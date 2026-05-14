@@ -98,7 +98,6 @@ export function HudPulse({ user, cases }: HudPulseProps) {
           <div className="brand-mark">L</div>
           <div className="brand-meta">
             <span className="brand-name">Lab Tracker</span>
-            <span className="brand-sub">Operations</span>
           </div>
         </div>
 

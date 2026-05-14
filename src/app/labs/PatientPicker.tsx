@@ -26,6 +26,10 @@ export function PatientPicker({ initial }: { initial?: LabCase | null }) {
   const [email, setEmail] = useState(v?.patient_email ?? "");
   const [phone, setPhone] = useState(v?.patient_phone ?? "");
   const [dob, setDob] = useState(v?.patient_dob ?? "");
+  /** Becomes true after the user picks a suggestion, so we can show a
+   * "loaded from prior visit" cue. Cleared as soon as they edit the email
+   * field manually (signals they're typing a different patient). */
+  const [prefilled, setPrefilled] = useState(false);
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<PatientSuggestion[]>([]);
@@ -69,6 +73,7 @@ export function PatientPicker({ initial }: { initial?: LabCase | null }) {
     if (s.email) setEmail(s.email);
     setPhone(s.phone ?? "");
     setDob(s.dobIso ?? "");
+    setPrefilled(true);
     setOpen(false);
     setActiveIdx(-1);
     setQuery("");
@@ -79,6 +84,9 @@ export function PatientPicker({ initial }: { initial?: LabCase | null }) {
     setQuery(next);
     setOpen(true);
     setActiveIdx(-1);
+    // Editing the name after a prefill almost always means a different
+    // patient — drop the "loaded from prior visit" cue.
+    if (prefilled) setPrefilled(false);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -160,6 +168,26 @@ export function PatientPicker({ initial }: { initial?: LabCase | null }) {
       <div className="sm:col-span-2">
         <label htmlFor="patientEmail" className={labelClass}>
           Email <span className="text-red-600">*</span>
+          {prefilled ? (
+            <span
+              className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800"
+              title={
+                "Loaded from prior visit — phone" +
+                (dob ? " and DOB" : "") +
+                " carried over silently."
+              }
+            >
+              ✓ prior visit
+              {phone || dob ? (
+                <span className="ml-1 font-normal text-emerald-700">
+                  ({[phone ? "phone" : null, dob ? "DOB" : null]
+                    .filter(Boolean)
+                    .join(" + ")}{" "}
+                  on file)
+                </span>
+              ) : null}
+            </span>
+          ) : null}
         </label>
         <input
           id="patientEmail"
@@ -168,7 +196,10 @@ export function PatientPicker({ initial }: { initial?: LabCase | null }) {
           required
           maxLength={200}
           value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          onChange={(e) => {
+            setEmail(e.target.value);
+            if (prefilled) setPrefilled(false);
+          }}
           className={inputClass}
         />
       </div>

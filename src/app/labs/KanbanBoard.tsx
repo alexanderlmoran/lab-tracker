@@ -24,14 +24,14 @@ function StaticColumn({
 }) {
   return (
     <section
-      className="kanban-col flex flex-col p-2 lg:min-h-0"
+      className="kanban-col flex flex-col p-1.5 lg:min-h-0"
       data-col={col}
     >
-      <header className="flex items-center justify-between px-2 py-1.5">
+      <header className="flex items-center justify-between px-1.5 py-1">
         <h3 className="col-head-title">{COLUMN_LABEL[col]}</h3>
         <span className="col-head-count">{count}</span>
       </header>
-      <div className="flex min-h-[40px] flex-col gap-2 p-1 lg:flex-1 lg:overflow-y-auto">
+      <div className="flex min-h-[40px] flex-col gap-1.5 p-0.5 lg:flex-1 lg:overflow-y-auto">
         {children}
       </div>
     </section>
@@ -199,7 +199,7 @@ export function KanbanBoard({ rows }: { rows: LabCase[] }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3 lg:grid-cols-7 lg:flex-1 lg:min-h-0">
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-3 lg:grid-cols-7 lg:flex-1 lg:min-h-0">
         {COLUMN_ORDER.map((col) => {
           const colGroups = grouped[col];
           return (

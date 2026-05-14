@@ -10,6 +10,7 @@ import { LabPortalLinks } from "./LabPortalLinks";
 import { RefreshLabStatusButton } from "./RefreshLabStatusButton";
 import { RefreshTrackingButton } from "./RefreshTrackingButton";
 import { markCaseClosed } from "./actions";
+import { getLabDestination, trackingDestinationWarning } from "@/lib/labs/catalog";
 // PracticeBetter integration removed 2026-05-12 — was abandoned 2026-05-11
 // per the project memo. Staff now upload results to PB manually if needed.
 
@@ -78,6 +79,13 @@ function Field({
 export function CaseDetail({ row }: { row: LabCase }) {
   const currentCol = getColumnFor(row);
   const done = completedStepCount(row);
+  const destination = getLabDestination(row.lab_name, row.lab_panel);
+  const destWarning = trackingDestinationWarning({
+    labName: row.lab_name,
+    labPanel: row.lab_panel,
+    trackingStatus: row.tracking_status,
+    trackingLocation: row.tracking_location,
+  });
 
   return (
     <div className="flex flex-col gap-6">
@@ -118,6 +126,22 @@ export function CaseDetail({ row }: { row: LabCase }) {
             </span>
             <LabPortalLinks labName={row.lab_name} />
           </div>
+          <Field
+            label="Ships to"
+            value={
+              destination
+                ? `${destination.city}${destination.state ? `, ${destination.state}` : ""}`
+                : null
+            }
+          />
+          {destWarning ? (
+            <div className="flex items-start gap-2 py-1">
+              <span className="w-24 shrink-0 text-xs uppercase tracking-wide text-zinc-500" />
+              <p className="rounded-md border border-orange-200 bg-orange-50 px-2 py-1 text-[11px] text-orange-800">
+                ⚠ {destWarning}
+              </p>
+            </div>
+          ) : null}
           <Field label="Collected" value={row.collection_date} />
           <Field label="Tracking" value={row.tracking_number} />
           {row.tracking_number ? (

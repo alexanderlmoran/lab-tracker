@@ -31,6 +31,13 @@ export type LabCatalogEntry = {
   partialExpected?: boolean;
   /** Spelling variants matched by normalizeLabKey() — case/whitespace/punctuation insensitive. */
   aliases?: string[];
+  /** Expected FedEx destination city for delivery-verification. Compared
+   * (case-insensitive, substring) against `tracking_location` on cases that
+   * report `delivered`. When set and mismatched, the card raises a "wrong
+   * destination?" soft warning. Leave undefined to disable the check. */
+  shippingCity?: string;
+  /** Two-letter US state code paired with shippingCity. Display-only. */
+  shippingState?: string;
 };
 
 export const LAB_CATALOG: LabCatalogEntry[] = [
@@ -189,6 +196,66 @@ const ALIAS_INDEX: Map<string, LabCatalogEntry> = (() => {
 export function findLabByName(raw: string): LabCatalogEntry | null {
   if (!raw) return null;
   return ALIAS_INDEX.get(normalizeLabKey(raw)) ?? null;
+}
+
+/**
+ * Lab destination ("ships to") lookup. Returns the catalog's stored city +
+ * state if known; null otherwise. Provider-level fallback: if a sub-panel
+ * entry has no address but another entry under the same provider does, use
+ * that — addresses don't differ per-panel at a single lab.
+ */
+export function getLabDestination(
+  labName: string,
+  labPanel?: string | null,
+): { city: string; state: string } | null {
+  const direct = labPanel
+    ? findLabByName(`${labName} ${labPanel}`) ?? findLabByName(labName)
+    : findLabByName(labName);
+  if (direct?.shippingCity) {
+    return {
+      city: direct.shippingCity,
+      state: direct.shippingState ?? "",
+    };
+  }
+  // Provider-level fallback: any sibling under the same provider with an
+  // address counts. Avoids requiring duplicated city/state per panel row.
+  const sibling = LAB_CATALOG.find(
+    (e) =>
+      e.provider === (direct?.provider ?? labName) && e.shippingCity,
+  );
+  if (sibling?.shippingCity) {
+    return {
+      city: sibling.shippingCity,
+      state: sibling.shippingState ?? "",
+    };
+  }
+  return null;
+}
+
+/**
+ * "Does this delivered tracking location match where the lab actually lives?"
+ * Returns null when we can't tell (no expected city on file, no FedEx
+ * location reported, or status isn't delivered). Returns a warning string
+ * when we have both pieces and they don't agree.
+ *
+ * Match is intentionally loose — FedEx returns location strings like
+ * "MEMPHIS TN" or "WEST PALM BEACH FL"; we just substring-check the expected
+ * city against the location, case-insensitively.
+ */
+export function trackingDestinationWarning(args: {
+  labName: string;
+  labPanel: string | null;
+  trackingStatus: string | null;
+  trackingLocation: string | null;
+}): string | null {
+  if (args.trackingStatus !== "delivered") return null;
+  if (!args.trackingLocation) return null;
+  const dest = getLabDestination(args.labName, args.labPanel);
+  if (!dest) return null;
+  const loc = args.trackingLocation.toLowerCase();
+  const city = dest.city.toLowerCase();
+  if (loc.includes(city)) return null;
+  return `Delivered to "${args.trackingLocation}" but ${args.labName} is in ${dest.city}${dest.state ? `, ${dest.state}` : ""}`;
 }
 
 /**
