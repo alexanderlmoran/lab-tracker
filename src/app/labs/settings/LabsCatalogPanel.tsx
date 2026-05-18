@@ -8,21 +8,39 @@ import {
   type LabsCatalogRow,
 } from "./actions";
 
+type SortKey = "name" | "provider" | "panel" | "turnaround" | "partial";
+type SortDir = "asc" | "desc";
+
 export function LabsCatalogPanel({ labs }: { labs: LabsCatalogRow[] }) {
   const [filter, setFilter] = useState("");
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<LabsCatalogRow | "new" | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey>("name");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
+
+  function toggleSort(key: SortKey) {
+    if (key === sortKey) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      // Sensible default direction per column: turnaround/partial default
+      // desc (most-urgent / partial-yes first); text columns default asc.
+      setSortDir(key === "turnaround" || key === "partial" ? "desc" : "asc");
+    }
+  }
 
   const filtered = useMemo(() => {
     const f = filter.trim().toLowerCase();
-    if (!f) return labs;
-    return labs.filter((l) =>
-      [l.name, l.provider, l.panel ?? ""].some((s) =>
-        s.toLowerCase().includes(f),
-      ),
-    );
-  }, [labs, filter]);
+    const base = !f
+      ? labs.slice()
+      : labs.filter((l) =>
+          [l.name, l.provider, l.panel ?? ""].some((s) =>
+            s.toLowerCase().includes(f),
+          ),
+        );
+    return sortLabs(base, sortKey, sortDir);
+  }, [labs, filter, sortKey, sortDir]);
 
   return (
     <div className="space-y-4 rounded-lg border border-zinc-200 bg-white p-6">
@@ -74,11 +92,41 @@ export function LabsCatalogPanel({ labs }: { labs: LabsCatalogRow[] }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-[11px] uppercase tracking-wide text-zinc-500">
-              <th className="px-2 py-2">Lab</th>
-              <th className="px-2 py-2">Provider</th>
-              <th className="px-2 py-2">Panel</th>
-              <th className="px-2 py-2">Turnaround</th>
-              <th className="px-2 py-2">Partial?</th>
+              <SortHeader
+                label="Lab"
+                column="name"
+                sortKey={sortKey}
+                sortDir={sortDir}
+                onClick={toggleSort}
+              />
+              <SortHeader
+                label="Provider"
+                column="provider"
+                sortKey={sortKey}
+                sortDir={sortDir}
+                onClick={toggleSort}
+              />
+              <SortHeader
+                label="Panel"
+                column="panel"
+                sortKey={sortKey}
+                sortDir={sortDir}
+                onClick={toggleSort}
+              />
+              <SortHeader
+                label="Turnaround"
+                column="turnaround"
+                sortKey={sortKey}
+                sortDir={sortDir}
+                onClick={toggleSort}
+              />
+              <SortHeader
+                label="Partial?"
+                column="partial"
+                sortKey={sortKey}
+                sortDir={sortDir}
+                onClick={toggleSort}
+              />
               <th className="px-2 py-2 text-right">Actions</th>
             </tr>
           </thead>
@@ -145,6 +193,90 @@ export function LabsCatalogPanel({ labs }: { labs: LabsCatalogRow[] }) {
       ) : null}
     </div>
   );
+}
+
+function SortHeader({
+  label,
+  column,
+  sortKey,
+  sortDir,
+  onClick,
+}: {
+  label: string;
+  column: SortKey;
+  sortKey: SortKey;
+  sortDir: SortDir;
+  onClick: (k: SortKey) => void;
+}) {
+  const active = sortKey === column;
+  const arrow = active ? (sortDir === "asc" ? "▲" : "▼") : "↕";
+  return (
+    <th className="px-2 py-2">
+      <button
+        type="button"
+        onClick={() => onClick(column)}
+        className={`-mx-1 inline-flex items-center gap-1 rounded px-1 py-0.5 text-[11px] uppercase tracking-wide hover:bg-zinc-100 ${
+          active ? "text-zinc-900" : "text-zinc-500"
+        }`}
+        aria-label={`Sort by ${label}${
+          active ? ` (${sortDir === "asc" ? "ascending" : "descending"})` : ""
+        }`}
+      >
+        <span>{label}</span>
+        <span
+          aria-hidden="true"
+          className={`text-[9px] ${active ? "text-zinc-700" : "text-zinc-300"}`}
+        >
+          {arrow}
+        </span>
+      </button>
+    </th>
+  );
+}
+
+function turnaroundLeast(row: LabsCatalogRow): number {
+  // "By least" = lowest known turnaround first. Use min when present, else
+  // max, else Infinity so rows with no turnaround sink to the bottom.
+  if (row.turnaround_days_min != null) return row.turnaround_days_min;
+  if (row.turnaround_days_max != null) return row.turnaround_days_max;
+  return Number.POSITIVE_INFINITY;
+}
+
+function sortLabs(
+  rows: LabsCatalogRow[],
+  key: SortKey,
+  dir: SortDir,
+): LabsCatalogRow[] {
+  const mult = dir === "asc" ? 1 : -1;
+  const out = rows.slice();
+  out.sort((a, b) => {
+    let cmp = 0;
+    switch (key) {
+      case "name":
+        cmp = a.name.localeCompare(b.name);
+        break;
+      case "provider":
+        cmp = a.provider.localeCompare(b.provider) ||
+          a.name.localeCompare(b.name);
+        break;
+      case "panel":
+        cmp = (a.panel ?? "").localeCompare(b.panel ?? "") ||
+          a.name.localeCompare(b.name);
+        break;
+      case "turnaround":
+        cmp = turnaroundLeast(a) - turnaroundLeast(b) ||
+          a.name.localeCompare(b.name);
+        break;
+      case "partial":
+        cmp =
+          Number(Boolean(a.partial_expected)) -
+            Number(Boolean(b.partial_expected)) ||
+          a.name.localeCompare(b.name);
+        break;
+    }
+    return cmp * mult;
+  });
+  return out;
 }
 
 function formatTurnaround(min: number | null, max: number | null): string {

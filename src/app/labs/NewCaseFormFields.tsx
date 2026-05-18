@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useState } from "react";
 import type { LabCatalogEntry } from "@/lib/labs/catalog";
-import { LAB_CATALOG, findLabByName } from "@/lib/labs/catalog";
+import { LAB_CATALOG, PEPTIDES_OFFERED, findLabByName } from "@/lib/labs/catalog";
 import { PatientPicker } from "./PatientPicker";
 import { BarcodeScanner } from "./BarcodeScanner";
 import { normalizeScannedTracking } from "@/lib/tracking/normalize";
@@ -17,6 +17,9 @@ type LabRowState = {
    * just a bare provider name. The submit-time helper splits this into
    * labName + labPanel for the server action. */
   display: string;
+  /** Only used when display resolves to "Peptides"; rides into labPanel on
+   * submit so the peptide name appears in patient-facing emails. */
+  peptide: string;
   collectionDate: string;
   trackingNumber: string;
   pickupConfirmation: string;
@@ -35,11 +38,17 @@ export type LabRowPayload = {
 function emptyRow(): LabRowState {
   return {
     display: "",
+    peptide: "",
     collectionDate: "",
     trackingNumber: "",
     pickupConfirmation: "",
     partialExpected: false,
   };
+}
+
+function isPeptidesRow(display: string): boolean {
+  const match = findLabByName(display.trim());
+  return match?.provider === "Peptides";
 }
 
 function rowToPayload(row: LabRowState): LabRowPayload {
@@ -50,6 +59,12 @@ function rowToPayload(row: LabRowState): LabRowPayload {
   if (match) {
     labName = match.provider;
     labPanel = match.panel ?? null;
+  }
+  // Peptides rows: the peptide-name input rides on lab_panel so it appears
+  // verbatim in patient-facing emails ("Peptides — BPC-157").
+  if (match?.provider === "Peptides") {
+    const peptide = row.peptide.trim();
+    if (peptide) labPanel = peptide;
   }
   return {
     labName,
@@ -99,9 +114,15 @@ export function NewCaseFormFields() {
   }, []);
 
   const datalistOptions = useMemo(
-    () => effective.filter((e) => !e.retired).map((e) => e.name),
+    () =>
+      effective
+        .filter((e) => !e.retired)
+        .map((e) => e.name)
+        .sort((a, b) => a.localeCompare(b)),
     [effective],
   );
+
+  const peptidesDatalistId = `${datalistId}-peptides`;
 
   function updateRow(i: number, patch: Partial<LabRowState>) {
     setRows((prev) => {
@@ -162,6 +183,11 @@ export function NewCaseFormFields() {
             <option key={name} value={name} />
           ))}
         </datalist>
+        <datalist id={peptidesDatalistId}>
+          {PEPTIDES_OFFERED.map((p) => (
+            <option key={p} value={p} />
+          ))}
+        </datalist>
 
         <div className="space-y-3">
           {rows.map((row, i) => (
@@ -202,6 +228,29 @@ export function NewCaseFormFields() {
                     className={`${inputClass} mt-1`}
                   />
                 </div>
+
+                {isPeptidesRow(row.display) ? (
+                  <div className="sm:col-span-2">
+                    <label className={labelClass}>
+                      Peptide
+                      <span className="text-red-600"> *</span>
+                      <span className="ml-2 text-[10px] font-normal text-zinc-400">
+                        appears in patient emails — pick or type custom
+                      </span>
+                    </label>
+                    <input
+                      type="text"
+                      list={peptidesDatalistId}
+                      value={row.peptide}
+                      onChange={(e) =>
+                        updateRow(i, { peptide: e.target.value })
+                      }
+                      placeholder="e.g. BPC-157"
+                      maxLength={120}
+                      className={`${inputClass} mt-1`}
+                    />
+                  </div>
+                ) : null}
 
                 <div>
                   <label className={labelClass}>Collection date</label>

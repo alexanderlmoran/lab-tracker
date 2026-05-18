@@ -164,6 +164,33 @@ export const LAB_CATALOG: LabCatalogEntry[] = [
 ];
 
 /**
+ * Currently-offered peptides. Surfaced as a dropdown when the user selects
+ * "Peptides" as the lab in the new-case form; the chosen value lands in
+ * lab_panel so it flows into patient-facing emails verbatim. Edit this list
+ * (or override per-row by typing free text — the input is a datalist, not a
+ * strict select) when offerings change.
+ */
+export const PEPTIDES_OFFERED: string[] = [
+  "BPC-157",
+  "TB-500 (Thymosin Beta-4)",
+  "CJC-1295",
+  "Ipamorelin",
+  "CJC-1295 / Ipamorelin",
+  "Sermorelin",
+  "Tesamorelin",
+  "Semaglutide",
+  "Tirzepatide",
+  "GHK-Cu (Copper Peptide)",
+  "MOTS-c",
+  "Epitalon",
+  "NAD+",
+  "Selank",
+  "Semax",
+  "DSIP",
+  "PT-141",
+];
+
+/**
  * Normalize a lab key for alias matching: lowercase, collapse whitespace,
  * strip surrounding/internal punctuation noise. Used for both source-string
  * lookup and alias storage.

@@ -107,7 +107,10 @@ export function LabCombobox({
 
   const matches = useMemo<LabCatalogEntry[]>(() => {
     const q = display.trim().toLowerCase();
-    const pool = effective.filter((e) => !e.retired);
+    const pool = effective
+      .filter((e) => !e.retired)
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name));
     if (!q) return pool.slice(0, 30);
     const scored: { entry: LabCatalogEntry; score: number }[] = [];
     for (const e of pool) {
