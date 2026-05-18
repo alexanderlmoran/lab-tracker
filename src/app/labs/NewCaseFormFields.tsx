@@ -4,6 +4,8 @@ import { useEffect, useId, useMemo, useState } from "react";
 import type { LabCatalogEntry } from "@/lib/labs/catalog";
 import { LAB_CATALOG, findLabByName } from "@/lib/labs/catalog";
 import { PatientPicker } from "./PatientPicker";
+import { BarcodeScanner } from "./BarcodeScanner";
+import { normalizeScannedTracking } from "@/lib/tracking/normalize";
 import { listEffectiveLabsForPicker } from "./actions";
 
 const inputClass =
@@ -69,6 +71,7 @@ function rowToPayload(row: LabRowState): LabRowPayload {
 export function NewCaseFormFields() {
   const [rows, setRows] = useState<LabRowState[]>([emptyRow()]);
   const [effective, setEffective] = useState<LabCatalogEntry[]>(LAB_CATALOG);
+  const [scannerOpenIdx, setScannerOpenIdx] = useState<number | null>(null);
   const datalistId = useId();
 
   // DB-backed catalog. Same source as the single-lab combobox so the two
@@ -214,15 +217,37 @@ export function NewCaseFormFields() {
 
                 <div>
                   <label className={labelClass}>Tracking #</label>
-                  <input
-                    type="text"
-                    value={row.trackingNumber}
-                    onChange={(e) =>
-                      updateRow(i, { trackingNumber: e.target.value })
-                    }
-                    maxLength={100}
-                    className={`${inputClass} mt-1`}
-                  />
+                  <div className="mt-1 flex gap-2">
+                    <input
+                      type="text"
+                      value={row.trackingNumber}
+                      onChange={(e) =>
+                        updateRow(i, { trackingNumber: e.target.value })
+                      }
+                      maxLength={100}
+                      className={`${inputClass} flex-1`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setScannerOpenIdx(i)}
+                      title="Scan barcode"
+                      aria-label="Scan barcode"
+                      className="shrink-0 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50"
+                    >
+                      Scan
+                    </button>
+                  </div>
+                  {scannerOpenIdx === i ? (
+                    <BarcodeScanner
+                      onClose={() => setScannerOpenIdx(null)}
+                      onDetect={(code) => {
+                        updateRow(i, {
+                          trackingNumber: normalizeScannedTracking(code),
+                        });
+                        setScannerOpenIdx(null);
+                      }}
+                    />
+                  ) : null}
                 </div>
 
                 <div>
