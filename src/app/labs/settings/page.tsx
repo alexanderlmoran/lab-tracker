@@ -5,6 +5,7 @@ import {
   listAppUsers,
   listCustomTemplateSuggestions,
   listEmailTemplates,
+  listKnownEmailAddresses,
   listLabPortals,
   listLabsCatalog,
 } from "./actions";
@@ -49,6 +50,7 @@ export default async function SettingsPage({
     labs,
     emailTemplates,
     emailSuggestions,
+    knownEmails,
     archivedCases,
     deletedCases,
     portals,
@@ -58,6 +60,7 @@ export default async function SettingsPage({
     wantsLabs ? listLabsCatalog() : Promise.resolve(null),
     wantsEmails ? listEmailTemplates() : Promise.resolve(null),
     wantsEmails ? listCustomTemplateSuggestions() : Promise.resolve(null),
+    wantsEmails ? listKnownEmailAddresses() : Promise.resolve(null),
     wantsArchived
       ? listLabCases({ view: "archived" })
       : Promise.resolve(null),
@@ -111,6 +114,7 @@ export default async function SettingsPage({
               templates={emailTemplates}
               currentUser={user}
               suggestions={emailSuggestions ?? []}
+              knownEmails={knownEmails ?? []}
             />
           </Section>
         ) : null}

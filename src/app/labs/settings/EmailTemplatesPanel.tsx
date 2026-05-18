@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useId, useMemo, useState, useTransition } from "react";
 import type { SessionUser } from "@/lib/auth-guard";
 import { LAB_CATALOG } from "@/lib/labs/catalog";
 import {
@@ -41,10 +41,12 @@ export function EmailTemplatesPanel({
   templates,
   currentUser,
   suggestions,
+  knownEmails,
 }: {
   templates: EmailTemplateRow[];
   currentUser: SessionUser;
   suggestions: CustomTemplateSuggestion[];
+  knownEmails: string[];
 }) {
   const patient = templates.filter(
     (t) => t.group === "patient" && t.triggerLabName == null,
@@ -53,20 +55,28 @@ export function EmailTemplatesPanel({
   const custom = templates.filter((t) => t.triggerLabName != null);
 
   const [showCreate, setShowCreate] = useState(false);
+  const emailsDatalistId = useId();
 
   return (
     <div className="space-y-6">
+      <datalist id={emailsDatalistId}>
+        {knownEmails.map((e) => (
+          <option key={e} value={e} />
+        ))}
+      </datalist>
       <TemplateGroup
         heading="Patient emails"
         description="The 4 emails patients receive as their case moves through the pipeline. Toggle In use to suppress sends without losing the template."
         templates={patient}
         currentUser={currentUser}
+        emailsDatalistId={emailsDatalistId}
       />
       <TemplateGroup
         heading="Staff emails"
         description="Sent to staff accounts on invite and password-reset. The {magicLink} placeholder is required — leave it in, or the recipient has no way to sign in."
         templates={staff}
         currentUser={currentUser}
+        emailsDatalistId={emailsDatalistId}
       />
 
       <div className="space-y-3">
@@ -101,6 +111,7 @@ export function EmailTemplatesPanel({
                 key={t.id ?? t.kind}
                 template={t}
                 currentUser={currentUser}
+                emailsDatalistId={emailsDatalistId}
               />
             ))}
           </div>
@@ -110,6 +121,7 @@ export function EmailTemplatesPanel({
       {showCreate ? (
         <CreateCustomDialog
           suggestions={suggestions}
+          emailsDatalistId={emailsDatalistId}
           onClose={() => setShowCreate(false)}
         />
       ) : null}
@@ -122,11 +134,13 @@ function TemplateGroup({
   description,
   templates,
   currentUser,
+  emailsDatalistId,
 }: {
   heading: string;
   description: string;
   templates: EmailTemplateRow[];
   currentUser: SessionUser;
+  emailsDatalistId: string;
 }) {
   if (templates.length === 0) return null;
   return (
@@ -141,6 +155,7 @@ function TemplateGroup({
             key={t.id ?? t.kind}
             template={t}
             currentUser={currentUser}
+            emailsDatalistId={emailsDatalistId}
           />
         ))}
       </div>
@@ -151,9 +166,11 @@ function TemplateGroup({
 function TemplateCard({
   template,
   currentUser,
+  emailsDatalistId,
 }: {
   template: EmailTemplateRow;
   currentUser: SessionUser;
+  emailsDatalistId: string;
 }) {
   const isCustom = template.id != null && template.triggerLabName != null;
   const [open, setOpen] = useState(false);
@@ -429,11 +446,10 @@ function TemplateCard({
                 Patients see each paragraph as a separate block in the email. Blank line = new paragraph.
               </p>
             </div>
-            <Field
-              label="BCC recipients (comma-separated)"
+            <BccField
               value={bcc}
               onChange={setBcc}
-              hint="Internal staff who silently get a copy of every send of this kind. The patient never sees this list."
+              emailsDatalistId={emailsDatalistId}
             />
           </div>
 
@@ -450,6 +466,7 @@ function TemplateCard({
             <div className="flex flex-1 items-center gap-2">
               <input
                 type="email"
+                list={emailsDatalistId}
                 value={testTo}
                 onChange={(e) => setTestTo(e.target.value)}
                 placeholder="Test recipient email"
@@ -482,9 +499,11 @@ function TemplateCard({
 
 function CreateCustomDialog({
   suggestions,
+  emailsDatalistId,
   onClose,
 }: {
   suggestions: CustomTemplateSuggestion[];
+  emailsDatalistId: string;
   onClose: () => void;
 }) {
   const labOptions = useMemo(
@@ -651,17 +670,11 @@ function CreateCustomDialog({
           />
         </label>
 
-        <label className="block">
-          <span className="text-xs font-medium text-zinc-700">
-            BCC (comma-separated)
-          </span>
-          <input
-            type="text"
-            value={bcc}
-            onChange={(e) => markTouched(setBcc)(e.target.value)}
-            className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900"
-          />
-        </label>
+        <BccField
+          value={bcc}
+          onChange={markTouched(setBcc)}
+          emailsDatalistId={emailsDatalistId}
+        />
 
         {error ? (
           <p className="text-xs text-red-600" role="alert">
@@ -686,6 +699,90 @@ function CreateCustomDialog({
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+/**
+ * BCC editor with a "Quick add" picker fed from previously-used addresses.
+ * The main input stays comma-separated for power-users; the dropdown +
+ * Add button appends one address at a time without retyping (and without
+ * the typos that "cetnerwellness" comes from).
+ */
+function BccField({
+  value,
+  onChange,
+  emailsDatalistId,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  emailsDatalistId: string;
+}) {
+  const [pick, setPick] = useState("");
+
+  const existing = useMemo(() => {
+    const set = new Set<string>();
+    for (const part of value.split(/[,\n;]/)) {
+      const v = part.trim().toLowerCase();
+      if (v) set.add(v);
+    }
+    return set;
+  }, [value]);
+
+  function addPicked() {
+    const v = pick.trim();
+    if (!v) return;
+    if (existing.has(v.toLowerCase())) {
+      setPick("");
+      return;
+    }
+    const sep = value.trim() ? ", " : "";
+    onChange(`${value}${sep}${v}`);
+    setPick("");
+  }
+
+  return (
+    <div>
+      <label className="block">
+        <span className="text-xs font-medium text-zinc-700">
+          BCC recipients (comma-separated)
+        </span>
+        <input
+          type="text"
+          list={emailsDatalistId}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+        />
+        <p className="mt-1 text-[11px] text-zinc-500">
+          Internal staff who silently get a copy of every send of this kind.
+          The patient never sees this list.
+        </p>
+      </label>
+      <div className="mt-1.5 flex items-center gap-2">
+        <input
+          type="email"
+          list={emailsDatalistId}
+          value={pick}
+          onChange={(e) => setPick(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addPicked();
+            }
+          }}
+          placeholder="Quick add from previously-used addresses"
+          className="flex-1 min-w-[200px] rounded-md border border-zinc-300 bg-white px-3 py-1 text-xs text-zinc-900 placeholder:text-zinc-400"
+        />
+        <button
+          type="button"
+          onClick={addPicked}
+          disabled={!pick.trim()}
+          className="shrink-0 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+        >
+          Add
+        </button>
+      </div>
     </div>
   );
 }

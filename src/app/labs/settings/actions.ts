@@ -763,6 +763,71 @@ export type CustomTemplateSuggestion = {
   paragraphs: string[];
 };
 
+/** Surface every email address the app has previously used — staff accounts,
+ * existing BCC lists, and the configured reply-to / from / digest addresses.
+ * The settings UI feeds this into a <datalist> so BCC inputs autocomplete
+ * to addresses that are already known good (and catches typos like
+ * "cetnerwellness" when the right answer is one keystroke away). */
+export async function listKnownEmailAddresses(): Promise<string[]> {
+  await requireRole("admin");
+  const db = getSupabaseAdmin();
+  const seen = new Set<string>();
+  const add = (raw: string | null | undefined) => {
+    if (!raw) return;
+    for (const part of raw.split(/[,\n;]/)) {
+      const v = part.trim();
+      if (!v) continue;
+      // Loose validity — must look like an email — to avoid surfacing junk.
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) continue;
+      seen.add(v.toLowerCase());
+    }
+  };
+
+  // Existing BCC lists on every email_templates row.
+  try {
+    const { data } = await db.from("email_templates").select("bcc");
+    for (const r of (data ?? []) as Array<{ bcc: string | null }>) {
+      add(r.bcc);
+    }
+  } catch {
+    // Pre-migration or transient — fall through.
+  }
+
+  // Staff accounts (invited users).
+  try {
+    const { data } = await db.from("app_users").select("email");
+    for (const r of (data ?? []) as Array<{ email: string | null }>) {
+      add(r.email);
+    }
+  } catch {
+    // Ignore.
+  }
+
+  // Configured email-shaped app_settings (reply_to_email, from_email, digest_email).
+  try {
+    const { data } = await db
+      .from("app_settings")
+      .select("key, value")
+      .in("key", ["reply_to_email", "from_email", "digest_email"]);
+    for (const r of (data ?? []) as Array<{
+      key: string;
+      value: string | null;
+    }>) {
+      add(r.value);
+    }
+  } catch {
+    // Ignore.
+  }
+
+  // Also surface the defaults the app ships with so a fresh install isn't
+  // empty before any customization has happened.
+  for (const def of Object.values(EMAIL_DEFAULTS)) {
+    for (const b of def.bcc) add(b);
+  }
+
+  return Array.from(seen).sort();
+}
+
 export async function listCustomTemplateSuggestions(): Promise<CustomTemplateSuggestion[]> {
   await requireRole("admin");
   const out: CustomTemplateSuggestion[] = [];
