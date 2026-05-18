@@ -4,9 +4,18 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import { parseCsv } from "@/lib/csv/parse";
 import {
   extractShippingRowsForYear,
+  parseDate,
   rowToDrafts,
   type ImportDraft,
 } from "@/lib/labs/import-normalize";
+import {
+  detectCentnerFormat,
+  extractCentnerRowsForYear,
+  centnerRowToDraft,
+  type CentnerFormat,
+  type CentnerCsvRow,
+} from "@/lib/labs/centner-import";
+import { saveSalesInvoices } from "../sales/actions";
 import { LAB_CATALOG, findLabByName } from "@/lib/labs/catalog";
 import {
   aiNormalizeImportDrafts,
@@ -151,6 +160,12 @@ function RollbackByIdSection() {
 
 const MIN_YEAR = 2025;
 
+function parseDateToIso(s: string): string | null {
+  const d = parseDate(s);
+  if (!d) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function newUuid(): string {
   // Browser-side: prefer crypto.randomUUID; fall back to a timestamp-rand mix
   // for ancient browsers (still RFC 4122-ish, good enough for an audit ID).
@@ -169,6 +184,7 @@ export function ImportClient() {
     totalDataRows: number;
     inYearRows: number;
     draftCount: number;
+    sourceFormat: "shipping" | CentnerFormat;
   } | null>(null);
   const [, startEnrich] = useTransition();
   const [, startCommit] = useTransition();
@@ -185,22 +201,88 @@ export function ImportClient() {
     autoApplied: number;
     needsReview: number;
   }>({ autoApplied: 0, needsReview: 0 });
+  const [salesPersistStatus, setSalesPersistStatus] = useState<
+    | { kind: "idle" }
+    | { kind: "saving"; count: number }
+    | { kind: "saved"; count: number }
+    | { kind: "failed"; error: string }
+  >({ kind: "idle" });
+
+  async function persistSalesRows(rows: CentnerCsvRow[]) {
+    if (rows.length === 0) return;
+    setSalesPersistStatus({ kind: "saving", count: rows.length });
+    const result = await saveSalesInvoices({
+      bulkImportId: null,
+      rows: rows.map((r) => ({
+        sourceFormat: r.format,
+        guestName: r.guestName,
+        email: r.email,
+        serviceDate: parseDateToIso(r.serviceDate) ?? "",
+        invoiceNo: r.invoiceNo || "(none)",
+        itemName: r.itemName,
+        itemType: r.itemType,
+        guestCode: r.guestCode,
+        centerCode: r.centerCode,
+        centerName: r.centerName,
+        itemCode: r.itemCode,
+        qty: r.qty,
+        salesExTax: r.salesExTax,
+        collected: r.collected,
+        due: r.due,
+        paymentType: r.paymentType,
+      })).filter((r) => r.serviceDate),
+    });
+    if (result.ok) {
+      setSalesPersistStatus({ kind: "saved", count: result.data?.insertedOrUpdated ?? 0 });
+    } else {
+      setSalesPersistStatus({ kind: "failed", error: result.error });
+    }
+  }
 
   async function onFile(file: File) {
     const text = await file.text();
     const table = parseCsv(text);
-    const { rows, totalDataRows } = extractShippingRowsForYear(table, {
-      kind: "min",
-      year: MIN_YEAR,
-    });
 
-    const localDrafts: ImportDraft[] = [];
-    for (const r of rows) localDrafts.push(...rowToDrafts(r));
+    // Detect Centner format by header signature first; fall back to the
+    // canonical Lab Shipping layout if no Centner header is present.
+    const centner = detectCentnerFormat(table);
+
+    let localDrafts: ImportDraft[];
+    let inYearRows: number;
+    let totalDataRows: number;
+    let sourceFormat: "shipping" | CentnerFormat;
+
+    if (centner.format != null && centner.headerRowIndex != null) {
+      const extracted = extractCentnerRowsForYear(
+        table,
+        { format: centner.format, headerRowIndex: centner.headerRowIndex },
+        { kind: "min", year: MIN_YEAR },
+      );
+      localDrafts = extracted.rows.map(centnerRowToDraft);
+      inYearRows = extracted.rows.length;
+      totalDataRows = extracted.totalDataRows;
+      sourceFormat = centner.format;
+
+      // Persist raw sales rows to the developer-only viewer table. Fire-and-
+      // forget — failures here shouldn't block the lab-case import preview.
+      void persistSalesRows(extracted.rows);
+    } else {
+      const extracted = extractShippingRowsForYear(table, {
+        kind: "min",
+        year: MIN_YEAR,
+      });
+      localDrafts = [];
+      for (const r of extracted.rows) localDrafts.push(...rowToDrafts(r));
+      inYearRows = extracted.rows.length;
+      totalDataRows = extracted.totalDataRows;
+      sourceFormat = "shipping";
+    }
 
     setParseStats({
       totalDataRows,
-      inYearRows: rows.length,
+      inYearRows,
       draftCount: localDrafts.length,
+      sourceFormat,
     });
 
     startEnrich(async () => {
@@ -465,12 +547,12 @@ export function ImportClient() {
       <div className="space-y-6">
         <div className="rounded-lg border border-dashed border-zinc-300 bg-white p-12 text-center">
           <h2 className="text-base font-semibold text-zinc-900">
-            Upload Lab Shipping CSV
+            Upload CSV
           </h2>
           <p className="mt-1 text-xs text-zinc-500">
-            Expects the canonical &ldquo;Lab Shipping - Main.csv&rdquo; format
-            (Date, Carrier, Service Level, tracking #, Confirmation #, Shipper,
-            Recipient, Patients, Contents, Date Shipped, Notes).
+            Format auto-detected. Accepts: Lab Shipping (Date, Carrier, …),
+            Centner guest-sales (Guest Name, Email, Service Date, …), or
+            Centner item-sales (Item Type, Sale Date, …).
           </p>
           <label className="mt-6 inline-block cursor-pointer rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800">
             Choose CSV file
@@ -573,9 +655,23 @@ export function ImportClient() {
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-zinc-700">
           {parseStats ? (
             <>
+              <span className="rounded bg-zinc-100 px-2 py-0.5 font-medium uppercase tracking-wide text-zinc-700">
+                {parseStats.sourceFormat === "guest-sales"
+                  ? "Centner guest-sales"
+                  : parseStats.sourceFormat === "item-sales"
+                    ? "Centner item-sales"
+                    : "Lab Shipping"}
+              </span>
               <span>{parseStats.totalDataRows} CSV data rows</span>
               <span>{parseStats.inYearRows} dated {MIN_YEAR}+</span>
-              <span>{parseStats.draftCount} after multi-patient split</span>
+              <span>{parseStats.draftCount} draft case{parseStats.draftCount === 1 ? "" : "s"}</span>
+              {salesPersistStatus.kind === "saving" ? (
+                <span className="text-zinc-500">· Saving sales rows…</span>
+              ) : salesPersistStatus.kind === "saved" ? (
+                <span className="text-emerald-700">· Saved {salesPersistStatus.count} sales row{salesPersistStatus.count === 1 ? "" : "s"}</span>
+              ) : salesPersistStatus.kind === "failed" ? (
+                <span className="text-red-700">· Sales save failed: {salesPersistStatus.error}</span>
+              ) : null}
             </>
           ) : null}
           <span className="ml-auto flex items-center gap-3">

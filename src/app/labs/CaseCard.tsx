@@ -9,7 +9,6 @@ import {
   completedStepCount,
   getCaseStaleness,
   getColumnFor,
-  stepIsComplete,
   type ColumnKey,
 } from "@/lib/columns";
 import { CaseDetail } from "./CaseDetail";
@@ -41,30 +40,6 @@ function RelativeTime({ iso }: { iso: string }) {
     return () => clearInterval(id);
   }, [iso]);
   return <>{text}</>;
-}
-
-function ProgressDots({ row }: { row: LabCase }) {
-  return (
-    <div className="flex items-center gap-1">
-      {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => {
-        const filled = stepIsComplete(row, n as 1);
-        const skipped = !row.partial_expected && (n === 2 || n === 3);
-        return (
-          <span
-            key={n}
-            aria-hidden
-            className={`h-1.5 w-1.5 rounded-full ${
-              skipped
-                ? "bg-zinc-200"
-                : filled
-                  ? "bg-zinc-900"
-                  : "bg-zinc-300"
-            }`}
-          />
-        );
-      })}
-    </div>
-  );
 }
 
 export function CaseCard({
@@ -238,8 +213,7 @@ export function CaseCard({
           </div>
         </div>
 
-        <div className="mt-3 flex items-center justify-between">
-          <ProgressDots row={row} />
+        <div className="mt-3 flex items-center justify-end">
           <span className="text-[11px] text-zinc-500">{done} / 9</span>
         </div>
         <div className="mt-1 flex items-center justify-between gap-2">

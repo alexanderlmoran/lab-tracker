@@ -238,19 +238,6 @@ export function NewCaseFormFields() {
                   />
                 </div>
 
-                <div className="flex items-end">
-                  <label className="flex items-center gap-2 text-xs text-zinc-700">
-                    <input
-                      type="checkbox"
-                      checked={row.partialExpected}
-                      onChange={(e) =>
-                        updateRow(i, { partialExpected: e.target.checked })
-                      }
-                      className="h-4 w-4 rounded border-zinc-300"
-                    />
-                    Partial results expected
-                  </label>
-                </div>
               </div>
             </div>
           ))}

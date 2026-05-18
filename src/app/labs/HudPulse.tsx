@@ -85,6 +85,7 @@ export function HudPulse({ user, cases }: HudPulseProps) {
   const lastSyncLabel = timeAgo(latestSync);
 
   const canManage: boolean = user.role === "admin" || user.role === "developer";
+  const isDeveloper: boolean = user.role === "developer";
 
   // Archived / Deleted / Inbox / lab-portal links all moved into Settings
   // tabs. The /labs/inbox route still exists so Gmail polling management
@@ -93,7 +94,8 @@ export function HudPulse({ user, cases }: HudPulseProps) {
   const navItems: Array<{ href: string; label: string; badge?: number; show: boolean }> = [
     { href: "/labs/import", label: "Import", show: true },
     { href: "/labs/patients", label: "Patients", show: true },
-    { href: "/labs/reports", label: "Reports", show: true },
+    { href: "/labs/reports", label: "Reports", show: isDeveloper },
+    { href: "/labs/sales", label: "Sales", show: isDeveloper },
     { href: "/labs/settings", label: "Settings", show: canManage },
   ];
 

@@ -3,10 +3,10 @@
 import { useState, useTransition } from "react";
 import type { LabCase } from "@/lib/types";
 import {
-  COLUMN_LABEL,
-  COLUMN_ORDER,
-  type ColumnKey,
-  getColumnForPatient,
+  PATIENT_COLUMN_LABEL,
+  PATIENT_COLUMN_ORDER,
+  type PatientColumnKey,
+  getPatientColumnForPatient,
   groupByPatient,
   type PatientGroup,
 } from "@/lib/columns";
@@ -26,7 +26,7 @@ function StaticColumn({
   count,
   children,
 }: {
-  col: ColumnKey;
+  col: PatientColumnKey;
   count: number;
   children: React.ReactNode;
 }) {
@@ -36,7 +36,7 @@ function StaticColumn({
       data-col={col}
     >
       <header className="flex items-center justify-between px-1.5 py-1">
-        <h3 className="col-head-title">{COLUMN_LABEL[col]}</h3>
+        <h3 className="col-head-title">{PATIENT_COLUMN_LABEL[col]}</h3>
         <span className="col-head-count">{count}</span>
       </header>
       <div className="flex min-h-[40px] flex-col gap-1.5 p-0.5 lg:flex-1 lg:overflow-y-auto">
@@ -173,16 +173,13 @@ export function KanbanBoard({ rows }: { rows: LabCase[] }) {
   }
 
   const groups = groupByPatient(rows);
-  const grouped: Record<ColumnKey, PatientGroup[]> = {
-    untouched: [],
-    sample_sent: [],
-    partial_results: [],
-    complete_results: [],
-    rof_scheduled: [],
-    rof_done: [],
-    closed: [],
+  const grouped: Record<PatientColumnKey, PatientGroup[]> = {
+    p_new: [],
+    p_at_lab: [],
+    p_results: [],
+    p_done: [],
   };
-  for (const g of groups) grouped[getColumnForPatient(g.cases)].push(g);
+  for (const g of groups) grouped[getPatientColumnForPatient(g.cases)].push(g);
 
   return (
     <div className="flex h-full flex-col">
@@ -228,8 +225,8 @@ export function KanbanBoard({ rows }: { rows: LabCase[] }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-3 lg:grid-cols-7 lg:flex-1 lg:min-h-0">
-        {COLUMN_ORDER.map((col) => {
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-4 lg:flex-1 lg:min-h-0">
+        {PATIENT_COLUMN_ORDER.map((col) => {
           const colGroups = grouped[col];
           return (
             <StaticColumn key={col} col={col} count={colGroups.length}>

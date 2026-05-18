@@ -12,7 +12,6 @@ import {
   expectedCountdown,
   getCaseStaleness,
   getColumnFor,
-  stepIsComplete,
 } from "@/lib/columns";
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { CaseDetail } from "./CaseDetail";
@@ -47,26 +46,6 @@ function isProbablyReady(row: LabCase): boolean {
   const today = new Date();
   const today0 = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
   return row.expected_result_at_max <= today0;
-}
-
-function ProgressDots({ row }: { row: LabCase }) {
-  return (
-    <div className="flex items-center gap-[3px]">
-      {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => {
-        const filled = stepIsComplete(row, n as 1);
-        const skipped = !row.partial_expected && (n === 2 || n === 3);
-        return (
-          <span
-            key={n}
-            aria-hidden
-            className={`h-1.5 w-1.5 rounded-full ${
-              skipped ? "bg-zinc-200" : filled ? "bg-zinc-900" : "bg-zinc-300"
-            }`}
-          />
-        );
-      })}
-    </div>
-  );
 }
 
 function LabCard({
@@ -110,9 +89,8 @@ function LabCard({
       </div>
       <p className="truncate text-[11px] text-zinc-500">{row.patient_name}</p>
 
-      <div className="flex items-center justify-between gap-2">
-        <ProgressDots row={row} />
-        <div className="flex items-center gap-1">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
           {countdown ? (
             <span
               title={

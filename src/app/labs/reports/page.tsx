@@ -1,7 +1,8 @@
-import { requireUser } from "@/lib/auth-guard";
+import { requireRole } from "@/lib/auth-guard";
 import { getReportData } from "../actions";
 import { COLUMN_LABEL, COLUMN_ORDER } from "@/lib/columns";
 import { HudPulse } from "../HudPulse";
+import { LearnTurnaroundsPanel } from "./LearnTurnaroundsPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -101,7 +102,7 @@ function SparkBar({
 }
 
 export default async function ReportsPage() {
-  const user = await requireUser();
+  const user = await requireRole("developer");
   const data = await getReportData();
   const maxColumn = Math.max(1, ...Object.values(data.columnCounts));
   const maxLab = Math.max(1, ...data.byLab.map((l) => l.count));
@@ -124,6 +125,9 @@ export default async function ReportsPage() {
             Snapshot of all-time data.
           </p>
         </div>
+
+        <LearnTurnaroundsPanel />
+
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <StatCard
             label="Active cases"

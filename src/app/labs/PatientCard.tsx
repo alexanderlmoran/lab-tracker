@@ -10,7 +10,6 @@ import {
   getCaseStaleness,
   getColumnFor,
   type PatientGroup,
-  stepIsComplete,
 } from "@/lib/columns";
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { CaseDetail } from "./CaseDetail";
@@ -39,30 +38,6 @@ function RelativeTime({ iso }: { iso: string }) {
     return () => clearInterval(id);
   }, [iso]);
   return <>{text}</>;
-}
-
-function ProgressDots({ row }: { row: LabCase }) {
-  return (
-    <div className="flex items-center gap-[3px]">
-      {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => {
-        const filled = stepIsComplete(row, n as 1);
-        const skipped = !row.partial_expected && (n === 2 || n === 3);
-        return (
-          <span
-            key={n}
-            aria-hidden
-            className={`h-1.5 w-1.5 rounded-full ${
-              skipped
-                ? "bg-zinc-200"
-                : filled
-                  ? "bg-zinc-900"
-                  : "bg-zinc-300"
-            }`}
-          />
-        );
-      })}
-    </div>
-  );
 }
 
 function formatShortDate(iso: string): string {
@@ -167,10 +142,8 @@ function LabRow({
           {done}/9
         </span>
       </div>
-      <div className="flex items-center justify-between gap-2">
-        <ProgressDots row={row} />
-        <div className="flex items-center gap-1">
-          {countdown ? (
+      <div className="flex flex-wrap items-center gap-1">
+        {countdown ? (
             <span
               title={
                 countdown.tone === "overdue"
@@ -226,7 +199,6 @@ function LabRow({
               {staleness.daysSinceProgress}d
             </span>
           ) : null}
-        </div>
       </div>
       {(row.collection_date || expected || row.tracking_number) ? (
         <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-zinc-400">

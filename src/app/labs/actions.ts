@@ -1034,6 +1034,26 @@ export type PatientSummary = {
   patient_phone: string | null;
 };
 
+/**
+ * Every non-deleted lab case for one patient (matched case-insensitively by
+ * email). Returns active and archived rows; the caller distinguishes via the
+ * archived_at column. Used by the "By patient" focus view.
+ */
+export async function listPatientCases(
+  emailLower: string,
+): Promise<LabCase[]> {
+  await requireSignedIn();
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("lab_cases")
+    .select("*")
+    .ilike("patient_email", emailLower)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as LabCase[];
+}
+
 /** One row per unique patient_email (case-insensitive grouping), with case
  * counts and most-recent activity. */
 export async function listPatients(opts?: {

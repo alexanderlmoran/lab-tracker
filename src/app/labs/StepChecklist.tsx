@@ -66,27 +66,21 @@ export function StepChecklist({ initial }: { initial: LabCase }) {
       <div className="space-y-1">
         {STEPS.map((step) => {
           const checked = stepIsComplete(c, step);
-          const partialDisabled = !c.partial_expected && (step === 2 || step === 3);
           const isEmail = isEmailStep(step);
           const isPending = pendingStep === step;
+          const isOptional = step === 2 || step === 3;
 
           return (
             <div
               key={step}
-              className={`flex items-start gap-3 rounded-md px-2 py-2 text-sm ${
-                partialDisabled ? "opacity-50" : "hover:bg-zinc-50"
-              }`}
+              className="flex items-start gap-3 rounded-md px-2 py-2 text-sm hover:bg-zinc-50"
             >
-              <label
-                className={`flex flex-1 items-start gap-3 ${
-                  partialDisabled ? "cursor-not-allowed" : "cursor-pointer"
-                }`}
-              >
+              <label className="flex flex-1 items-start gap-3 cursor-pointer">
                 <input
                   type="checkbox"
                   className="mt-0.5 h-4 w-4 rounded border-zinc-300"
                   checked={checked}
-                  disabled={partialDisabled || isPending}
+                  disabled={isPending}
                   onChange={(e) => {
                     onToggle(step, e.target.checked);
                   }}
@@ -100,13 +94,13 @@ export function StepChecklist({ initial }: { initial: LabCase }) {
                     >
                       {step}. {stepLabel(step)}
                     </span>
-                    {partialDisabled ? (
-                      <span className="text-[11px] text-zinc-500">(skip)</span>
+                    {isOptional && !checked ? (
+                      <span className="text-[11px] text-zinc-500">(optional)</span>
                     ) : null}
                   </div>
                 </div>
               </label>
-              {isEmail && !partialDisabled ? (
+              {isEmail ? (
                 <button
                   type="button"
                   onClick={() => void onSendEmail(step)}

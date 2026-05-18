@@ -25,7 +25,8 @@ export type ImportSkipReason =
   | "no_date"         // Date column unparseable
   | "no_patient"     // Patients Name col blank
   | "carrier_centner" // In-house item; user explicitly excluded
-  | "carrier_blank";  // Carrier col blank
+  | "carrier_blank"   // Carrier col blank
+  | "not_a_lab";      // Centner Item Name doesn't resolve to a lab
 
 export type ImportDraft = {
   /** Stable per-row+per-patient identifier used as React key in the preview. */

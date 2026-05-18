@@ -114,6 +114,61 @@ export function getColumnForPatient(cases: LabCase[]): ColumnKey {
   return minCol;
 }
 
+/**
+ * Coarser 4-bucket view used by the By-patient board. The 7-column model is
+ * granular enough that moving a single lab one step rarely shifts the
+ * patient's bottleneck column — visually it looks like "nothing happened."
+ * Collapsing to New / At Lab / Results / Done means most lab moves cross a
+ * patient-level boundary, so the board reacts to the action.
+ *
+ * By-lab and Tracking still use the full 7 columns — granularity matters
+ * when you're working a single lab at a time.
+ */
+export type PatientColumnKey = "p_new" | "p_at_lab" | "p_results" | "p_done";
+
+export const PATIENT_COLUMN_ORDER: PatientColumnKey[] = [
+  "p_new",
+  "p_at_lab",
+  "p_results",
+  "p_done",
+];
+
+export const PATIENT_COLUMN_LABEL: Record<PatientColumnKey, string> = {
+  p_new: "New",
+  p_at_lab: "At Lab",
+  p_results: "Results",
+  p_done: "Done",
+};
+
+const COL_TO_PATIENT_COL: Record<ColumnKey, PatientColumnKey> = {
+  untouched: "p_new",
+  sample_sent: "p_at_lab",
+  partial_results: "p_at_lab",
+  complete_results: "p_results",
+  rof_scheduled: "p_results",
+  rof_done: "p_results",
+  closed: "p_done",
+};
+
+export function getPatientColumnForCase(c: LabCase): PatientColumnKey {
+  return COL_TO_PATIENT_COL[getColumnFor(c)];
+}
+
+export function getPatientColumnForPatient(cases: LabCase[]): PatientColumnKey {
+  if (cases.length === 0) return "p_new";
+  let minIdx = PATIENT_COLUMN_ORDER.length;
+  let minCol: PatientColumnKey = "p_done";
+  for (const c of cases) {
+    const col = getPatientColumnForCase(c);
+    const idx = PATIENT_COLUMN_ORDER.indexOf(col);
+    if (idx >= 0 && idx < minIdx) {
+      minIdx = idx;
+      minCol = col;
+    }
+  }
+  return minCol;
+}
+
 export type PatientGroup = {
   patientEmail: string;
   patientName: string;

@@ -289,6 +289,13 @@
 .kanban-col[data-col="rof_done"]         { --col-c: var(--c-rof-d); }
 .kanban-col[data-col="closed"]           { --col-c: var(--c-closed); }
 
+/* By-patient 4-bucket palette — pick representative shades from the
+   underlying 7-column buckets each one covers. */
+.kanban-col[data-col="p_new"]            { --col-c: var(--c-new); }
+.kanban-col[data-col="p_at_lab"]         { --col-c: var(--c-sent); }
+.kanban-col[data-col="p_results"]        { --col-c: var(--c-complete); }
+.kanban-col[data-col="p_done"]           { --col-c: var(--c-closed); }
+
 .kanban-col .col-head-title {
   color: color-mix(in oklab, var(--col-c) 65%, #0a0a0b);
   font-size: 11px;
