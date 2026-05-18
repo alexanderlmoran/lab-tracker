@@ -1,12 +1,17 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import type { SessionUser } from "@/lib/auth-guard";
+import { LAB_CATALOG } from "@/lib/labs/catalog";
 import {
+  createCustomEmailTemplate,
+  deleteCustomEmailTemplate,
   resetEmailTemplate,
   sendTestEmail,
   setEmailTemplateEnabled,
+  updateCustomEmailTemplate,
   updateEmailTemplate,
+  type CustomTemplateSuggestion,
   type EmailTemplateRow,
 } from "./actions";
 
@@ -25,15 +30,29 @@ const PLACEHOLDER_DESCRIPTIONS: Record<string, string> = {
   "{magicLink}": "The Supabase sign-in / reset link (single use)",
 };
 
+const PATIENT_KIND_LABEL: Record<string, string> = {
+  sample_sent: "1 · Sample sent",
+  partial_uploaded: "2 · Partial results uploaded",
+  complete_uploaded: "3 · Complete results uploaded",
+  rof_followup: "4 · ROF follow-up",
+};
+
 export function EmailTemplatesPanel({
   templates,
   currentUser,
+  suggestions,
 }: {
   templates: EmailTemplateRow[];
   currentUser: SessionUser;
+  suggestions: CustomTemplateSuggestion[];
 }) {
-  const patient = templates.filter((t) => t.group === "patient");
+  const patient = templates.filter(
+    (t) => t.group === "patient" && t.triggerLabName == null,
+  );
   const staff = templates.filter((t) => t.group === "staff");
+  const custom = templates.filter((t) => t.triggerLabName != null);
+
+  const [showCreate, setShowCreate] = useState(false);
 
   return (
     <div className="space-y-6">
@@ -49,6 +68,51 @@ export function EmailTemplatesPanel({
         templates={staff}
         currentUser={currentUser}
       />
+
+      <div className="space-y-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-zinc-900">
+              Custom per-lab templates
+            </h3>
+            <p className="text-xs text-zinc-500">
+              Override one of the 4 patient emails for a specific lab. When a
+              case's lab matches, this template is used instead of the global
+              one. (Example: Peptides ships product, not a lab kit — the
+              Sample-sent email needs different copy.)
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowCreate(true)}
+            className="shrink-0 rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-800"
+          >
+            + Add custom template
+          </button>
+        </div>
+        {custom.length === 0 ? (
+          <p className="rounded-md border border-dashed border-zinc-300 p-4 text-center text-xs text-zinc-500">
+            No per-lab overrides yet.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {custom.map((t) => (
+              <TemplateCard
+                key={t.id ?? t.kind}
+                template={t}
+                currentUser={currentUser}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {showCreate ? (
+        <CreateCustomDialog
+          suggestions={suggestions}
+          onClose={() => setShowCreate(false)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -73,7 +137,11 @@ function TemplateGroup({
       </div>
       <div className="space-y-2">
         {templates.map((t) => (
-          <TemplateCard key={t.kind} template={t} currentUser={currentUser} />
+          <TemplateCard
+            key={t.id ?? t.kind}
+            template={t}
+            currentUser={currentUser}
+          />
         ))}
       </div>
     </div>
@@ -87,6 +155,7 @@ function TemplateCard({
   template: EmailTemplateRow;
   currentUser: SessionUser;
 }) {
+  const isCustom = template.id != null && template.triggerLabName != null;
   const [open, setOpen] = useState(false);
   const [subject, setSubject] = useState(template.subject);
   const [heading, setHeading] = useState(template.heading ?? "");
@@ -108,22 +177,30 @@ function TemplateCard({
     setError(null);
     setSavedNote(null);
     startTransition(async () => {
-      const res = await updateEmailTemplate({
-        kind: template.kind,
-        subject,
-        heading,
-        paragraphs,
-        bcc,
-      });
+      const res = isCustom
+        ? await updateCustomEmailTemplate({
+            id: template.id!,
+            subject,
+            heading,
+            paragraphs,
+            bcc,
+          })
+        : await updateEmailTemplate({
+            kind: template.kind,
+            subject,
+            heading,
+            paragraphs,
+            bcc,
+          });
       if (!res.ok) setError(res.error);
       else setSavedNote("Saved.");
     });
   }
 
   function onToggleEnabled(next: boolean) {
+    if (isCustom) return; // per-lab rows inherit the global enabled state.
     setError(null);
     setSavedNote(null);
-    // Optimistic: flip immediately so the UI feels responsive. Roll back on error.
     setEnabled(next);
     startTransition(async () => {
       const res = await setEmailTemplateEnabled({
@@ -138,13 +215,31 @@ function TemplateCard({
   }
 
   function onReset() {
+    if (isCustom) {
+      if (
+        !confirm(
+          `Delete the ${template.triggerLabName}-specific override for "${PATIENT_KIND_LABEL[template.kind] ?? template.kind}"? The global template will be used instead.`,
+        )
+      ) {
+        return;
+      }
+      setError(null);
+      setSavedNote(null);
+      startTransition(async () => {
+        const res = await deleteCustomEmailTemplate({ id: template.id! });
+        if (!res.ok) {
+          setError(res.error);
+          return;
+        }
+        window.location.reload();
+      });
+      return;
+    }
     if (!confirm(`Reset "${template.label}" to the default copy and BCC list?`)) return;
     setError(null);
     setSavedNote(null);
     startTransition(async () => {
-      const res = await resetEmailTemplate({
-        kind: template.kind,
-      });
+      const res = await resetEmailTemplate({ kind: template.kind });
       if (!res.ok) {
         setError(res.error);
         return;
@@ -158,13 +253,21 @@ function TemplateCard({
     setSavedNote(null);
     startTransition(async () => {
       if (dirty) {
-        const save = await updateEmailTemplate({
-          kind: template.kind,
-          subject,
-          heading,
-          paragraphs,
-          bcc,
-        });
+        const save = isCustom
+          ? await updateCustomEmailTemplate({
+              id: template.id!,
+              subject,
+              heading,
+              paragraphs,
+              bcc,
+            })
+          : await updateEmailTemplate({
+              kind: template.kind,
+              subject,
+              heading,
+              paragraphs,
+              bcc,
+            });
         if (!save.ok) {
           setError(save.error);
           return;
@@ -173,11 +276,14 @@ function TemplateCard({
       const res = await sendTestEmail({
         kind: template.kind,
         toEmail: testTo,
+        triggerLabName: template.triggerLabName,
       });
       if (!res.ok) setError(res.error);
       else setSavedNote(`Test sent to ${testTo}.`);
     });
   }
+
+  const resetLabel = isCustom ? "Delete override" : "Reset to default";
 
   return (
     <div
@@ -185,7 +291,6 @@ function TemplateCard({
         enabled ? "border-zinc-200" : "border-zinc-200 opacity-75"
       }`}
     >
-      {/* Header — always visible, click to expand */}
       <div className="flex items-center gap-3 px-4 py-3">
         <button
           type="button"
@@ -206,6 +311,11 @@ function TemplateCard({
               <span className="text-sm font-semibold text-zinc-900">
                 {template.label}
               </span>
+              {isCustom ? (
+                <span className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-800">
+                  Per-lab
+                </span>
+              ) : null}
               {!enabled ? (
                 <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-700">
                   Disabled
@@ -216,7 +326,7 @@ function TemplateCard({
                   Unsaved
                 </span>
               ) : null}
-              {template.isCustomised ? (
+              {template.isCustomised && !isCustom ? (
                 <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-blue-700">
                   Customised
                 </span>
@@ -228,29 +338,32 @@ function TemplateCard({
           </div>
         </button>
 
-        {/* In-use toggle — sits outside the expand button so clicking it
-            doesn't also toggle the disclosure. */}
-        <label
-          className="flex shrink-0 cursor-pointer items-center gap-2 text-xs text-zinc-700"
-          title={enabled ? "This email is currently being sent." : "Sends are suppressed for this kind."}
-        >
-          <span className="select-none">In use</span>
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => onToggleEnabled(e.target.checked)}
-            disabled={pending}
-            className="h-4 w-4 cursor-pointer rounded border-zinc-300"
-          />
-        </label>
+        {!isCustom ? (
+          <label
+            className="flex shrink-0 cursor-pointer items-center gap-2 text-xs text-zinc-700"
+            title={enabled ? "This email is currently being sent." : "Sends are suppressed for this kind."}
+          >
+            <span className="select-none">In use</span>
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => onToggleEnabled(e.target.checked)}
+              disabled={pending}
+              className="h-4 w-4 cursor-pointer rounded border-zinc-300"
+            />
+          </label>
+        ) : null}
       </div>
 
-      {/* Body — collapsible */}
       {open ? (
         <div className="border-t border-zinc-100 px-4 py-4">
           <div className="flex items-start justify-between gap-3">
             <p className="text-xs text-zinc-500">
-              {template.isCustomised ? (
+              {isCustom ? (
+                <span className="text-violet-700">
+                  Per-lab override — fires when a case's lab_name = “{template.triggerLabName}”.
+                </span>
+              ) : template.isCustomised ? (
                 <span className="text-amber-700">
                   Customised — using DB override.
                 </span>
@@ -260,11 +373,11 @@ function TemplateCard({
             </p>
             <button
               type="button"
-              disabled={pending || !template.isCustomised}
+              disabled={pending || (!isCustom && !template.isCustomised)}
               onClick={onReset}
               className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Reset to default
+              {resetLabel}
             </button>
           </div>
 
@@ -280,7 +393,7 @@ function TemplateCard({
                 label="Heading (large text above the greeting)"
                 value={heading}
                 onChange={setHeading}
-                hint="Leave blank to hide. Defaults to populated only on ROF follow-up."
+                hint="Leave blank to hide."
               />
             ) : null}
 
@@ -363,6 +476,216 @@ function TemplateCard({
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function CreateCustomDialog({
+  suggestions,
+  onClose,
+}: {
+  suggestions: CustomTemplateSuggestion[];
+  onClose: () => void;
+}) {
+  const labOptions = useMemo(
+    () =>
+      LAB_CATALOG
+        .filter((e) => !e.retired)
+        .map((e) => ({ name: e.provider, display: e.name }))
+        // Deduplicate by provider — admins pick a provider (case.lab_name), not a panel.
+        .filter(
+          (item, idx, arr) =>
+            arr.findIndex((x) => x.name === item.name) === idx,
+        )
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [],
+  );
+
+  const [kind, setKind] = useState<CustomTemplateSuggestion["kind"]>("sample_sent");
+  const [lab, setLab] = useState<string>("Peptides");
+  const [subject, setSubject] = useState("");
+  const [heading, setHeading] = useState("");
+  const [paragraphs, setParagraphs] = useState("");
+  const [bcc, setBcc] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const [touched, setTouched] = useState(false);
+
+  // Auto-fill from suggestion whenever (kind, lab) lines up with one — but
+  // only while the admin hasn't typed anything (touched=false), to avoid
+  // clobbering their edits.
+  useEffect(() => {
+    if (touched) return;
+    const hit = suggestions.find(
+      (s) => s.kind === kind && s.triggerLabName === lab,
+    );
+    if (hit) {
+      setSubject(hit.subject);
+      setHeading(hit.heading ?? "");
+      setParagraphs(hit.paragraphs.join("\n\n"));
+    } else {
+      setSubject("");
+      setHeading("");
+      setParagraphs("");
+    }
+  }, [kind, lab, suggestions, touched]);
+
+  function markTouched<T>(setter: (v: T) => void) {
+    return (v: T) => {
+      setTouched(true);
+      setter(v);
+    };
+  }
+
+  function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError(null);
+    startTransition(async () => {
+      const res = await createCustomEmailTemplate({
+        kind,
+        triggerLabName: lab,
+        subject,
+        heading,
+        paragraphs,
+        bcc,
+      });
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      window.location.reload();
+    });
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <form
+        onSubmit={onSubmit}
+        className="w-full max-w-xl space-y-3 rounded-lg bg-white p-6 shadow-xl"
+      >
+        <div className="flex items-start justify-between">
+          <div>
+            <h3 className="text-base font-semibold text-zinc-900">
+              New per-lab template
+            </h3>
+            <p className="mt-0.5 text-[11px] text-zinc-500">
+              Picks a stage + lab. Whenever a case at that stage has that
+              lab_name, this template is used instead of the global one.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-xs text-zinc-500 hover:text-zinc-900"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block">
+            <span className="text-xs font-medium text-zinc-700">Stage</span>
+            <select
+              value={kind}
+              onChange={(e) =>
+                setKind(e.target.value as CustomTemplateSuggestion["kind"])
+              }
+              className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900"
+            >
+              {Object.entries(PATIENT_KIND_LABEL).map(([k, label]) => (
+                <option key={k} value={k}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-zinc-700">
+              Triggering lab
+            </span>
+            <select
+              value={lab}
+              onChange={(e) => setLab(e.target.value)}
+              className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900"
+            >
+              {labOptions.map((o) => (
+                <option key={o.name} value={o.name}>
+                  {o.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <label className="block">
+          <span className="text-xs font-medium text-zinc-700">Subject</span>
+          <input
+            type="text"
+            value={subject}
+            onChange={(e) => markTouched(setSubject)(e.target.value)}
+            className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900"
+          />
+        </label>
+
+        <label className="block">
+          <span className="text-xs font-medium text-zinc-700">
+            Heading (optional, large text above the greeting)
+          </span>
+          <input
+            type="text"
+            value={heading}
+            onChange={(e) => markTouched(setHeading)(e.target.value)}
+            className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900"
+          />
+        </label>
+
+        <label className="block">
+          <span className="text-xs font-medium text-zinc-700">
+            Body — one paragraph per blank-line-separated block
+          </span>
+          <textarea
+            rows={8}
+            value={paragraphs}
+            onChange={(e) => markTouched(setParagraphs)(e.target.value)}
+            className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900"
+          />
+        </label>
+
+        <label className="block">
+          <span className="text-xs font-medium text-zinc-700">
+            BCC (comma-separated)
+          </span>
+          <input
+            type="text"
+            value={bcc}
+            onChange={(e) => markTouched(setBcc)(e.target.value)}
+            className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900"
+          />
+        </label>
+
+        {error ? (
+          <p className="text-xs text-red-600" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-zinc-300 bg-white px-4 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={pending}
+            className="rounded-md bg-zinc-900 px-4 py-1.5 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+          >
+            {pending ? "Creating…" : "Create template"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

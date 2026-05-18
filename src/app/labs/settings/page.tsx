@@ -3,6 +3,7 @@ import { HudPulse } from "../HudPulse";
 import {
   getAppSettings,
   listAppUsers,
+  listCustomTemplateSuggestions,
   listEmailTemplates,
   listLabPortals,
   listLabsCatalog,
@@ -47,6 +48,7 @@ export default async function SettingsPage({
     users,
     labs,
     emailTemplates,
+    emailSuggestions,
     archivedCases,
     deletedCases,
     portals,
@@ -55,6 +57,7 @@ export default async function SettingsPage({
     wantsAccounts ? listAppUsers() : Promise.resolve(null),
     wantsLabs ? listLabsCatalog() : Promise.resolve(null),
     wantsEmails ? listEmailTemplates() : Promise.resolve(null),
+    wantsEmails ? listCustomTemplateSuggestions() : Promise.resolve(null),
     wantsArchived
       ? listLabCases({ view: "archived" })
       : Promise.resolve(null),
@@ -107,6 +110,7 @@ export default async function SettingsPage({
             <EmailTemplatesPanel
               templates={emailTemplates}
               currentUser={user}
+              suggestions={emailSuggestions ?? []}
             />
           </Section>
         ) : null}

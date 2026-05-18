@@ -7,7 +7,7 @@ import {
   applyPlaceholders,
   firstNameOf,
   labLabelOf,
-  loadAllPatientTemplates,
+  loadPatientTemplateForCase,
   type EmailTemplate,
   type PatientEmailKind,
 } from "./template-data";
@@ -175,12 +175,14 @@ export async function renderEmail(
   }
   const patientKind = kind as PatientEmailKind;
 
-  const [ctx, templates, turnaroundText] = await Promise.all([
+  // Per-lab overrides (email_templates rows with trigger_lab_name) win over
+  // the global template; loadPatientTemplateForCase encapsulates that
+  // fallback chain.
+  const [ctx, template, turnaroundText] = await Promise.all([
     loadEmailConfig(),
-    loadAllPatientTemplates(),
+    loadPatientTemplateForCase(patientKind, row.lab_name),
     patientKind === "sample_sent" ? turnaroundTextFor(row) : Promise.resolve(""),
   ]);
-  const template = templates[patientKind];
   const placeholders = placeholderContext(row, ctx, turnaroundText);
   const { element, subject } = renderTemplateElement(template, ctx, placeholders);
   const html = await render(element, { pretty: false });
@@ -214,10 +216,20 @@ export async function renderEmail(
 export async function renderTestEmail(args: {
   kind: PatientEmailKind;
   toEmail: string;
+  /** When set, picks the per-lab override for this lab (if one exists) and
+   * the fake case row reflects the same lab + a placeholder panel so the
+   * preview reads naturally. Used by the Settings "Send test" button on a
+   * per-lab template card. */
+  triggerLabName?: string | null;
 }): Promise<RenderedEmail> {
   const ctx = await loadEmailConfig();
-  const templates = await loadAllPatientTemplates();
-  const template = templates[args.kind];
+  const lab = args.triggerLabName?.trim() || "Access";
+  const samplePanel =
+    lab === "Access"
+      ? "Blood Panel"
+      : lab === "Peptides"
+      ? "BPC-157"
+      : "(sample panel)";
 
   const sampleRow: LabCase = {
     id: "00000000-0000-0000-0000-000000000000",
@@ -226,8 +238,8 @@ export async function renderTestEmail(args: {
     patient_phone: null,
     patient_dob: null,
     patient_address: null,
-    lab_name: "Access",
-    lab_panel: "Blood Panel",
+    lab_name: lab,
+    lab_panel: samplePanel,
     tracking_number: null,
     pickup_confirmation: null,
     collection_date: null,
@@ -264,6 +276,7 @@ export async function renderTestEmail(args: {
     updated_at: new Date().toISOString(),
   };
 
+  const template = await loadPatientTemplateForCase(args.kind, lab);
   const turnaroundText =
     args.kind === "sample_sent" ? await turnaroundTextFor(sampleRow) : "";
   const placeholders = placeholderContext(sampleRow, ctx, turnaroundText);

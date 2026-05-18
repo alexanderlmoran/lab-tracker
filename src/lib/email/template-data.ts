@@ -58,6 +58,27 @@ export type EmailTemplate = {
 const PRACTICE_PHONE = "305-602-5260";
 const PB_PORTAL = "practicebetter.io";
 
+/**
+ * Suggested copy for per-lab overrides on first creation. Keyed by
+ * "{kind}::{labName}". The Settings UI pre-fills the new-template form
+ * with these when the admin picks a (lab, kind) pair we have a draft for —
+ * so common per-lab variants (e.g. peptides shipments) are one click away
+ * from being saved as a real DB-overridable template.
+ */
+export const SUGGESTED_LAB_OVERRIDES: Record<string, Pick<EmailTemplate, "subject" | "heading" | "paragraphs">> = {
+  "sample_sent::Peptides": {
+    subject: "Your peptides order — shipped",
+    heading: null,
+    paragraphs: [
+      "Dear {patientFirstName},",
+      "Your peptides order ({labPanel}) has been shipped.",
+      "Detailed instructions for proper storage, reconstitution, and administration will be included inside the package — please read them carefully before your first dose.",
+      `If you have any questions when the package arrives, call us at ${PRACTICE_PHONE} or simply reply to this email.`,
+      "Thank you.",
+    ],
+  },
+};
+
 // Single source of truth for ALL editable email defaults — patient and
 // staff alike. The DB-overlay only ever overrides individual fields; full
 // fallback to these defaults if a kind has no row.
@@ -143,7 +164,9 @@ export const EMAIL_DEFAULTS: Record<EditableEmailKind, EmailTemplate> = {
 };
 
 type DbRow = {
+  id?: string;
   kind: string;
+  trigger_lab_name?: string | null;
   subject: string | null;
   heading: string | null;
   paragraphs: string | null;
@@ -191,26 +214,59 @@ export function mergeTemplate(
   };
 }
 
-async function loadAllTemplateRows(): Promise<Map<string, DbRow>> {
+/**
+ * One DB round-trip loading every email_templates row, grouped into two
+ * maps: global (one per kind, trigger_lab_name IS NULL) and per-lab
+ * (composite key `${kind}::${labName}`). The migration that introduced
+ * `trigger_lab_name` is forward-compatible — if it hasn't been applied yet
+ * the column select still works, we just won't see any per-lab rows.
+ */
+async function loadAllTemplateRows(): Promise<{
+  globalByKind: Map<string, DbRow>;
+  byKindLab: Map<string, DbRow>;
+  allRows: DbRow[];
+}> {
   try {
     const db = getSupabaseAdmin();
     const { data } = await db
       .from("email_templates")
-      .select("kind, subject, heading, paragraphs, bcc, enabled");
-    return new Map(((data ?? []) as DbRow[]).map((r) => [r.kind, r]));
+      .select("id, kind, trigger_lab_name, subject, heading, paragraphs, bcc, enabled");
+    const rows = (data ?? []) as DbRow[];
+    const globalByKind = new Map<string, DbRow>();
+    const byKindLab = new Map<string, DbRow>();
+    for (const r of rows) {
+      const lab = (r.trigger_lab_name ?? "").trim();
+      if (!lab) {
+        globalByKind.set(r.kind, r);
+      } else {
+        byKindLab.set(`${r.kind}::${lab}`, r);
+      }
+    }
+    return { globalByKind, byKindLab, allRows: rows };
   } catch {
-    // Table missing pre-migration — fall back to defaults.
-    return new Map();
+    return {
+      globalByKind: new Map(),
+      byKindLab: new Map(),
+      allRows: [],
+    };
   }
 }
 
+/** Back-compat alias for callers that only need the global-by-kind map. */
+async function loadGlobalTemplateRows(): Promise<Map<string, DbRow>> {
+  const { globalByKind } = await loadAllTemplateRows();
+  return globalByKind;
+}
+
 /** Centralized "is this kind currently enabled?" check. Default = true so
- * a missing row (template never customized) doesn't accidentally block sends. */
+ * a missing row (template never customized) doesn't accidentally block sends.
+ * Per-lab rows don't have an independent enabled flag — they inherit the
+ * global kind's state. */
 export async function isEmailKindEnabled(
   kind: EditableEmailKind,
 ): Promise<boolean> {
   try {
-    const byKind = await loadAllTemplateRows();
+    const byKind = await loadGlobalTemplateRows();
     const row = byKind.get(kind);
     if (!row) return true;
     return row.enabled !== false;
@@ -223,7 +279,7 @@ export async function isEmailKindEnabled(
 export async function loadAllPatientTemplates(): Promise<
   Record<PatientEmailKind, EmailTemplate>
 > {
-  const byKind = await loadAllTemplateRows();
+  const byKind = await loadGlobalTemplateRows();
   return {
     sample_sent: mergeTemplate("sample_sent", byKind.get("sample_sent") ?? null),
     partial_uploaded: mergeTemplate(
@@ -245,7 +301,7 @@ export async function loadAllPatientTemplates(): Promise<
 export async function loadAllStaffTemplates(): Promise<
   Record<StaffEmailKind, EmailTemplate>
 > {
-  const byKind = await loadAllTemplateRows();
+  const byKind = await loadGlobalTemplateRows();
   return {
     staff_invite: mergeTemplate("staff_invite", byKind.get("staff_invite") ?? null),
     password_reset: mergeTemplate(
@@ -253,6 +309,54 @@ export async function loadAllStaffTemplates(): Promise<
       byKind.get("password_reset") ?? null,
     ),
   };
+}
+
+/**
+ * Render-time template resolution for a specific case. Picks the per-lab
+ * override when one exists for (kind, lab_name); otherwise falls back to
+ * the global-by-kind template (which itself overlays the code default).
+ */
+export async function loadPatientTemplateForCase(
+  kind: PatientEmailKind,
+  labName: string,
+): Promise<EmailTemplate> {
+  const { globalByKind, byKindLab } = await loadAllTemplateRows();
+  const lab = labName.trim();
+  const specific = lab ? byKindLab.get(`${kind}::${lab}`) : null;
+  if (specific) return mergeTemplate(kind, specific);
+  return mergeTemplate(kind, globalByKind.get(kind) ?? null);
+}
+
+export type CustomEmailTemplateRow = {
+  id: string;
+  kind: PatientEmailKind;
+  triggerLabName: string;
+  template: EmailTemplate;
+  isCustomised: true;
+};
+
+/** Lists every per-lab override row in the DB. Used by the settings UI to
+ * render the "Custom per-lab templates" section. */
+export async function listCustomEmailTemplates(): Promise<CustomEmailTemplateRow[]> {
+  const { allRows } = await loadAllTemplateRows();
+  const out: CustomEmailTemplateRow[] = [];
+  for (const r of allRows) {
+    if (!r.id || !r.trigger_lab_name) continue;
+    if (!PATIENT_EMAIL_KINDS.includes(r.kind as PatientEmailKind)) continue;
+    out.push({
+      id: r.id,
+      kind: r.kind as PatientEmailKind,
+      triggerLabName: r.trigger_lab_name,
+      template: mergeTemplate(r.kind as PatientEmailKind, r),
+      isCustomised: true,
+    });
+  }
+  out.sort((a, b) => {
+    const labCmp = a.triggerLabName.localeCompare(b.triggerLabName);
+    if (labCmp !== 0) return labCmp;
+    return a.kind.localeCompare(b.kind);
+  });
+  return out;
 }
 
 export async function loadStaffTemplate(

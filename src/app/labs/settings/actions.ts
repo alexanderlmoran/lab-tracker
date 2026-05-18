@@ -19,6 +19,8 @@ import {
   KIND_LABEL,
   PATIENT_EMAIL_KINDS,
   STAFF_EMAIL_KINDS,
+  SUGGESTED_LAB_OVERRIDES,
+  listCustomEmailTemplates,
   loadAllPatientTemplates,
   loadAllStaffTemplates,
   type EditableEmailKind,
@@ -630,8 +632,13 @@ export async function seedLabPortalsFromCode(): Promise<
 export type EmailTemplateGroup = "patient" | "staff";
 
 export type EmailTemplateRow = {
+  /** Row id when the underlying record is a per-lab override; null for the
+   * global-per-kind row (which is identified by `kind` alone). */
+  id: string | null;
   kind: EditableEmailKind;
   group: EmailTemplateGroup;
+  /** Set on per-lab override rows; null on the global rows. */
+  triggerLabName: string | null;
   label: string;
   subject: string;
   heading: string | null;
@@ -641,7 +648,8 @@ export type EmailTemplateRow = {
    * help text lists the right ones per email. */
   placeholders: string[];
   isCustomised: boolean;
-  /** When false, the email send path skips dispatch (logs a skipped event). */
+  /** When false, the email send path skips dispatch (logs a skipped event).
+   * Only meaningful on global rows; per-lab rows always inherit. */
   enabled: boolean;
 };
 
@@ -677,8 +685,10 @@ function buildRow(
     effective.paragraphs.join("\n\n") !== def.paragraphs.join("\n\n") ||
     effective.bcc.join(",") !== def.bcc.join(",");
   return {
+    id: null,
     kind,
     group,
+    triggerLabName: null,
     label: KIND_LABEL[kind],
     subject: effective.subject,
     heading: effective.heading,
@@ -693,23 +703,30 @@ function buildRow(
 export async function listEmailTemplates(): Promise<EmailTemplateRow[]> {
   await requireRole("admin");
   const db = getSupabaseAdmin();
-  const [patient, staff, enabledRows] = await Promise.all([
+  const [patient, staff, enabledRows, customRows] = await Promise.all([
     loadAllPatientTemplates(),
     loadAllStaffTemplates(),
-    db.from("email_templates").select("kind, enabled"),
+    db
+      .from("email_templates")
+      .select("kind, enabled, trigger_lab_name"),
+    listCustomEmailTemplates(),
   ]);
   const enabledByKind = new Map<string, boolean>();
   for (const r of (enabledRows.data ?? []) as Array<{
     kind: string;
     enabled: boolean | null;
+    trigger_lab_name: string | null;
   }>) {
-    enabledByKind.set(r.kind, r.enabled !== false);
+    // Only the global (trigger_lab_name IS NULL) row carries the kind-level
+    // enabled flag; per-lab rows inherit it.
+    if (r.trigger_lab_name == null && r.kind != null) {
+      enabledByKind.set(r.kind, r.enabled !== false);
+    }
   }
-  // Default to enabled when no row exists (template never touched).
   const isEnabled = (k: EditableEmailKind) =>
     enabledByKind.has(k) ? enabledByKind.get(k)! : true;
 
-  return [
+  const globals: EmailTemplateRow[] = [
     ...PATIENT_EMAIL_KINDS.map((k) =>
       buildRow(k, patient[k], "patient", isEnabled(k)),
     ),
@@ -717,6 +734,50 @@ export async function listEmailTemplates(): Promise<EmailTemplateRow[]> {
       buildRow(k, staff[k], "staff", isEnabled(k)),
     ),
   ];
+
+  const customs: EmailTemplateRow[] = customRows.map((r) => ({
+    id: r.id,
+    kind: r.kind,
+    group: "patient" as EmailTemplateGroup,
+    triggerLabName: r.triggerLabName,
+    label: `${KIND_LABEL[r.kind]} — ${r.triggerLabName}`,
+    subject: r.template.subject,
+    heading: r.template.heading,
+    paragraphs: r.template.paragraphs,
+    bcc: r.template.bcc,
+    placeholders: PLACEHOLDERS_BY_GROUP.patient,
+    isCustomised: true,
+    enabled: isEnabled(r.kind),
+  }));
+
+  return [...globals, ...customs];
+}
+
+/** A (kind, lab) pair to seed the "Add custom template" form with — the UI
+ * uses this to surface "BPC-suggestions" before the admin types anything. */
+export type CustomTemplateSuggestion = {
+  kind: PatientEmailKind;
+  triggerLabName: string;
+  subject: string;
+  heading: string | null;
+  paragraphs: string[];
+};
+
+export async function listCustomTemplateSuggestions(): Promise<CustomTemplateSuggestion[]> {
+  await requireRole("admin");
+  const out: CustomTemplateSuggestion[] = [];
+  for (const [key, val] of Object.entries(SUGGESTED_LAB_OVERRIDES)) {
+    const [kind, lab] = key.split("::");
+    if (!PATIENT_EMAIL_KINDS.includes(kind as PatientEmailKind)) continue;
+    out.push({
+      kind: kind as PatientEmailKind,
+      triggerLabName: lab,
+      subject: val.subject,
+      heading: val.heading,
+      paragraphs: val.paragraphs,
+    });
+  }
+  return out;
 }
 
 const ALL_KINDS = z.enum([
@@ -741,6 +802,48 @@ const TemplateUpdate = z.object({
   bcc: z.string().trim().max(2000),
 });
 
+/**
+ * Upsert helper for the global (trigger_lab_name IS NULL) row of a kind.
+ * After the migration the table no longer has `kind` as a unique constraint
+ * — multiple rows can share a kind (one global + N per-lab) — so we have to
+ * find-then-update instead of relying on onConflict:kind.
+ */
+async function upsertGlobalRow(
+  kind: EditableEmailKind,
+  patch: {
+    subject?: string | null;
+    heading?: string | null;
+    paragraphs?: string | null;
+    bcc?: string | null;
+    enabled?: boolean;
+  },
+  actorId: string,
+): Promise<ActionResult> {
+  const db = getSupabaseAdmin();
+  const { data: existing, error: lookupErr } = await db
+    .from("email_templates")
+    .select("id")
+    .eq("kind", kind)
+    .is("trigger_lab_name", null)
+    .maybeSingle();
+  if (lookupErr) return { ok: false, error: lookupErr.message };
+
+  if (existing?.id) {
+    const { error } = await db
+      .from("email_templates")
+      .update({ ...patch, updated_by: actorId })
+      .eq("id", existing.id);
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  }
+
+  const { error } = await db
+    .from("email_templates")
+    .insert({ kind, trigger_lab_name: null, ...patch, updated_by: actorId });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
 export async function updateEmailTemplate(input: {
   kind: EditableEmailKind;
   subject: string;
@@ -753,19 +856,17 @@ export async function updateEmailTemplate(input: {
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }
-  const db = getSupabaseAdmin();
-  const { error } = await db.from("email_templates").upsert(
+  const res = await upsertGlobalRow(
+    parsed.data.kind,
     {
-      kind: parsed.data.kind,
       subject: parsed.data.subject || null,
       heading: parsed.data.heading,
       paragraphs: parsed.data.paragraphs || null,
       bcc: parsed.data.bcc || null,
-      updated_by: actor.id,
     },
-    { onConflict: "kind" },
+    actor.id,
   );
-  if (error) return { ok: false, error: error.message };
+  if (!res.ok) return res;
   revalidatePath("/labs/settings");
   return { ok: true };
 }
@@ -779,17 +880,12 @@ export async function setEmailTemplateEnabled(input: {
   if (!parsed.success) {
     return { ok: false, error: "Invalid kind" };
   }
-  const db = getSupabaseAdmin();
-  // Upsert so a never-customized template still gets a row with the toggle.
-  const { error } = await db.from("email_templates").upsert(
-    {
-      kind: parsed.data,
-      enabled: input.enabled,
-      updated_by: actor.id,
-    },
-    { onConflict: "kind" },
+  const res = await upsertGlobalRow(
+    parsed.data,
+    { enabled: input.enabled },
+    actor.id,
   );
-  if (error) return { ok: false, error: error.message };
+  if (!res.ok) return res;
   revalidatePath("/labs/settings");
   return { ok: true };
 }
@@ -799,10 +895,129 @@ export async function resetEmailTemplate(input: {
 }): Promise<ActionResult> {
   await requireRole("admin");
   const db = getSupabaseAdmin();
+  // Only clears the global row — per-lab overrides for this kind keep
+  // their copy. Admin must delete those individually.
   const { error } = await db
     .from("email_templates")
     .delete()
-    .eq("kind", input.kind);
+    .eq("kind", input.kind)
+    .is("trigger_lab_name", null);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/labs/settings");
+  return { ok: true };
+}
+
+// ── Custom per-lab email templates ────────────────────────────────────
+
+const PATIENT_KIND = z.enum([
+  "sample_sent",
+  "partial_uploaded",
+  "complete_uploaded",
+  "rof_followup",
+]);
+
+const CustomCreate = z.object({
+  kind: PATIENT_KIND,
+  triggerLabName: z.string().trim().min(1).max(200),
+  subject: z.string().trim().max(200),
+  heading: z
+    .string()
+    .trim()
+    .max(200)
+    .optional()
+    .transform((v) => (v && v.length ? v : null)),
+  paragraphs: z.string().trim().max(8000),
+  bcc: z.string().trim().max(2000),
+});
+
+export async function createCustomEmailTemplate(input: {
+  kind: PatientEmailKind;
+  triggerLabName: string;
+  subject: string;
+  heading: string;
+  paragraphs: string;
+  bcc: string;
+}): Promise<ActionResult<{ id: string }>> {
+  const actor = await requireRole("admin");
+  const parsed = CustomCreate.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("email_templates")
+    .insert({
+      kind: parsed.data.kind,
+      trigger_lab_name: parsed.data.triggerLabName,
+      subject: parsed.data.subject || null,
+      heading: parsed.data.heading,
+      paragraphs: parsed.data.paragraphs || null,
+      bcc: parsed.data.bcc || null,
+      updated_by: actor.id,
+    })
+    .select("id")
+    .single();
+  if (error || !data) {
+    // The unique (kind, trigger_lab_name) index catches duplicates.
+    return { ok: false, error: error?.message ?? "Insert failed" };
+  }
+  revalidatePath("/labs/settings");
+  return { ok: true, data: { id: data.id } };
+}
+
+const CustomUpdate = z.object({
+  id: z.string().uuid(),
+  subject: z.string().trim().max(200),
+  heading: z
+    .string()
+    .trim()
+    .max(200)
+    .optional()
+    .transform((v) => (v && v.length ? v : null)),
+  paragraphs: z.string().trim().max(8000),
+  bcc: z.string().trim().max(2000),
+});
+
+export async function updateCustomEmailTemplate(input: {
+  id: string;
+  subject: string;
+  heading: string;
+  paragraphs: string;
+  bcc: string;
+}): Promise<ActionResult> {
+  const actor = await requireRole("admin");
+  const parsed = CustomUpdate.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+  const db = getSupabaseAdmin();
+  const { error } = await db
+    .from("email_templates")
+    .update({
+      subject: parsed.data.subject || null,
+      heading: parsed.data.heading,
+      paragraphs: parsed.data.paragraphs || null,
+      bcc: parsed.data.bcc || null,
+      updated_by: actor.id,
+    })
+    .eq("id", parsed.data.id)
+    .not("trigger_lab_name", "is", null);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/labs/settings");
+  return { ok: true };
+}
+
+export async function deleteCustomEmailTemplate(input: {
+  id: string;
+}): Promise<ActionResult> {
+  await requireRole("admin");
+  const db = getSupabaseAdmin();
+  // Guard: never delete a global row through this path.
+  const { error } = await db
+    .from("email_templates")
+    .delete()
+    .eq("id", input.id)
+    .not("trigger_lab_name", "is", null);
   if (error) return { ok: false, error: error.message };
   revalidatePath("/labs/settings");
   return { ok: true };
@@ -811,6 +1026,7 @@ export async function resetEmailTemplate(input: {
 const TestSendInput = z.object({
   kind: ALL_KINDS,
   toEmail: z.string().trim().email(),
+  triggerLabName: z.string().trim().max(200).nullable().optional(),
 });
 
 function isStaffKind(kind: EditableEmailKind): kind is StaffEmailKind {
@@ -820,6 +1036,9 @@ function isStaffKind(kind: EditableEmailKind): kind is StaffEmailKind {
 export async function sendTestEmail(input: {
   kind: EditableEmailKind;
   toEmail: string;
+  /** Set when testing a per-lab override card so the preview uses that
+   * template (and a sample row whose lab_name matches). */
+  triggerLabName?: string | null;
 }): Promise<ActionResult<{ messageId?: string }>> {
   await requireRole("admin");
   const parsed = TestSendInput.safeParse(input);
@@ -856,8 +1075,9 @@ export async function sendTestEmail(input: {
   }
 
   const rendered = await renderTestEmail({
-    kind: parsed.data.kind,
+    kind: parsed.data.kind as PatientEmailKind,
     toEmail: parsed.data.toEmail,
+    triggerLabName: parsed.data.triggerLabName ?? null,
   });
   try {
     const result = await new Resend(key).emails.send({
