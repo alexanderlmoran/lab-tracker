@@ -4,6 +4,7 @@ import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { LabCase } from "@/lib/types";
 import { CaseDialog } from "./CaseDialog";
+import { formatPersonName } from "@/lib/format";
 import {
   archiveLabCase,
   deleteLabCase,
@@ -15,7 +16,7 @@ export function CaseRowActions({ row }: { row: LabCase }) {
   const [pending, startTransition] = useTransition();
 
   function onArchive() {
-    if (!confirm(`Archive case for ${row.patient_name}?`)) return;
+    if (!confirm(`Archive case for ${formatPersonName(row.patient_name)}?`)) return;
     startTransition(async () => {
       const r = await archiveLabCase(row.id);
       if (!r.ok) {
@@ -40,7 +41,7 @@ export function CaseRowActions({ row }: { row: LabCase }) {
   function onDelete() {
     if (
       !confirm(
-        `Delete case for ${row.patient_name}? It will move to the Deleted folder and can be restored.`,
+        `Delete case for ${formatPersonName(row.patient_name)}? It will move to the Deleted folder and can be restored.`,
       )
     )
       return;

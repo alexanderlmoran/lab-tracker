@@ -4,10 +4,20 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
 import { SETTINGS_TABS, type SettingsTab } from "./tab";
 
-export function SettingsTabs({ tab }: { tab: SettingsTab }) {
+export function SettingsTabs({
+  tab,
+  isAdmin = true,
+}: {
+  tab: SettingsTab;
+  /** When false (staff users), only the General tab is rendered. */
+  isAdmin?: boolean;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [, startTransition] = useTransition();
+  const visibleTabs = isAdmin
+    ? SETTINGS_TABS
+    : SETTINGS_TABS.filter((t) => t.key === "general");
 
   function select(next: SettingsTab) {
     if (next === tab) return;
@@ -26,7 +36,7 @@ export function SettingsTabs({ tab }: { tab: SettingsTab }) {
       aria-label="Settings sections"
       className="inline-flex flex-wrap gap-1 rounded-md border border-zinc-200 bg-white p-1"
     >
-      {SETTINGS_TABS.map((t) => {
+      {visibleTabs.map((t) => {
         const active = t.key === tab;
         return (
           <button

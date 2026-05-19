@@ -13,6 +13,7 @@ import {
 } from "@/lib/columns";
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { CaseDetail } from "./CaseDetail";
+import { formatPersonName, formatShortDate } from "@/lib/format";
 
 function timeAgo(iso: string) {
   const ms = Date.now() - new Date(iso).getTime();
@@ -38,12 +39,6 @@ function RelativeTime({ iso }: { iso: string }) {
     return () => clearInterval(id);
   }, [iso]);
   return <>{text}</>;
-}
-
-function formatShortDate(iso: string): string {
-  const d = new Date(iso + "T00:00:00");
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function formatExpectedRange(min: string | null, max: string | null): string | null {
@@ -147,8 +142,8 @@ function LabRow({
             <span
               title={
                 countdown.tone === "overdue"
-                  ? `Expected by ${row.expected_result_at_max} — past`
-                  : `Expected by ${row.expected_result_at_max}`
+                  ? `Expected by ${formatShortDate(row.expected_result_at_max)} — past`
+                  : `Expected by ${formatShortDate(row.expected_result_at_max)}`
               }
               className={`rounded px-1 py-0.5 text-[9px] font-medium tabular-nums tracking-wide ${
                 countdown.tone === "overdue"
@@ -268,7 +263,7 @@ export function PatientCard({ group }: { group: PatientGroup }) {
         >
           <div className="flex items-baseline justify-between gap-2">
             <h4 className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-tight text-zinc-900">
-              {group.patientName}
+              {formatPersonName(group.patientName)}
             </h4>
             <span className="shrink-0 text-[10px] tabular-nums text-zinc-500">
               {group.cases.length} lab{group.cases.length === 1 ? "" : "s"}
@@ -303,7 +298,7 @@ export function PatientCard({ group }: { group: PatientGroup }) {
             <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-4">
               <div>
                 <h2 className="text-base font-semibold text-zinc-900">
-                  {activeRow.patient_name}
+                  {formatPersonName(activeRow.patient_name)}
                 </h2>
                 <p className="text-xs text-zinc-500">
                   {activeRow.lab_name}

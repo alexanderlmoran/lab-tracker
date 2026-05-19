@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/auth-guard";
 import { getLabCase } from "../actions";
 import { CaseDetail } from "../CaseDetail";
 import { HudPulse } from "../HudPulse";
+import { formatPersonName } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +31,7 @@ export default async function CaseFullPage({
               ← Board
             </Link>
             <h1 className="mt-0.5 truncate text-base font-semibold tracking-tight text-zinc-900">
-              {row.patient_name}
+              {formatPersonName(row.patient_name)}
             </h1>
             <p className="truncate text-xs text-zinc-500">{row.patient_email}</p>
           </div>

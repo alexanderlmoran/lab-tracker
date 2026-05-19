@@ -9,6 +9,7 @@ import {
   type ColumnKey,
 } from "@/lib/columns";
 import { CaseDialog } from "./CaseDialog";
+import { UserChip } from "./UserChip";
 import { logoutAction } from "../login/actions";
 import "./hud.css";
 
@@ -20,13 +21,10 @@ const COLUMN_COLOR_VAR: Record<ColumnKey, string> = {
   rof_scheduled: "var(--c-rof-s)",
   rof_done: "var(--c-rof-d)",
   closed: "var(--c-closed)",
+  // Archived cases are filtered out before the flow strip, so the actual
+  // colour is never used — but the key is required by the typed record.
+  completed: "var(--c-closed)",
 };
-
-function initials(email: string): string {
-  const local = email.split("@")[0] ?? "";
-  const parts = local.split(/[._-]/).filter(Boolean);
-  return ((parts[0]?.[0] ?? "u") + (parts[1]?.[0] ?? "")).toUpperCase();
-}
 
 function timeAgo(iso: string | null): string | null {
   if (!iso) return null;
@@ -66,6 +64,7 @@ export function HudPulse({ user, cases }: HudPulseProps) {
     rof_scheduled: 0,
     rof_done: 0,
     closed: 0,
+    completed: 0,
   };
   let staleCount = 0;
   let latestSync: string | null = null;
@@ -92,12 +91,16 @@ export function HudPulse({ user, cases }: HudPulseProps) {
   // works when needed — it's just not in the primary nav anymore. Admins
   // can deep-link to it from a bookmark if they need it.
   const navItems: Array<{ href: string; label: string; badge?: number; show: boolean }> = [
+    { href: "/labs", label: "Home", show: true },
     { href: "/labs/import", label: "Import", show: true },
     { href: "/labs/patients", label: "Patients", show: true },
     { href: "/labs/reports", label: "Reports", show: isDeveloper },
     { href: "/labs/sales", label: "Sales", show: isDeveloper },
     { href: "/labs/settings", label: "Settings", show: canManage },
   ];
+
+  // Username chip is its own client component so it can grey itself out
+  // when the user is already on its destination (/labs/settings?tab=general).
 
   return (
     <header className="hud hud--pulse">
@@ -160,15 +163,7 @@ export function HudPulse({ user, cases }: HudPulseProps) {
           triggerClassName="new-btn"
         />
 
-        <Link
-          href="/labs/account"
-          className="userchip"
-          title={`${user.email} — ${user.role} · click to open your account`}
-        >
-          <span className="avatar">{initials(user.email)}</span>
-          <span>{user.email}</span>
-          <span className="role">{user.role}</span>
-        </Link>
+        <UserChip email={user.email} role={user.role} />
 
         <form action={logoutAction}>
           <button type="submit" className="signout">

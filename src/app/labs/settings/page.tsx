@@ -1,4 +1,4 @@
-import { requireRole } from "@/lib/auth-guard";
+import { hasRole, requireUser } from "@/lib/auth-guard";
 import { HudPulse } from "../HudPulse";
 import {
   getAppSettings,
@@ -11,6 +11,7 @@ import {
 } from "./actions";
 import { listLabCases } from "../actions";
 import { GeneralSettingsForm } from "./GeneralSettingsForm";
+import { ChangePasswordForm } from "../account/ChangePasswordForm";
 import { AccountsPanel } from "./AccountsPanel";
 import { LabsCatalogPanel } from "./LabsCatalogPanel";
 import { EmailTemplatesPanel } from "./EmailTemplatesPanel";
@@ -31,18 +32,24 @@ export default async function SettingsPage({
 }: {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
-  const user = await requireRole("admin");
+  const user = await requireUser();
+  const isAdmin = hasRole(user, "admin");
   const sp = await searchParams;
-  const tab = parseSettingsTab(firstString(sp.tab));
+  const requestedTab = parseSettingsTab(firstString(sp.tab));
+  // Staff can only see the General tab (which contains their password
+  // change). Any deep-link to an admin-only tab silently lands them on
+  // General — rather than throwing or 403'ing, which would feel broken.
+  const tab = isAdmin ? requestedTab : "general";
 
-  // Fetch only what the active tab needs.
+  // Fetch only what the active tab needs. Every admin-only fetch is also
+  // role-gated so a future bug doesn't accidentally execute it for staff.
   const wantsGeneral = tab === "general";
-  const wantsAccounts = tab === "accounts";
-  const wantsEmails = tab === "emails";
-  const wantsLabs = tab === "labs";
-  const wantsArchived = tab === "archived";
-  const wantsDeleted = tab === "deleted";
-  const wantsPortals = tab === "portals";
+  const wantsAccounts = isAdmin && tab === "accounts";
+  const wantsEmails = isAdmin && tab === "emails";
+  const wantsLabs = isAdmin && tab === "labs";
+  const wantsArchived = isAdmin && tab === "archived";
+  const wantsDeleted = isAdmin && tab === "deleted";
+  const wantsPortals = isAdmin && tab === "portals";
 
   const [
     settings,
@@ -55,7 +62,10 @@ export default async function SettingsPage({
     deletedCases,
     portals,
   ] = await Promise.all([
-    wantsGeneral ? getAppSettings() : Promise.resolve(null),
+    // Org settings live on the General tab but only render for admins —
+    // staff still hits General for the password section, no app_settings
+    // read needed for them.
+    wantsGeneral && isAdmin ? getAppSettings() : Promise.resolve(null),
     wantsAccounts ? listAppUsers() : Promise.resolve(null),
     wantsLabs ? listLabsCatalog() : Promise.resolve(null),
     wantsEmails ? listEmailTemplates() : Promise.resolve(null),
@@ -80,20 +90,30 @@ export default async function SettingsPage({
             Signed in as {user.email} ({user.role})
           </p>
         </div>
-        <SettingsTabs tab={tab} />
+        <SettingsTabs tab={tab} isAdmin={isAdmin} />
 
-        {wantsGeneral && settings ? (
-          <Section
-            title="General"
-            description="Email reply-to / sending-from. Blanks fall back to environment variables."
-          >
-            <GeneralSettingsForm
-              initial={settings}
-              testRedirectActive={
-                (process.env.EMAIL_TEST_REDIRECT ?? "").trim() || null
-              }
-            />
-          </Section>
+        {wantsGeneral ? (
+          <>
+            {isAdmin && settings ? (
+              <Section
+                title="General"
+                description="Email reply-to / sending-from. Blanks fall back to environment variables."
+              >
+                <GeneralSettingsForm
+                  initial={settings}
+                  testRedirectActive={
+                    (process.env.EMAIL_TEST_REDIRECT ?? "").trim() || null
+                  }
+                />
+              </Section>
+            ) : null}
+            <Section
+              title="Change password"
+              description="Updates the password for your account. You stay signed in on this device."
+            >
+              <ChangePasswordForm />
+            </Section>
+          </>
         ) : null}
 
         {wantsAccounts && users ? (

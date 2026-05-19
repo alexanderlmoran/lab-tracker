@@ -352,7 +352,7 @@ const TempPasswordInput = z.object({
 
 /** Set a fresh random password on a user and return it so the admin can read
  * it out to them. Use when the magic-link flow didn't work for the user — they
- * sign in with email + this password, then change it at /labs/account. */
+ * sign in with email + this password, then change it from Settings → General. */
 export async function setTempPassword(input: {
   userId: string;
 }): Promise<ActionResult<{ password: string; email: string }>> {

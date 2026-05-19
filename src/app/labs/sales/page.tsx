@@ -2,6 +2,7 @@ import { requireRole } from "@/lib/auth-guard";
 import { listSalesInvoices, getSalesTotals, type SalesQuery } from "./actions";
 import { HudPulse } from "../HudPulse";
 import { SalesFilters } from "./SalesFilters";
+import { formatPersonName } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -116,7 +117,7 @@ export default async function SalesPage({
                     <td className="whitespace-nowrap px-3 py-2 tabular-nums text-zinc-700">
                       {formatDate(r.service_date)}
                     </td>
-                    <td className="px-3 py-2 text-zinc-900">{r.guest_name}</td>
+                    <td className="px-3 py-2 text-zinc-900">{formatPersonName(r.guest_name)}</td>
                     <td className="px-3 py-2 text-zinc-500">{r.email ?? "—"}</td>
                     <td className="whitespace-nowrap px-3 py-2 font-mono text-[11px] text-zinc-600">
                       {r.invoice_no}

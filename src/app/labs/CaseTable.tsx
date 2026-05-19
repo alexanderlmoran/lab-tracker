@@ -1,6 +1,7 @@
 import type { LabCase } from "@/lib/types";
 import { STEP_BOOLEAN_COLUMNS } from "@/lib/types";
 import { CaseRowActions } from "./CaseRowActions";
+import { formatPersonName } from "@/lib/format";
 
 function progressOf(c: LabCase) {
   return STEP_BOOLEAN_COLUMNS.reduce(
@@ -52,7 +53,7 @@ export function CaseTable({ rows }: { rows: LabCase[] }) {
               <tr key={row.id} className="hover:bg-zinc-50/60">
                 <td className="px-4 py-3 align-top">
                   <div className="font-medium text-zinc-900">
-                    {row.patient_name}
+                    {formatPersonName(row.patient_name)}
                   </div>
                   <div className="text-xs text-zinc-500">{row.patient_email}</div>
                 </td>

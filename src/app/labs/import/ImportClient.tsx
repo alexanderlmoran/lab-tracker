@@ -19,10 +19,12 @@ import { saveSalesInvoices } from "../sales/actions";
 import { LAB_CATALOG, findLabByName } from "@/lib/labs/catalog";
 import {
   aiNormalizeImportDrafts,
+  checkImportDuplicates,
   commitImport,
   enrichImportDrafts,
   listRecentImports,
   rollbackImport,
+  type DuplicateMatch,
   type EnrichedDraft,
   type PBSuggestion,
   type RecentImport,
@@ -207,6 +209,13 @@ export function ImportClient() {
     | { kind: "saved"; count: number }
     | { kind: "failed"; error: string }
   >({ kind: "idle" });
+  // Per-draft duplicate classification (server-checked). Filled after the
+  // preview phase loads. Rows without an entry are treated as `none`.
+  const [dupMap, setDupMap] = useState<Record<string, DuplicateMatch>>({});
+  // Per-draft operator decision for duplicates. "skip" = drop on commit
+  // (default for any classified duplicate). "import" = pass forceImport=true
+  // so the server-side dup check is overridden.
+  const [dupDecision, setDupDecision] = useState<Record<string, "skip" | "import">>({});
 
   async function persistSalesRows(rows: CentnerCsvRow[]) {
     if (rows.length === 0) return;
@@ -297,7 +306,42 @@ export function ImportClient() {
       // Kick off AI normalization in the background — high-confidence
       // suggestions auto-apply, low-confidence ones surface as inline hints.
       void runAiNormalization(enriched);
+      void runDuplicateCheck(enriched);
     });
+  }
+
+  // Server-side duplicate classification. Runs against enriched drafts that
+  // already have email + lab resolved. Anything still missing required
+  // fields is skipped (no point checking — they can't import anyway).
+  // Default decision for any flagged duplicate is "skip"; the operator can
+  // flip to Import-anyway per row or in bulk.
+  async function runDuplicateCheck(enriched: EnrichedDraft[]) {
+    const eligible = enriched.filter(
+      (d) =>
+        !d.skipReason &&
+        d.patientEmail &&
+        d.labProvider,
+    );
+    if (eligible.length === 0) return;
+    const r = await checkImportDuplicates({
+      rows: eligible.map((d) => ({
+        patientEmail: d.patientEmail!,
+        labName: d.labProvider!,
+        labPanel: d.labPanel,
+        trackingNumber: d.trackingNumber,
+        sampleSentAtIso: d.sampleSentAtIso,
+      })),
+    });
+    if (!r.ok || !r.data) return;
+    const nextMap: Record<string, DuplicateMatch> = {};
+    const nextDecision: Record<string, "skip" | "import"> = {};
+    eligible.forEach((d, i) => {
+      const m = r.data![i];
+      nextMap[d.draftKey] = m;
+      if (m.kind !== "none") nextDecision[d.draftKey] = "skip";
+    });
+    setDupMap(nextMap);
+    setDupDecision((prev) => ({ ...prev, ...nextDecision }));
   }
 
   async function runAiNormalization(enriched: EnrichedDraft[]) {
@@ -473,7 +517,16 @@ export function ImportClient() {
     let ready = 0;
     let needsAttention = 0;
     let willSkip = 0;
+    let dupExact = 0;
+    let dupSimilar = 0;
+    let dupSkipped = 0;
     for (const d of drafts) {
+      const dup = dupMap[d.draftKey];
+      if (dup?.kind === "exact") dupExact++;
+      else if (dup?.kind === "similar") dupSimilar++;
+      const isDupSkipped =
+        dup && dup.kind !== "none" && (dupDecision[d.draftKey] ?? "skip") === "skip";
+      if (isDupSkipped) dupSkipped++;
       if (d.skipReason) willSkip++;
       else if (
         !d.patientEmail ||
@@ -481,18 +534,24 @@ export function ImportClient() {
         d.matchKind === "ambiguous"
       )
         needsAttention++;
+      else if (isDupSkipped) willSkip++;
       else ready++;
     }
-    return { ready, needsAttention, willSkip };
-  }, [drafts]);
+    return { ready, needsAttention, willSkip, dupExact, dupSimilar, dupSkipped };
+  }, [drafts, dupMap, dupDecision]);
 
   function onCommit() {
     const id = newUuid();
-    const acceptable = drafts.filter(
-      (d) => !d.skipReason && d.patientEmail && d.labProvider,
-    );
+    const acceptable = drafts.filter((d) => {
+      if (d.skipReason || !d.patientEmail || !d.labProvider) return false;
+      const dup = dupMap[d.draftKey];
+      if (dup && dup.kind !== "none") {
+        return (dupDecision[d.draftKey] ?? "skip") === "import";
+      }
+      return true;
+    });
     if (acceptable.length === 0) {
-      alert("Nothing to import — every row is skipped or missing required fields.");
+      alert("Nothing to import — every row is skipped, a flagged duplicate, or missing required fields.");
       return;
     }
     if (
@@ -519,6 +578,9 @@ export function ImportClient() {
           expectedResultAtMinIso: d.expectedResultAtMinIso,
           expectedResultAtMaxIso: d.expectedResultAtMaxIso,
           notes: d.notes,
+          // Operator chose to keep a flagged duplicate — tell the server
+          // not to skip it during its own dedup pass.
+          forceImport: !!dupMap[d.draftKey] && dupMap[d.draftKey].kind !== "none",
         })),
       });
       if (!result.ok) {
@@ -684,8 +746,55 @@ export function ImportClient() {
             <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-zinc-700">
               Skip: {counts.willSkip}
             </span>
+            {counts.dupExact + counts.dupSimilar > 0 ? (
+              <span className="rounded-full bg-rose-100 px-2 py-0.5 text-rose-800">
+                Duplicates: {counts.dupExact + counts.dupSimilar}
+                {counts.dupSimilar > 0 ? ` (${counts.dupSimilar} similar)` : ""}
+              </span>
+            ) : null}
           </span>
         </div>
+        {counts.dupExact + counts.dupSimilar > 0 ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-2 text-xs">
+            <span className="text-zinc-500">Bulk:</span>
+            <button
+              type="button"
+              onClick={() => {
+                setDupDecision((prev) => {
+                  const next = { ...prev };
+                  for (const d of drafts) {
+                    const m = dupMap[d.draftKey];
+                    if (m && m.kind !== "none") next[d.draftKey] = "skip";
+                  }
+                  return next;
+                });
+              }}
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-zinc-700 hover:bg-zinc-50"
+            >
+              Skip all duplicates
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDupDecision((prev) => {
+                  const next = { ...prev };
+                  for (const d of drafts) {
+                    const m = dupMap[d.draftKey];
+                    if (m && m.kind !== "none") next[d.draftKey] = "import";
+                  }
+                  return next;
+                });
+              }}
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-zinc-700 hover:bg-zinc-50"
+            >
+              Import all duplicates anyway
+            </button>
+            <span className="text-zinc-400">·</span>
+            <span className="text-zinc-500">
+              {counts.dupSkipped} of {counts.dupExact + counts.dupSimilar} set to Skip
+            </span>
+          </div>
+        ) : null}
       </div>
 
       <div
@@ -869,19 +978,78 @@ export function ImportClient() {
                     : "—"}
                 </td>
                 <td className="px-3 py-2 align-top">
-                  {d.skipReason ? (
-                    <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-600">
-                      skip · {d.skipReason}
-                    </span>
-                  ) : !d.patientEmail || !d.labProvider ? (
-                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-800">
-                      {d.warning ?? "needs fields"}
-                    </span>
-                  ) : (
-                    <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-emerald-800">
-                      ready
-                    </span>
-                  )}
+                  {(() => {
+                    const dup = dupMap[d.draftKey];
+                    const decision = dupDecision[d.draftKey] ?? "skip";
+                    if (d.skipReason) {
+                      return (
+                        <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-600">
+                          skip · {d.skipReason}
+                        </span>
+                      );
+                    }
+                    if (!d.patientEmail || !d.labProvider) {
+                      return (
+                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-800">
+                          {d.warning ?? "needs fields"}
+                        </span>
+                      );
+                    }
+                    if (dup && dup.kind !== "none") {
+                      const label =
+                        dup.kind === "exact"
+                          ? `duplicate · ${dup.matchedOn === "tracking_number" ? "same tracking" : "same email+lab+date"}`
+                          : `similar · same email+lab+panel, different date${dup.existingCollectionDate ? ` (${dup.existingCollectionDate})` : ""}`;
+                      return (
+                        <div className="flex flex-col gap-1">
+                          <span
+                            className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
+                              dup.kind === "exact"
+                                ? "bg-rose-100 text-rose-800"
+                                : "bg-orange-100 text-orange-800"
+                            }`}
+                            title={label}
+                          >
+                            {dup.kind === "exact" ? "duplicate" : "similar"}
+                          </span>
+                          <p className="text-[10px] text-zinc-500">{label.split(" · ")[1]}</p>
+                          <div className="inline-flex overflow-hidden rounded border border-zinc-300 text-[10px]">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setDupDecision((prev) => ({ ...prev, [d.draftKey]: "skip" }))
+                              }
+                              className={`px-1.5 py-0.5 ${
+                                decision === "skip"
+                                  ? "bg-zinc-900 text-white"
+                                  : "bg-white text-zinc-700 hover:bg-zinc-50"
+                              }`}
+                            >
+                              Skip
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setDupDecision((prev) => ({ ...prev, [d.draftKey]: "import" }))
+                              }
+                              className={`border-l border-zinc-300 px-1.5 py-0.5 ${
+                                decision === "import"
+                                  ? "bg-zinc-900 text-white"
+                                  : "bg-white text-zinc-700 hover:bg-zinc-50"
+                              }`}
+                            >
+                              Import anyway
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return (
+                      <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-emerald-800">
+                        ready
+                      </span>
+                    );
+                  })()}
                 </td>
               </tr>
             ))}
@@ -901,6 +1069,8 @@ export function ImportClient() {
               setPhase("upload");
               setDrafts([]);
               setParseStats(null);
+              setDupMap({});
+              setDupDecision({});
             }}
             className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50"
           >

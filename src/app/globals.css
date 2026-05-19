@@ -24,3 +24,9 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Tailwind v4 preflight resets `margin: 0` globally, which kills the native
+ * centering of <dialog> elements opened with .showModal(). Restore it. */
+dialog[open] {
+  margin: auto;
+}

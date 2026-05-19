@@ -13,6 +13,7 @@ import {
 } from "@/lib/columns";
 import { CaseDetail } from "./CaseDetail";
 import { archiveLabCase } from "./actions";
+import { formatPersonName } from "@/lib/format";
 import type { EmailConfirmHandle } from "./EmailConfirmDialog";
 import type { ColumnJumpHandle } from "./ColumnJumpDialog";
 
@@ -79,7 +80,7 @@ export function CaseCard({
 
   function onArchive() {
     setMenuOpen(false);
-    if (!confirm(`Archive case for ${row.patient_name}?`)) return;
+    if (!confirm(`Archive case for ${formatPersonName(row.patient_name)}?`)) return;
     startTransition(async () => {
       const res = await archiveLabCase(row.id);
       if (!res.ok) alert(res.error);
@@ -120,7 +121,7 @@ export function CaseCard({
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
             <h4 className="truncate text-sm font-medium text-zinc-900">
-              {row.patient_name}
+              {formatPersonName(row.patient_name)}
             </h4>
             <p className="truncate text-xs text-zinc-500">
               {row.lab_name}
@@ -239,7 +240,7 @@ export function CaseCard({
           <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-4">
             <div>
               <h2 className="text-base font-semibold text-zinc-900">
-                {row.patient_name}
+                {formatPersonName(row.patient_name)}
               </h2>
               <p className="text-xs text-zinc-500">{row.patient_email}</p>
             </div>

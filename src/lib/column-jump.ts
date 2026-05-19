@@ -17,6 +17,9 @@ const COLUMN_DEFINING_STEPS: Record<ColumnKey, StepNumber[]> = {
   rof_scheduled: [6],
   rof_done: [7],
   closed: [8, 9],
+  // `completed` means archived — there is no step to tick. Jumping here is
+  // not offered in the menu, but the key is required by the typed record.
+  completed: [],
 };
 
 export type StepPlan = {
@@ -43,7 +46,7 @@ export function planColumnJump(
 }
 
 export function isForwardJump(from: ColumnKey, to: ColumnKey): boolean {
-  const order = [
+  const order: ColumnKey[] = [
     "untouched",
     "sample_sent",
     "partial_results",
@@ -51,6 +54,7 @@ export function isForwardJump(from: ColumnKey, to: ColumnKey): boolean {
     "rof_scheduled",
     "rof_done",
     "closed",
-  ] as const;
+    "completed",
+  ];
   return order.indexOf(to) > order.indexOf(from);
 }

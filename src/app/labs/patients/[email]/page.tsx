@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/auth-guard";
 import { getPatientHistory } from "../../actions";
 import { COLUMN_LABEL, getColumnFor } from "@/lib/columns";
 import { HudPulse } from "../../HudPulse";
+import { formatPersonName } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -106,7 +107,7 @@ export default async function PatientDetailPage({
               ← Patients
             </Link>
             <h1 className="mt-0.5 truncate text-base font-semibold leading-tight tracking-tight text-zinc-900">
-              {primary.patient_name}
+              {formatPersonName(primary.patient_name)}
             </h1>
             <p className="truncate text-[11px] text-zinc-500">
               {history.email}

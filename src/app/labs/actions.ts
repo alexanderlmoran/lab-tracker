@@ -628,6 +628,11 @@ const StepToggleInput = z.object({
   step: z.number().int().min(1).max(9),
   completed: z.boolean(),
   note: z.string().trim().max(500).optional(),
+  // When toggling a step forward, also set every workflow-prior step true.
+  // No emails are fired for the cascaded steps — patient emails are still
+  // only ever sent via the explicit Send-email button. Used when staff
+  // backfills a case that was completed outside the app.
+  cascadePrior: z.boolean().optional(),
 });
 
 export async function setStepCompleted(input: {
@@ -635,26 +640,64 @@ export async function setStepCompleted(input: {
   step: number;
   completed: boolean;
   note?: string;
+  cascadePrior?: boolean;
 }): Promise<ActionResult> {
   const user = await requireSignedIn();
   const parsed = StepToggleInput.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }
-  const { caseId, step, completed, note } = parsed.data;
+  const { caseId, step, completed, note, cascadePrior } = parsed.data;
   const stepNum = step as StepNumber;
   const dbCol = STEP_TO_DB_COL[stepNum];
 
   const db = getSupabaseAdmin();
 
-  // Step 1 → true sets the predicted result-date range from the catalog;
-  // toggling step 1 back to false clears it. No-op for other steps so we
-  // don't pay the extra fetch on every check.
   const updatePayload: Record<string, unknown> = { [dbCol]: completed };
   let expectedDatesEvent: { min: string | null; max: string | null } | null = null;
   let armTracking = false; // see post-update step below
-  if (stepNum === 1) {
-    if (completed) {
+
+  // Cascade: when ticking a later step true, auto-tick every workflow-prior
+  // step too. Compute which steps actually transition false→true here so
+  // we can emit one step_toggled event per change and only run step-1
+  // side-effects when step 1 itself transitions.
+  const cascadedNewlySet: StepNumber[] = [];
+  let step1NewlySet = stepNum === 1 && completed;
+  if (cascadePrior && completed && stepNum > 1) {
+    const { getCaseWorkflow, getWorkflowSteps } = await import("@/lib/columns");
+    const { data: stateRow } = await db
+      .from("lab_cases")
+      .select(
+        "lab_name, step1_sample_sent, step2_partial_received, step3_partial_uploaded, step4_complete_received, step5_complete_uploaded, step6_rof_scheduled, step7_rof_completed, step8_protocol_emailed, step9_sales_followup",
+      )
+      .eq("id", caseId)
+      .maybeSingle();
+    if (stateRow?.lab_name) {
+      const workflow = getCaseWorkflow({ lab_name: stateRow.lab_name } as Pick<LabCase, "lab_name">);
+      const workflowSteps = getWorkflowSteps(workflow);
+      const targetIdx = workflowSteps.indexOf(stepNum);
+      if (targetIdx > 0) {
+        for (const s of workflowSteps.slice(0, targetIdx)) {
+          const col = STEP_TO_DB_COL[s];
+          if (!stateRow[col as keyof typeof stateRow]) {
+            updatePayload[col] = true;
+            cascadedNewlySet.push(s);
+            if (s === 1) step1NewlySet = true;
+          }
+        }
+      }
+    }
+  }
+
+  // Step 1 → true sets the predicted result-date range from the catalog;
+  // toggling step 1 back to false clears it. Runs for explicit step-1
+  // toggles AND for cascades that newly set step 1.
+  if (stepNum === 1 && !completed) {
+    updatePayload.expected_result_at_min = null;
+    updatePayload.expected_result_at_max = null;
+  }
+  if (step1NewlySet) {
+    {
       const { data: caseRow } = await db
         .from("lab_cases")
         .select("lab_name, lab_panel, collection_date, tracking_number, tracking_polled_at")
@@ -692,9 +735,6 @@ export async function setStepCompleted(input: {
           : 0;
         if (Date.now() - polledAt > 60 * 60 * 1000) armTracking = true;
       }
-    } else {
-      updatePayload.expected_result_at_min = null;
-      updatePayload.expected_result_at_max = null;
     }
   }
 
@@ -712,6 +752,19 @@ export async function setStepCompleted(input: {
     actor: user.email ?? "admin",
     note: note ?? null,
   });
+
+  if (cascadedNewlySet.length > 0) {
+    await db.from("lab_events").insert(
+      cascadedNewlySet.map((s) => ({
+        case_id: caseId,
+        kind: "step_toggled" as const,
+        step: s,
+        completed: true,
+        actor: user.email ?? "admin",
+        note: `Auto-set by cascade from step ${step}`,
+      })),
+    );
+  }
 
   if (expectedDatesEvent) {
     await db.from("lab_events").insert({
@@ -781,23 +834,32 @@ export async function markCaseClosed(
 
   const { data: caseRow, error: fetchErr } = await db
     .from("lab_cases")
-    .select("partial_expected")
+    .select("partial_expected, lab_name")
     .eq("id", caseId)
     .maybeSingle();
   if (fetchErr || !caseRow) {
     return { ok: false, error: fetchErr?.message ?? "Case not found" };
   }
 
-  const updatePayload: Record<string, boolean> = {
-    step1_sample_sent: true,
-    step4_complete_received: true,
-    step5_complete_uploaded: true,
-    step6_rof_scheduled: true,
-    step7_rof_completed: true,
-    step8_protocol_emailed: true,
-    step9_sales_followup: true,
-  };
-  if (caseRow.partial_expected) {
+  // Peptides only have two relevant steps (shipped + received) — closing
+  // a peptides card just means both are ticked. No partial/complete/ROF
+  // chain to fill in.
+  const isPeptides = caseRow.lab_name === "Peptides";
+  const updatePayload: Record<string, boolean> = isPeptides
+    ? {
+        step1_sample_sent: true,
+        step4_complete_received: true,
+      }
+    : {
+        step1_sample_sent: true,
+        step4_complete_received: true,
+        step5_complete_uploaded: true,
+        step6_rof_scheduled: true,
+        step7_rof_completed: true,
+        step8_protocol_emailed: true,
+        step9_sales_followup: true,
+      };
+  if (!isPeptides && caseRow.partial_expected) {
     updatePayload.step2_partial_received = true;
     updatePayload.step3_partial_uploaded = true;
   }

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo } from "react";
 import type { LabCase, TrackingStatus } from "@/lib/types";
+import { formatPersonName } from "@/lib/format";
 
 // Columns track the carrier-side lifecycle, not our workflow steps. "Needs
 // attention" is a synthetic bucket that captures stuck shipments — anything
@@ -186,7 +187,7 @@ function TrackingCard({ c }: { c: LabCase }) {
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate text-xs font-semibold text-zinc-900">
-            {c.patient_name}
+            {formatPersonName(c.patient_name)}
           </p>
           <p className="truncate text-[11px] text-zinc-500">{labLabel}</p>
         </div>

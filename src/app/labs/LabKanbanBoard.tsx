@@ -6,15 +6,18 @@ import { useRouter, useSearchParams } from "next/navigation";
 import type { LabCase } from "@/lib/types";
 import {
   COLUMN_LABEL,
-  COLUMN_ORDER,
+  LAB_BOARD_COLUMN_ORDER,
   type ColumnKey,
   completedStepCount,
   expectedCountdown,
   getCaseStaleness,
+  getCaseWorkflow,
   getColumnFor,
+  getWorkflowSteps,
 } from "@/lib/columns";
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { CaseDetail } from "./CaseDetail";
+import { formatPersonName, formatShortDate } from "@/lib/format";
 
 function formatExpectedRange(min: string | null, max: string | null): string | null {
   if (!min && !max) return null;
@@ -56,6 +59,7 @@ function LabCard({
   onOpen: (row: LabCase) => void;
 }) {
   const done = completedStepCount(row);
+  const totalSteps = getWorkflowSteps(getCaseWorkflow(row)).length;
   const expected = formatExpectedRange(
     row.expected_result_at_min,
     row.expected_result_at_max,
@@ -85,9 +89,9 @@ function LabCard({
         <p className="min-w-0 flex-1 truncate text-[12px] font-medium leading-tight text-zinc-900">
           {labLabel}
         </p>
-        <span className="shrink-0 text-[10px] tabular-nums text-zinc-500">{done}/9</span>
+        <span className="shrink-0 text-[10px] tabular-nums text-zinc-500">{done}/{totalSteps}</span>
       </div>
-      <p className="truncate text-[11px] text-zinc-500">{row.patient_name}</p>
+      <p className="truncate text-[11px] text-zinc-500">{formatPersonName(row.patient_name)}</p>
 
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
@@ -95,8 +99,8 @@ function LabCard({
             <span
               title={
                 countdown.tone === "overdue"
-                  ? `Expected by ${row.expected_result_at_max} — past`
-                  : `Expected by ${row.expected_result_at_max}`
+                  ? `Expected by ${formatShortDate(row.expected_result_at_max)} — past`
+                  : `Expected by ${formatShortDate(row.expected_result_at_max)}`
               }
               className={`rounded px-1 py-0.5 text-[9px] font-medium tabular-nums tracking-wide ${
                 countdown.tone === "overdue"
@@ -165,7 +169,7 @@ function StaticColumn({
 }) {
   return (
     <section
-      className="kanban-col flex flex-col p-1.5 lg:min-h-0"
+      className="kanban-col flex min-w-0 flex-1 basis-0 flex-col p-1.5 lg:min-h-0"
       data-col={col}
     >
       <header className="flex items-center justify-between px-1.5 py-1">
@@ -257,9 +261,10 @@ export function LabKanbanBoard({ rows }: { rows: LabCase[] }) {
     rof_scheduled: [],
     rof_done: [],
     closed: [],
+    completed: [],
   };
   for (const r of filtered) grouped[getColumnFor(r)].push(r);
-  for (const col of COLUMN_ORDER) {
+  for (const col of LAB_BOARD_COLUMN_ORDER) {
     grouped[col].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   }
 
@@ -298,8 +303,8 @@ export function LabKanbanBoard({ rows }: { rows: LabCase[] }) {
         filtered={filtered.length}
       />
 
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-3 lg:grid-cols-7 lg:flex-1 lg:min-h-0">
-        {COLUMN_ORDER.map((col) => {
+      <div className="flex flex-row flex-nowrap gap-1.5 pb-2 lg:flex-1 lg:min-h-0">
+        {LAB_BOARD_COLUMN_ORDER.map((col) => {
           const colRows = grouped[col];
           return (
             <StaticColumn key={col} col={col} count={colRows.length}>
@@ -324,7 +329,7 @@ export function LabKanbanBoard({ rows }: { rows: LabCase[] }) {
             <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-4">
               <div>
                 <h2 className="text-base font-semibold text-zinc-900">
-                  {activeRow.patient_name}
+                  {formatPersonName(activeRow.patient_name)}
                 </h2>
                 <p className="text-xs text-zinc-500">
                   {activeRow.lab_name}

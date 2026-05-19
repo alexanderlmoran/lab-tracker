@@ -7,11 +7,13 @@ export type ColumnKey =
   | "rof_scheduled"
   | "rof_done"
   | "closed"
+  | "completed"
   | "untouched";
 
-// Seven columns — a "New" column at the left holds cases that exist but
-// haven't shipped yet (step 1 not ticked). Without it, brand-new cases
-// would have no home.
+// Workflow column order — drives the column-jump menu and progression UI.
+// `completed` is intentionally excluded: it's an archive bucket, not a
+// step you "jump" to from the menu. The By-Lab board uses
+// LAB_BOARD_COLUMN_ORDER below to append it.
 export const COLUMN_ORDER: ColumnKey[] = [
   "untouched",
   "sample_sent",
@@ -22,6 +24,11 @@ export const COLUMN_ORDER: ColumnKey[] = [
   "closed",
 ];
 
+export const LAB_BOARD_COLUMN_ORDER: ColumnKey[] = [
+  ...COLUMN_ORDER,
+  "completed",
+];
+
 export const COLUMN_LABEL: Record<ColumnKey, string> = {
   untouched: "New",
   sample_sent: "Sample Sent",
@@ -30,6 +37,7 @@ export const COLUMN_LABEL: Record<ColumnKey, string> = {
   rof_scheduled: "ROF Scheduled",
   rof_done: "ROF Done",
   closed: "Protocol received",
+  completed: "Completed",
 };
 
 const STEP_LABELS: Record<StepNumber, string> = {
@@ -60,13 +68,92 @@ export function stepLabel(step: StepNumber): string {
   return STEP_LABELS[step];
 }
 
+// ── Per-lab workflow shapes ────────────────────────────────────────────
+//
+// The default 9-step pipeline is built for labs that mail a sample kit and
+// return results. Peptides aren't labs — we ship a product to the patient
+// and they receive it. The whole partial/complete/ROF chain doesn't apply.
+// We model that as a separate workflow that reuses two of the existing
+// boolean columns (step1 + step4) so no schema change is needed:
+//   • step1_sample_sent      → "Shipped to patient" (fires the Peptides email)
+//   • step4_complete_received → "Patient received package" (closes the case)
+//
+// New shapes can be added here. Each is a subset of the 9-step DB columns
+// plus per-step relabels.
+
+export type CaseWorkflow = "default" | "peptides";
+
+type CaseLike = Pick<LabCase, "lab_name">;
+
+export function getCaseWorkflow(row: CaseLike): CaseWorkflow {
+  if (row.lab_name === "Peptides") return "peptides";
+  return "default";
+}
+
+const WORKFLOW_STEPS: Record<CaseWorkflow, StepNumber[]> = {
+  default: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+  peptides: [1, 4],
+};
+
+const PEPTIDES_STEP_LABELS: Partial<Record<StepNumber, string>> = {
+  1: "Shipped to patient → Email",
+  4: "Patient received package",
+};
+
+/** Optional column subset for the per-lab process strip. Peptides shows
+ * only three lanes (Untouched → Shipped → Received); default keeps all 7.
+ * `completed` (archived) is not part of either strip — it's a board-level
+ * bucket, not a workflow step. */
+const WORKFLOW_COLUMNS: Record<CaseWorkflow, ColumnKey[]> = {
+  default: ["untouched", "sample_sent", "partial_results", "complete_results", "rof_scheduled", "rof_done", "closed"],
+  peptides: ["untouched", "sample_sent", "closed"],
+};
+
+const PEPTIDES_COLUMN_LABELS: Partial<Record<ColumnKey, string>> = {
+  sample_sent: "Shipped",
+  closed: "Received",
+};
+
+export function getWorkflowSteps(workflow: CaseWorkflow): StepNumber[] {
+  return WORKFLOW_STEPS[workflow];
+}
+
+export function getWorkflowColumns(workflow: CaseWorkflow): ColumnKey[] {
+  return WORKFLOW_COLUMNS[workflow];
+}
+
+export function stepLabelForWorkflow(
+  workflow: CaseWorkflow,
+  step: StepNumber,
+): string {
+  if (workflow === "peptides") {
+    const override = PEPTIDES_STEP_LABELS[step];
+    if (override) return override;
+  }
+  return STEP_LABELS[step];
+}
+
+export function columnLabelForWorkflow(
+  workflow: CaseWorkflow,
+  col: ColumnKey,
+): string {
+  if (workflow === "peptides") {
+    const override = PEPTIDES_COLUMN_LABELS[col];
+    if (override) return override;
+  }
+  return COLUMN_LABEL[col];
+}
+
 export function stepIsComplete(c: LabCase, step: StepNumber): boolean {
   return Boolean(c[STEP_TO_COL[step]]);
 }
 
 export function completedStepCount(c: LabCase): number {
+  // Counts only steps relevant to the case's workflow so the "X of N"
+  // display matches what the user actually sees in the checklist.
+  const steps = getWorkflowSteps(getCaseWorkflow(c));
   let n = 0;
-  for (const s of [1, 2, 3, 4, 5, 6, 7, 8, 9] as StepNumber[]) {
+  for (const s of steps) {
     if (stepIsComplete(c, s)) n++;
   }
   return n;
@@ -81,6 +168,16 @@ export function highestCompletedStep(c: LabCase): number {
 }
 
 export function getColumnFor(c: LabCase): ColumnKey {
+  // Archived cases live in the terminal "Completed" lane regardless of which
+  // workflow they came from — once archived, they're done.
+  if (c.archived_at) return "completed";
+  // Peptides workflow: shipped → received. Step 4 alone closes the card —
+  // none of the partial/complete/ROF lanes apply.
+  if (getCaseWorkflow(c) === "peptides") {
+    if (c.step4_complete_received) return "closed";
+    if (c.step1_sample_sent) return "sample_sent";
+    return "untouched";
+  }
   if (c.step8_protocol_emailed && c.step9_sales_followup) return "closed";
   if (c.step7_rof_completed) return "rof_done";
   if (c.step6_rof_scheduled) return "rof_scheduled";
@@ -148,6 +245,7 @@ const COL_TO_PATIENT_COL: Record<ColumnKey, PatientColumnKey> = {
   rof_scheduled: "p_results",
   rof_done: "p_results",
   closed: "p_done",
+  completed: "p_done",
 };
 
 export function getPatientColumnForCase(c: LabCase): PatientColumnKey {

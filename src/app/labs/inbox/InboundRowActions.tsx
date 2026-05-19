@@ -7,6 +7,7 @@ import {
   rematchInboundEmail,
 } from "./actions";
 import type { LabCase } from "@/lib/types";
+import { formatPersonName } from "@/lib/format";
 
 export function InboundRowActions({
   inboundId,
@@ -95,7 +96,7 @@ export function InboundRowActions({
           <option value="">— Pick a case —</option>
           {activeCases.map((c) => (
             <option key={c.id} value={c.id}>
-              {c.patient_name} · {c.lab_name}
+              {formatPersonName(c.patient_name)} · {c.lab_name}
             </option>
           ))}
         </select>

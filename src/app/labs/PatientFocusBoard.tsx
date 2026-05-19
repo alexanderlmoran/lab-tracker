@@ -11,6 +11,7 @@ import {
 } from "@/lib/columns";
 import { searchPatients, type PatientSuggestion } from "./patient-search-action";
 import { CaseDetail } from "./CaseDetail";
+import { formatPersonName, formatShortDate } from "@/lib/format";
 
 /**
  * Single-patient focused kanban. Replaces the old "By patient" grid view —
@@ -116,7 +117,7 @@ function PatientPicker() {
                   className="block w-full px-3 py-2 text-left text-sm hover:bg-zinc-50"
                 >
                   <div className="font-medium text-zinc-900">
-                    {s.name ?? s.email ?? s.key}
+                    {s.name ? formatPersonName(s.name) : (s.email ?? s.key)}
                   </div>
                   {s.email ? (
                     <div className="text-xs text-zinc-500">{s.email}</div>
@@ -176,7 +177,7 @@ function FocusedView({
     <div className="flex h-full flex-col">
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2">
         <div>
-          <h2 className="text-sm font-semibold text-zinc-900">{patientName}</h2>
+          <h2 className="text-sm font-semibold text-zinc-900">{formatPersonName(patientName)}</h2>
           <p className="text-[11px] text-zinc-500">
             {email} · {total} lab{total === 1 ? "" : "s"}
             {archived > 0
@@ -227,7 +228,7 @@ function FocusedView({
             <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-4">
               <div>
                 <h2 className="text-base font-semibold text-zinc-900">
-                  {activeCase.patient_name}
+                  {formatPersonName(activeCase.patient_name)}
                 </h2>
                 <p className="text-xs text-zinc-500">
                   {activeCase.lab_name}
@@ -267,7 +268,7 @@ function FocusLabCard({ row, onOpen }: { row: FocusedCase; onOpen: () => void })
         {labLabel}
       </p>
       <p className="truncate text-[10.5px] text-zinc-500">
-        {row.collection_date ? `Drawn ${row.collection_date}` : "No collection date"}
+        {row.collection_date ? `Drawn ${formatShortDate(row.collection_date)}` : "No collection date"}
         {row.archived ? " · archived" : ""}
       </p>
     </button>

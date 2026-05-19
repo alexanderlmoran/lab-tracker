@@ -228,9 +228,14 @@ async function loadAllTemplateRows(): Promise<{
 }> {
   try {
     const db = getSupabaseAdmin();
-    const { data } = await db
+    const { data, error } = await db
       .from("email_templates")
       .select("id, kind, trigger_lab_name, subject, heading, paragraphs, bcc, enabled");
+    if (error) {
+      // Surface in dev — silent fallback hides things like stale PostgREST
+      // schema cache after a migration.
+      console.error("[email_templates] select failed:", error.message);
+    }
     const rows = (data ?? []) as DbRow[];
     const globalByKind = new Map<string, DbRow>();
     const byKindLab = new Map<string, DbRow>();
@@ -243,7 +248,8 @@ async function loadAllTemplateRows(): Promise<{
       }
     }
     return { globalByKind, byKindLab, allRows: rows };
-  } catch {
+  } catch (err) {
+    console.error("[email_templates] select threw:", err);
     return {
       globalByKind: new Map(),
       byKindLab: new Map(),

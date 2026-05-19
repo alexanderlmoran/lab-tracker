@@ -2,7 +2,14 @@
 
 import { useState, useTransition } from "react";
 import type { LabCase } from "@/lib/types";
-import { COLUMN_LABEL, COLUMN_ORDER, completedStepCount, getColumnFor } from "@/lib/columns";
+import {
+  columnLabelForWorkflow,
+  completedStepCount,
+  getCaseWorkflow,
+  getColumnFor,
+  getWorkflowColumns,
+  getWorkflowSteps,
+} from "@/lib/columns";
 import { StepChecklist } from "./StepChecklist";
 import { ActivityLog } from "./ActivityLog";
 import { BarcodeScanner } from "./BarcodeScanner";
@@ -15,17 +22,26 @@ import { getLabDestination, trackingDestinationWarning } from "@/lib/labs/catalo
 // PracticeBetter integration removed 2026-05-12 — was abandoned 2026-05-11
 // per the project memo. Staff now upload results to PB manually if needed.
 
-function MarkClosedButton({ caseId, isAlreadyClosed }: { caseId: string; isAlreadyClosed: boolean }) {
+function MarkClosedButton({
+  caseId,
+  isAlreadyClosed,
+  isPeptides,
+}: {
+  caseId: string;
+  isAlreadyClosed: boolean;
+  isPeptides: boolean;
+}) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
+  const confirmText = isPeptides
+    ? "Mark this peptides order as received?\n\nTicks both shipping and receipt steps so the card lands in the Received column. No patient emails fire — use this for orders the patient has already confirmed.\n\nReversible: untick any step to undo."
+    : "Mark this case as closed?\n\nSets every applicable step to done and lands the card in the Closed column. No patient emails fire — use this for cases that are historically complete.\n\nReversible: untick any step in the checklist to undo.";
+  const doneLabel = isPeptides ? "Received" : "Protocol received";
+  const actionLabel = isPeptides ? "Mark as received →" : "Mark protocol received →";
+
   function onClick() {
-    if (
-      !confirm(
-        "Mark this case as closed?\n\nSets every applicable step to done and lands the card in the Closed column. No patient emails fire — use this for cases that are historically complete.\n\nReversible: untick any step in the checklist to undo.",
-      )
-    )
-      return;
+    if (!confirm(confirmText)) return;
     setError(null);
     start(async () => {
       const r = await markCaseClosed(caseId);
@@ -39,10 +55,16 @@ function MarkClosedButton({ caseId, isAlreadyClosed }: { caseId: string; isAlrea
         type="button"
         onClick={onClick}
         disabled={pending || isAlreadyClosed}
-        title={isAlreadyClosed ? "Protocol already received" : "Bulk-advance to Protocol received without firing emails"}
+        title={
+          isAlreadyClosed
+            ? `${doneLabel} already`
+            : isPeptides
+            ? "Mark the peptides order as received without firing emails"
+            : "Bulk-advance to Protocol received without firing emails"
+        }
         className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {pending ? "Saving…" : isAlreadyClosed ? "Protocol received" : "Mark protocol received →"}
+        {pending ? "Saving…" : isAlreadyClosed ? doneLabel : actionLabel}
       </button>
       {error ? <span className="text-[11px] text-red-600">{error}</span> : null}
     </div>
@@ -141,6 +163,9 @@ function Field({
 export function CaseDetail({ row }: { row: LabCase }) {
   const currentCol = getColumnFor(row);
   const done = completedStepCount(row);
+  const workflow = getCaseWorkflow(row);
+  const workflowColumns = getWorkflowColumns(workflow);
+  const totalSteps = getWorkflowSteps(workflow).length;
   const destination = getLabDestination(row.lab_name, row.lab_panel);
   const destWarning = trackingDestinationWarning({
     labName: row.lab_name,
@@ -260,8 +285,11 @@ export function CaseDetail({ row }: { row: LabCase }) {
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
           Process
         </h3>
-        <div className="grid grid-cols-7 overflow-hidden rounded-md border border-zinc-200 text-center text-[11px] font-medium">
-          {COLUMN_ORDER.map((col) => {
+        <div
+          className="grid overflow-hidden rounded-md border border-zinc-200 text-center text-[11px] font-medium"
+          style={{ gridTemplateColumns: `repeat(${workflowColumns.length}, minmax(0, 1fr))` }}
+        >
+          {workflowColumns.map((col) => {
             const active = col === currentCol;
             return (
               <div
@@ -272,13 +300,13 @@ export function CaseDetail({ row }: { row: LabCase }) {
                     : "bg-zinc-50 text-zinc-600"
                 }`}
               >
-                {COLUMN_LABEL[col]}
+                {columnLabelForWorkflow(workflow, col)}
               </div>
             );
           })}
         </div>
         <p className="mt-2 text-[11px] text-zinc-500">
-          {done} of 9 steps complete · column derived from highest completed step
+          {done} of {totalSteps} steps complete · column derived from highest completed step
         </p>
       </section>
 
@@ -287,7 +315,11 @@ export function CaseDetail({ row }: { row: LabCase }) {
           <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
             Steps
           </h3>
-          <MarkClosedButton caseId={row.id} isAlreadyClosed={currentCol === "closed"} />
+          <MarkClosedButton
+            caseId={row.id}
+            isAlreadyClosed={currentCol === "closed"}
+            isPeptides={workflow === "peptides"}
+          />
         </div>
         <StepChecklist initial={row} />
       </section>

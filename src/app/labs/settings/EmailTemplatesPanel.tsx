@@ -59,6 +59,10 @@ export function EmailTemplatesPanel({
 
   return (
     <div className="space-y-6">
+      {/* Shared autocomplete source — used by every email input below for
+          inline suggestions as the admin types. The explicit Quick-add
+          <select> in BccField gives a visible "history" dropdown for less
+          discoverable browsers. */}
       <datalist id={emailsDatalistId}>
         {knownEmails.map((e) => (
           <option key={e} value={e} />
@@ -70,6 +74,7 @@ export function EmailTemplatesPanel({
         templates={patient}
         currentUser={currentUser}
         emailsDatalistId={emailsDatalistId}
+        knownEmails={knownEmails}
       />
       <TemplateGroup
         heading="Staff emails"
@@ -77,6 +82,7 @@ export function EmailTemplatesPanel({
         templates={staff}
         currentUser={currentUser}
         emailsDatalistId={emailsDatalistId}
+        knownEmails={knownEmails}
       />
 
       <div className="space-y-3">
@@ -112,6 +118,7 @@ export function EmailTemplatesPanel({
                 template={t}
                 currentUser={currentUser}
                 emailsDatalistId={emailsDatalistId}
+                knownEmails={knownEmails}
               />
             ))}
           </div>
@@ -122,6 +129,12 @@ export function EmailTemplatesPanel({
         <CreateCustomDialog
           suggestions={suggestions}
           emailsDatalistId={emailsDatalistId}
+          knownEmails={knownEmails}
+          existingPairs={
+            new Set(
+              custom.map((t) => `${t.kind}::${t.triggerLabName ?? ""}`),
+            )
+          }
           onClose={() => setShowCreate(false)}
         />
       ) : null}
@@ -135,12 +148,14 @@ function TemplateGroup({
   templates,
   currentUser,
   emailsDatalistId,
+  knownEmails,
 }: {
   heading: string;
   description: string;
   templates: EmailTemplateRow[];
   currentUser: SessionUser;
   emailsDatalistId: string;
+  knownEmails: string[];
 }) {
   if (templates.length === 0) return null;
   return (
@@ -156,6 +171,7 @@ function TemplateGroup({
             template={t}
             currentUser={currentUser}
             emailsDatalistId={emailsDatalistId}
+            knownEmails={knownEmails}
           />
         ))}
       </div>
@@ -167,10 +183,12 @@ function TemplateCard({
   template,
   currentUser,
   emailsDatalistId,
+  knownEmails,
 }: {
   template: EmailTemplateRow;
   currentUser: SessionUser;
   emailsDatalistId: string;
+  knownEmails: string[];
 }) {
   const isCustom = template.id != null && template.triggerLabName != null;
   const [open, setOpen] = useState(false);
@@ -450,6 +468,7 @@ function TemplateCard({
               value={bcc}
               onChange={setBcc}
               emailsDatalistId={emailsDatalistId}
+              knownEmails={knownEmails}
             />
           </div>
 
@@ -500,10 +519,18 @@ function TemplateCard({
 function CreateCustomDialog({
   suggestions,
   emailsDatalistId,
+  knownEmails,
+  existingPairs,
   onClose,
 }: {
   suggestions: CustomTemplateSuggestion[];
   emailsDatalistId: string;
+  knownEmails: string[];
+  /** Set of `${kind}::${labName}` for overrides that already exist. The
+   * dialog refuses to submit on a match — direct the admin to edit the
+   * existing card instead, which is friendlier than the raw unique-index
+   * violation that Postgres returns. */
+  existingPairs: Set<string>;
   onClose: () => void;
 }) {
   const labOptions = useMemo(
@@ -556,8 +583,16 @@ function CreateCustomDialog({
     };
   }
 
+  const isDuplicate = existingPairs.has(`${kind}::${lab}`);
+
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (isDuplicate) {
+      setError(
+        `An override for "${PATIENT_KIND_LABEL[kind] ?? kind}" + ${lab} already exists. Edit the existing card in the Custom per-lab templates section instead.`,
+      );
+      return;
+    }
     setError(null);
     startTransition(async () => {
       const res = await createCustomEmailTemplate({
@@ -569,7 +604,16 @@ function CreateCustomDialog({
         bcc,
       });
       if (!res.ok) {
-        setError(res.error);
+        // Surface a friendlier message for the unique-index violation that
+        // Postgres returns when the (kind, trigger_lab_name) row already
+        // exists, in case the existingPairs set was stale.
+        const isDupErr =
+          /email_templates_kind_lab_uniq|duplicate key/i.test(res.error);
+        setError(
+          isDupErr
+            ? `An override for "${PATIENT_KIND_LABEL[kind] ?? kind}" + ${lab} already exists. Edit the existing card in the Custom per-lab templates section instead.`
+            : res.error,
+        );
         return;
       }
       window.location.reload();
@@ -613,7 +657,9 @@ function CreateCustomDialog({
             >
               {Object.entries(PATIENT_KIND_LABEL).map(([k, label]) => (
                 <option key={k} value={k}>
-                  {label}
+                  {existingPairs.has(`${k}::${lab}`)
+                    ? `${label} — already overridden`
+                    : label}
                 </option>
               ))}
             </select>
@@ -629,12 +675,21 @@ function CreateCustomDialog({
             >
               {labOptions.map((o) => (
                 <option key={o.name} value={o.name}>
-                  {o.name}
+                  {existingPairs.has(`${kind}::${o.name}`)
+                    ? `${o.name} — already overridden`
+                    : o.name}
                 </option>
               ))}
             </select>
           </label>
         </div>
+        {isDuplicate ? (
+          <p className="rounded-md bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+            An override already exists for this stage + lab. Close this dialog
+            and edit the existing card under <strong>Custom per-lab templates</strong>{" "}
+            instead.
+          </p>
+        ) : null}
 
         <label className="block">
           <span className="text-xs font-medium text-zinc-700">Subject</span>
@@ -674,6 +729,7 @@ function CreateCustomDialog({
           value={bcc}
           onChange={markTouched(setBcc)}
           emailsDatalistId={emailsDatalistId}
+          knownEmails={knownEmails}
         />
 
         {error ? (
@@ -692,10 +748,15 @@ function CreateCustomDialog({
           </button>
           <button
             type="submit"
-            disabled={pending}
+            disabled={pending || isDuplicate}
+            title={
+              isDuplicate
+                ? "An override already exists for this stage + lab"
+                : undefined
+            }
             className="rounded-md bg-zinc-900 px-4 py-1.5 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
           >
-            {pending ? "Creating…" : "Create template"}
+            {pending ? "Creating…" : isDuplicate ? "Already exists" : "Create template"}
           </button>
         </div>
       </form>
@@ -704,22 +765,23 @@ function CreateCustomDialog({
 }
 
 /**
- * BCC editor with a "Quick add" picker fed from previously-used addresses.
- * The main input stays comma-separated for power-users; the dropdown +
- * Add button appends one address at a time without retyping (and without
- * the typos that "cetnerwellness" comes from).
+ * BCC editor with an explicit "Add from history" dropdown fed by every email
+ * address the app has previously used (other templates' BCCs, app_users,
+ * configured app_settings). Picking from the dropdown appends one address
+ * at a time to the comma-separated field — visible and zero-typing, so the
+ * cetnerwellness-vs-centnerwellness class of typo never happens twice.
  */
 function BccField({
   value,
   onChange,
   emailsDatalistId,
+  knownEmails,
 }: {
   value: string;
   onChange: (v: string) => void;
   emailsDatalistId: string;
+  knownEmails: string[];
 }) {
-  const [pick, setPick] = useState("");
-
   const existing = useMemo(() => {
     const set = new Set<string>();
     for (const part of value.split(/[,\n;]/)) {
@@ -729,16 +791,19 @@ function BccField({
     return set;
   }, [value]);
 
-  function addPicked() {
-    const v = pick.trim();
+  // Hide addresses already on the BCC list from the picker so the menu only
+  // surfaces useful additions.
+  const pickable = useMemo(
+    () => knownEmails.filter((e) => !existing.has(e.toLowerCase())),
+    [knownEmails, existing],
+  );
+
+  function appendAddress(addr: string) {
+    const v = addr.trim();
     if (!v) return;
-    if (existing.has(v.toLowerCase())) {
-      setPick("");
-      return;
-    }
+    if (existing.has(v.toLowerCase())) return;
     const sep = value.trim() ? ", " : "";
     onChange(`${value}${sep}${v}`);
-    setPick("");
   }
 
   return (
@@ -759,30 +824,34 @@ function BccField({
           The patient never sees this list.
         </p>
       </label>
-      <div className="mt-1.5 flex items-center gap-2">
-        <input
-          type="email"
-          list={emailsDatalistId}
-          value={pick}
-          onChange={(e) => setPick(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              addPicked();
-            }
-          }}
-          placeholder="Quick add from previously-used addresses"
-          className="flex-1 min-w-[200px] rounded-md border border-zinc-300 bg-white px-3 py-1 text-xs text-zinc-900 placeholder:text-zinc-400"
-        />
-        <button
-          type="button"
-          onClick={addPicked}
-          disabled={!pick.trim()}
-          className="shrink-0 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
-        >
-          Add
-        </button>
-      </div>
+      {pickable.length > 0 ? (
+        <div className="mt-1.5 flex items-center gap-2">
+          <select
+            value=""
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v) appendAddress(v);
+              // Reset to the placeholder so the same address can be re-picked
+              // from another row (and the placeholder reads naturally).
+              e.currentTarget.value = "";
+            }}
+            className="flex-1 min-w-[200px] rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700"
+          >
+            <option value="">
+              + Add from history ({pickable.length} known address{pickable.length === 1 ? "" : "es"})
+            </option>
+            {pickable.map((e) => (
+              <option key={e} value={e}>
+                {e}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : (
+        <p className="mt-1.5 text-[11px] text-zinc-400">
+          No previously-used addresses to suggest.
+        </p>
+      )}
     </div>
   );
 }

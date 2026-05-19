@@ -8,6 +8,7 @@ import { planColumnJump, type StepPlan } from "@/lib/column-jump";
 import { stepLabel } from "@/lib/columns";
 import { setStepCompleted } from "./actions";
 import { skipPatientEmail } from "./email-actions";
+import { formatPersonName } from "@/lib/format";
 import type { EmailConfirmHandle } from "./EmailConfirmDialog";
 
 export type ColumnJumpHandle = {
@@ -129,7 +130,7 @@ export const ColumnJumpDialog = forwardRef<ColumnJumpHandle>(function ColumnJump
       <div className="flex flex-col">
         <div className="border-b border-zinc-200 px-6 py-4">
           <h2 className="text-base font-semibold text-zinc-900">
-            Move {state.row.patient_name} to &ldquo;{COLUMN_LABEL[state.target]}&rdquo;?
+            Move {formatPersonName(state.row.patient_name)} to &ldquo;{COLUMN_LABEL[state.target]}&rdquo;?
           </h2>
         </div>
 

@@ -7,6 +7,7 @@ import { GmailPanel } from "./GmailPanel";
 import { getPortalUrlForLab } from "@/lib/inbound/detect-notification";
 import { LabPortalLauncher } from "../LabPortalLauncher";
 import { HudPulse } from "../HudPulse";
+import { formatPersonName } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -178,7 +179,7 @@ export default async function InboxPage() {
                       {ext.patient_name ? (
                         <>
                           <dt className="text-zinc-500">Patient</dt>
-                          <dd className="text-zinc-900">{ext.patient_name}</dd>
+                          <dd className="text-zinc-900">{formatPersonName(ext.patient_name)}</dd>
                         </>
                       ) : null}
                       {ext.test_panel ? (
@@ -217,7 +218,7 @@ export default async function InboxPage() {
                             href={`/labs/${matchedCase.id}`}
                             className="font-medium text-zinc-900 hover:underline"
                           >
-                            {matchedCase.patient_name} · {matchedCase.lab_name}
+                            {formatPersonName(matchedCase.patient_name)} · {matchedCase.lab_name}
                           </Link>
                         </span>
                       ) : (

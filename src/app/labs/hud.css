@@ -288,6 +288,7 @@
 .kanban-col[data-col="rof_scheduled"]    { --col-c: var(--c-rof-s); }
 .kanban-col[data-col="rof_done"]         { --col-c: var(--c-rof-d); }
 .kanban-col[data-col="closed"]           { --col-c: var(--c-closed); }
+.kanban-col[data-col="completed"]        { --col-c: var(--c-closed); }
 
 /* By-patient 4-bucket palette — pick representative shades from the
    underlying 7-column buckets each one covers. */

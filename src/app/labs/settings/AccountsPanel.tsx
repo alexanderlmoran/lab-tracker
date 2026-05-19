@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import type { SessionUser, AppRole } from "@/lib/auth-guard";
+import { ROLE_LABEL } from "@/lib/format";
 import {
   deleteAppUser,
   inviteAppUser,
@@ -86,7 +87,7 @@ function InviteForm({ currentUser }: { currentUser: SessionUser }) {
       >
         {roleOptions.map((r) => (
           <option key={r} value={r}>
-            {r}
+            {ROLE_LABEL[r] ?? r}
           </option>
         ))}
       </select>
@@ -183,7 +184,7 @@ function UserRow({
               list (e.g. an admin viewing a developer row). */}
           {[...new Set([user.role, ...roleOptions])].map((r) => (
             <option key={r} value={r}>
-              {r}
+              {ROLE_LABEL[r as AppRole] ?? r}
             </option>
           ))}
         </select>
@@ -218,7 +219,7 @@ function UserRow({
             onClick={() => {
               if (
                 !confirm(
-                  `Generate a temporary password for ${user.email}?\n\nThis replaces their current password immediately. Share the password with them and have them change it at /labs/account after signing in.`,
+                  `Generate a temporary password for ${user.email}?\n\nThis replaces their current password immediately. Share the password with them and have them change it from their user-chip dropdown after signing in.`,
                 )
               ) {
                 return;
@@ -284,8 +285,8 @@ function UserRow({
             </p>
             <p className="text-[11px] text-amber-700">
               Share it directly. They sign in at /login with their email + this
-              password, then change it at /labs/account. It won&apos;t be shown
-              again.
+              password, then change it from their user-chip dropdown. It
+              won&apos;t be shown again.
             </p>
           </div>
         ) : null}

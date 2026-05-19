@@ -259,9 +259,140 @@ const CommitInput = z.object({
       expectedResultAtMinIso: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
       expectedResultAtMaxIso: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
       notes: z.string().max(2000).nullable(),
+      // When true, server-side dup detection won't skip this row even if it
+      // matches an existing case. Set by the operator's Import-anyway choice
+      // in the preview screen.
+      forceImport: z.boolean().optional(),
     }),
   ),
 });
+
+export type DuplicateMatch =
+  | { kind: "none" }
+  | {
+      kind: "exact";
+      matchedOn: "tracking_number" | "patient_email+lab+date";
+      existingCaseId: string;
+    }
+  | {
+      kind: "similar";
+      matchedOn: "patient_email+lab+panel";
+      existingCaseId: string;
+      existingCollectionDate: string | null;
+    };
+
+const DupCheckInput = z.object({
+  rows: z.array(
+    z.object({
+      patientEmail: z.string().email().max(200),
+      labName: z.string().min(1).max(100),
+      labPanel: z.string().max(100).nullable(),
+      trackingNumber: z.string().max(100).nullable(),
+      sampleSentAtIso: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+    }),
+  ),
+});
+
+/**
+ * Classify each candidate row as none / exact-duplicate / similar-duplicate
+ * against the existing (non-deleted) lab_cases. Used by the import preview
+ * to flag dupes before commit so the operator can pick Skip / Import-anyway
+ * per row or in bulk.
+ *
+ *   exact   — same tracking number, OR same (email + lab + collection_date).
+ *             Almost certainly the same shipment being re-imported.
+ *   similar — same (email + lab + panel) but different/missing date. Could
+ *             be a legitimate re-order; surfaces for operator review.
+ *   none    — no overlap.
+ */
+export async function checkImportDuplicates(input: {
+  rows: Array<{
+    patientEmail: string;
+    labName: string;
+    labPanel: string | null;
+    trackingNumber: string | null;
+    sampleSentAtIso: string | null;
+  }>;
+}): Promise<ActionResult<DuplicateMatch[]>> {
+  await requireSignedIn();
+  const parsed = DupCheckInput.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+  const db = getSupabaseAdmin();
+  const rows = parsed.data.rows;
+  const out: DuplicateMatch[] = rows.map(() => ({ kind: "none" }));
+
+  // Pass 1 — tracking-number exact match.
+  const tnPairs = rows
+    .map((r, i) => ({ tn: r.trackingNumber, i }))
+    .filter((x): x is { tn: string; i: number } => !!x.tn);
+  if (tnPairs.length > 0) {
+    const { data } = await db
+      .from("lab_cases")
+      .select("id, tracking_number")
+      .in("tracking_number", tnPairs.map((x) => x.tn))
+      .is("deleted_at", null);
+    const byTn = new Map<string, string>();
+    for (const r of (data ?? []) as Array<{ id: string; tracking_number: string | null }>) {
+      if (r.tracking_number) byTn.set(r.tracking_number, r.id);
+    }
+    for (const { tn, i } of tnPairs) {
+      const id = byTn.get(tn);
+      if (id) {
+        out[i] = { kind: "exact", matchedOn: "tracking_number", existingCaseId: id };
+      }
+    }
+  }
+
+  // Pass 2 — email+lab+date exact match, only for rows not already flagged.
+  // Pass 3 — email+lab+panel similar match, only for rows still none.
+  // Single per-row query; row counts are bounded (<500), and this avoids a
+  // complex OR filter that PostgREST escapes awkwardly.
+  for (let i = 0; i < rows.length; i++) {
+    if (out[i].kind !== "none") continue;
+    const r = rows[i];
+    const emailNorm = r.patientEmail.trim().toLowerCase();
+    let q = db
+      .from("lab_cases")
+      .select("id, collection_date, lab_panel")
+      .ilike("patient_email", emailNorm)
+      .eq("lab_name", r.labName)
+      .is("deleted_at", null)
+      .limit(5);
+    const { data } = await q;
+    const matches = (data ?? []) as Array<{
+      id: string;
+      collection_date: string | null;
+      lab_panel: string | null;
+    }>;
+    if (matches.length === 0) continue;
+
+    // Exact same date wins over panel-only.
+    if (r.sampleSentAtIso) {
+      const exact = matches.find((m) => m.collection_date === r.sampleSentAtIso);
+      if (exact) {
+        out[i] = {
+          kind: "exact",
+          matchedOn: "patient_email+lab+date",
+          existingCaseId: exact.id,
+        };
+        continue;
+      }
+    }
+    // Panel-aware similar match (or panel-less when both are null).
+    const panelMatch = matches.find((m) => (m.lab_panel ?? null) === (r.labPanel ?? null));
+    const pick = panelMatch ?? matches[0];
+    out[i] = {
+      kind: "similar",
+      matchedOn: "patient_email+lab+panel",
+      existingCaseId: pick.id,
+      existingCollectionDate: pick.collection_date,
+    };
+  }
+
+  return { ok: true, data: out };
+}
 
 export type CommitImportResult = {
   bulkImportId: string;
@@ -350,6 +481,7 @@ export async function commitImport(input: {
     expectedResultAtMinIso: string | null;
     expectedResultAtMaxIso: string | null;
     notes: string | null;
+    forceImport?: boolean;
   }>;
 }): Promise<ActionResult<CommitImportResult>> {
   const user = await requireSignedIn();
@@ -369,7 +501,7 @@ export async function commitImport(input: {
   // whole batch. Throughput is not a concern at <500 rows.
   for (let i = 0; i < parsed.data.rows.length; i++) {
     const r = parsed.data.rows[i];
-    if (dupIdx.has(i)) {
+    if (dupIdx.has(i) && !r.forceImport) {
       skippedDuplicates.push({
         patientName: r.patientName,
         labName: r.labName,

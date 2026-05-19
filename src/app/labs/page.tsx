@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { requireUser } from "@/lib/auth-guard";
 import { listDistinctLabNames, listLabCases, listPatientCases } from "./actions";
 import { parseSinceKey, sinceDaysForKey } from "./time-range";
@@ -38,16 +39,31 @@ export default async function LabsPage({
   // Patient-focus mode pulls a single patient's full history (active +
   // archived). Skip the standard active-case query in that case — it's
   // wasteful and would override the focused dataset.
-  const [cases, labNames, focusedCases] = await Promise.all([
+  //
+  // Archived cases populate the "Completed" lane on the By-Lab board.
+  // We honor the same time-window filter so the lane doesn't unbound
+  // ("All time" still shows them all).
+  const [activeCases, archivedCases, labNames, focusedCases] = await Promise.all([
     focusedPatient
       ? Promise.resolve([])
       : listLabCases({
           view: "active",
           filters: { q, lab, sinceDays: sinceDays ?? undefined },
         }),
+    focusedPatient
+      ? Promise.resolve([])
+      : listLabCases({
+          view: "archived",
+          filters: { q, lab, sinceDays: sinceDays ?? undefined },
+        }),
     listDistinctLabNames(),
     focusedPatient ? listPatientCases(focusedPatient) : Promise.resolve([]),
   ]);
+  // By-Lab board includes archived (they sit in the "Completed" lane).
+  // Tracking board only cares about active shipments — archived would
+  // clutter it. HudPulse and the count chip reflect active-only.
+  const labBoardCases = [...activeCases, ...archivedCases];
+  const cases = activeCases;
 
   const isPatientFocus = tab === "patients";
   const focusedPatientName = focusedCases[0]?.patient_name ?? null;
@@ -74,6 +90,12 @@ export default async function LabsPage({
               <div className="flex-1 min-w-0">
                 <SearchBar labNames={labNames} />
               </div>
+              <Link
+                href="/labs/archived"
+                className="text-xs text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline"
+              >
+                Archive →
+              </Link>
               <RefreshAllTrackingButton />
             </>
           ) : null}
@@ -87,7 +109,7 @@ export default async function LabsPage({
               initialName={focusedPatientName}
             />
           </div>
-        ) : cases.length === 0 ? (
+        ) : (tab === "labs" ? labBoardCases : cases).length === 0 ? (
           <div className="rounded-lg border border-dashed border-zinc-300 bg-white p-12 text-center">
             <p className="text-sm text-zinc-600">
               {hasFilters ? "No cases match your filters." : "No cases yet."}
@@ -106,7 +128,7 @@ export default async function LabsPage({
         ) : (
           <div className="flex-1 lg:min-h-0">
             {tab === "labs" ? (
-              <LabKanbanBoard rows={cases} />
+              <LabKanbanBoard rows={labBoardCases} />
             ) : (
               <TrackingBoard rows={cases} />
             )}

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { LabCase } from "@/lib/types";
 import { STEP_BOOLEAN_COLUMNS } from "@/lib/types";
+import { formatPersonName } from "@/lib/format";
 import {
   bulkRestore,
   bulkUnarchive,
@@ -120,7 +121,7 @@ export function BulkRecoveryTable({
     if (kind === "delete") {
       if (
         !confirm(
-          `Permanently move "${row.patient_name}" off this list?\n\nDeleted cases stay recoverable here unless purged.`,
+          `Permanently move "${formatPersonName(row.patient_name)}" off this list?\n\nDeleted cases stay recoverable here unless purged.`,
         )
       ) {
         return;
@@ -264,7 +265,7 @@ export function BulkRecoveryTable({
             >
               <input
                 type="checkbox"
-                aria-label={`Select ${row.patient_name}`}
+                aria-label={`Select ${formatPersonName(row.patient_name)}`}
                 checked={checked}
                 onChange={(e) => toggleOne(row.id, e.target.checked)}
                 className="h-4 w-4 cursor-pointer rounded border-zinc-300"
@@ -273,7 +274,7 @@ export function BulkRecoveryTable({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                   <span className="truncate text-sm font-medium text-zinc-900">
-                    {row.patient_name}
+                    {formatPersonName(row.patient_name)}
                   </span>
                   <span className="text-[11px] text-zinc-500">
                     {row.patient_email}

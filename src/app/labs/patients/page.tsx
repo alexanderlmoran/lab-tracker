@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth-guard";
 import { listPatients } from "../actions";
+import { formatPersonName } from "@/lib/format";
 import { PatientSearch } from "./PatientSearch";
 import { HudPulse } from "../HudPulse";
 
@@ -77,7 +78,7 @@ export default async function PatientsPage({
                         )}`}
                         className="font-medium text-zinc-900 hover:underline"
                       >
-                        {p.patient_name}
+                        {formatPersonName(p.patient_name)}
                       </Link>
                     </td>
                     <td className="px-4 py-2 text-zinc-700">
