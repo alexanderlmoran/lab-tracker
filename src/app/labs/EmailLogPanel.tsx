@@ -89,9 +89,17 @@ function formatTimestamp(iso: string): string {
   });
 }
 
-export function EmailLogPanel({ caseId }: { caseId: string }) {
+export function EmailLogPanel({
+  caseId,
+  compact = false,
+}: {
+  caseId: string;
+  /** When true, show only the latest 5 kinds with a "Show all" expander. */
+  compact?: boolean;
+}) {
   const [logs, setLogs] = useState<EmailLog[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -121,27 +129,57 @@ export function EmailLogPanel({ caseId }: { caseId: string }) {
       <p className="text-xs text-zinc-500">No emails sent for this case yet.</p>
     );
   }
-  const rows = rollup(logs);
+  const rows = rollup(logs).sort((a, b) =>
+    a.createdAt < b.createdAt ? 1 : -1,
+  );
+  const showCompact = compact && !expanded;
+  const visible = showCompact ? rows.slice(0, 5) : rows;
+  const hidden = rows.length - visible.length;
+
   return (
-    <ul className="space-y-1">
-      {rows.map((r) => (
-        <li
-          key={r.kind}
-          className="flex flex-wrap items-center gap-2 text-xs"
-          title={r.errorMessage ?? undefined}
+    <div className="flex min-h-0 flex-col">
+      <ul
+        className={`space-y-1 ${
+          compact && expanded ? "max-h-64 overflow-y-auto" : ""
+        }`}
+      >
+        {visible.map((r) => (
+          <li
+            key={r.kind}
+            className="flex flex-wrap items-center gap-2 text-xs"
+            title={r.errorMessage ?? undefined}
+          >
+            <span className="min-w-0 flex-1 truncate text-zinc-700">
+              {KIND_LABEL[r.kind] ?? r.kind}
+            </span>
+            {statusChip(r.status)}
+            <span className="text-[11px] tabular-nums text-zinc-500">
+              {formatTimestamp(r.createdAt)}
+            </span>
+            {r.count > 1 ? (
+              <span className="text-[10px] text-zinc-400">×{r.count}</span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      {compact && hidden > 0 && !expanded ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="mt-1 self-start text-[11px] text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline"
         >
-          <span className="min-w-0 flex-1 truncate text-zinc-700">
-            {KIND_LABEL[r.kind] ?? r.kind}
-          </span>
-          {statusChip(r.status)}
-          <span className="text-[11px] tabular-nums text-zinc-500">
-            {formatTimestamp(r.createdAt)}
-          </span>
-          {r.count > 1 ? (
-            <span className="text-[10px] text-zinc-400">×{r.count}</span>
-          ) : null}
-        </li>
-      ))}
-    </ul>
+          Show all ({rows.length})
+        </button>
+      ) : null}
+      {compact && expanded ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          className="mt-1 self-start text-[11px] text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline"
+        >
+          Show fewer
+        </button>
+      ) : null}
+    </div>
   );
 }

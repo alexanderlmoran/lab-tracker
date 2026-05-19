@@ -18,6 +18,12 @@ import {
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { CaseDetail } from "./CaseDetail";
 import { formatPersonName, formatShortDate } from "@/lib/format";
+import {
+  CountChips,
+  ZERO_COUNTS,
+  attemptTintClasses,
+  type CardCounts,
+} from "./card-counts";
 
 function formatExpectedRange(min: string | null, max: string | null): string | null {
   if (!min && !max) return null;
@@ -54,9 +60,11 @@ function isProbablyReady(row: LabCase): boolean {
 function LabCard({
   row,
   onOpen,
+  counts,
 }: {
   row: LabCase;
   onOpen: (row: LabCase) => void;
+  counts: CardCounts;
 }) {
   const done = completedStepCount(row);
   const totalSteps = getWorkflowSteps(getCaseWorkflow(row)).length;
@@ -77,13 +85,20 @@ function LabCard({
     ? `${row.lab_name} · ${row.lab_panel}`
     : row.lab_name;
 
+  // Open contact attempts take precedence over the probably-ready highlight —
+  // a patient we can't reach is more actionable than one whose results may be in.
+  const tint = attemptTintClasses(counts.openAttempts);
+  const baseTone = tint
+    ? tint
+    : probablyReady
+      ? "border-purple-300 bg-purple-50"
+      : "border-zinc-200 bg-white";
+
   return (
     <button
       type="button"
       onClick={() => onOpen(row)}
-      className={`flex w-full flex-col gap-0.5 rounded-md border bg-white p-1.5 text-left shadow-sm transition-shadow hover:shadow ${
-        probablyReady ? "border-purple-300 bg-purple-50" : "border-zinc-200"
-      }`}
+      className={`flex w-full flex-col gap-0.5 rounded-md border p-1.5 text-left shadow-sm transition-shadow hover:shadow ${baseTone}`}
     >
       <div className="flex items-baseline justify-between gap-2">
         <p className="min-w-0 flex-1 truncate text-[12px] font-medium leading-tight text-zinc-900">
@@ -95,6 +110,7 @@ function LabCard({
 
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
+          <CountChips counts={counts} />
           {countdown ? (
             <span
               title={
@@ -231,7 +247,13 @@ function LabFilterBar({
   );
 }
 
-export function LabKanbanBoard({ rows }: { rows: LabCase[] }) {
+export function LabKanbanBoard({
+  rows,
+  counts,
+}: {
+  rows: LabCase[];
+  counts?: Record<string, CardCounts>;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -312,7 +334,12 @@ export function LabKanbanBoard({ rows }: { rows: LabCase[] }) {
                 <p className="px-2 py-3 text-[11px] text-zinc-400">—</p>
               ) : (
                 colRows.map((row) => (
-                  <LabCard key={row.id} row={row} onOpen={openLabDetail} />
+                  <LabCard
+                    key={row.id}
+                    row={row}
+                    onOpen={openLabDetail}
+                    counts={counts?.[row.id] ?? ZERO_COUNTS}
+                  />
                 ))
               )}
             </StaticColumn>
@@ -348,7 +375,10 @@ export function LabKanbanBoard({ rows }: { rows: LabCase[] }) {
               </button>
             </div>
             <div className="overflow-y-auto px-6 py-5">
-              <CaseDetail row={activeRow} />
+              <CaseDetail
+                row={activeRow}
+                initialOpenAttempts={counts?.[activeRow.id]?.openAttempts ?? 0}
+              />
             </div>
             <div className="flex items-center justify-end gap-2 border-t border-zinc-200 px-6 py-3">
               <Link

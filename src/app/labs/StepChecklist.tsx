@@ -114,82 +114,90 @@ export function StepChecklist({ initial }: { initial: LabCase }) {
     }
   }
 
-  return (
-    <>
-      <div className="space-y-1">
-        {stepsToShow.map((step, idx) => {
-          const displayNum = idx + 1;
-          const checked = stepIsComplete(c, step);
-          // Step 4 is not normally an email step, but in the peptides
-          // workflow it stands in for "package received" — closure, no
-          // email. Only step 1 ever fires an email there.
-          const isEmail = isEmailStep(step) && (workflow !== "peptides" || step === 1);
-          const isPending = pendingStep === step;
-          const isOptional = workflow === "default" && (step === 2 || step === 3);
+  // Split into two columns: first half (1-5) left, second half (6+) right.
+  // Indexes are 0-based here; idx + 1 stays the visible step number.
+  const midpoint = Math.ceil(stepsToShow.length / 2);
 
-          return (
-            <div
-              key={step}
-              className="flex items-start gap-3 rounded-md px-2 py-2 text-sm hover:bg-zinc-50"
-            >
-              <label className="flex flex-1 items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="mt-0.5 h-4 w-4 rounded border-zinc-300"
-                  checked={checked}
-                  disabled={isPending}
-                  onChange={(e) => {
-                    onToggle(step, e.target.checked);
-                  }}
-                />
-                <div className="flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span
-                      className={`text-zinc-900 ${
-                        checked ? "line-through decoration-zinc-400" : ""
-                      }`}
-                    >
-                      {displayNum}. {stepLabelForWorkflow(workflow, step)}
-                    </span>
-                    {isOptional && !checked ? (
-                      <span className="text-[11px] text-zinc-500">(optional)</span>
-                    ) : null}
-                  </div>
-                </div>
-              </label>
-              {isEmail ? (() => {
-                const kind = emailKindForStep(step);
-                const sentAt = kind ? lastSentAt[kind] : undefined;
-                const hasSent = Boolean(sentAt);
-                const tooltip = hasSent
-                  ? `Last sent ${new Date(sentAt!).toLocaleString(undefined, {
-                      month: "short",
-                      day: "numeric",
-                      hour: "numeric",
-                      minute: "2-digit",
-                    })}`
-                  : "No email sent yet — opens the confirmation dialog";
-                return (
-                  <button
-                    type="button"
-                    onClick={() => void onSendEmail(step)}
-                    disabled={isPending}
-                    className="shrink-0 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
-                    title={tooltip}
-                  >
-                    {hasSent ? "Resend email" : "Send email"}
-                  </button>
-                );
-              })() : null}
-            </div>
-          );
-        })}
-        {error ? (
-          <p className="px-2 text-xs text-red-600" role="alert">
-            {error}
-          </p>
+  function renderStep(step: StepNumber, idx: number) {
+    const displayNum = idx + 1;
+    const checked = stepIsComplete(c, step);
+    // Step 4 is not normally an email step, but in the peptides workflow it
+    // stands in for "package received" — closure, no email. Only step 1
+    // ever fires an email there.
+    const isEmail = isEmailStep(step) && (workflow !== "peptides" || step === 1);
+    const isPending = pendingStep === step;
+    const isOptional = workflow === "default" && (step === 2 || step === 3);
+    const kind = isEmail ? emailKindForStep(step) : null;
+    const sentAt = kind ? lastSentAt[kind] : undefined;
+    const hasSent = Boolean(sentAt);
+    const tooltip = hasSent
+      ? `Last sent ${new Date(sentAt!).toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })}`
+      : "No email sent yet — opens the confirmation dialog";
+
+    return (
+      <div
+        key={step}
+        className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-zinc-50"
+      >
+        <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+          <input
+            type="checkbox"
+            className="h-4 w-4 shrink-0 rounded border-zinc-300"
+            checked={checked}
+            disabled={isPending}
+            onChange={(e) => {
+              onToggle(step, e.target.checked);
+            }}
+          />
+          <span
+            className={`min-w-0 flex-1 truncate text-[13px] text-zinc-900 ${
+              checked ? "line-through decoration-zinc-400" : ""
+            }`}
+            title={stepLabelForWorkflow(workflow, step)}
+          >
+            {displayNum}. {stepLabelForWorkflow(workflow, step)}
+            {isOptional && !checked ? (
+              <span className="ml-1 text-[10px] text-zinc-500">(opt)</span>
+            ) : null}
+          </span>
+        </label>
+        {isEmail ? (
+          <button
+            type="button"
+            onClick={() => void onSendEmail(step)}
+            disabled={isPending}
+            className="shrink-0 rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+            title={tooltip}
+          >
+            {hasSent ? "Resend" : "Send"}
+          </button>
         ) : null}
       </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="grid gap-x-4 gap-y-0 lg:grid-cols-2">
+        <div className="flex flex-col">
+          {stepsToShow.slice(0, midpoint).map((step, i) => renderStep(step, i))}
+        </div>
+        <div className="flex flex-col">
+          {stepsToShow.slice(midpoint).map((step, i) =>
+            renderStep(step, i + midpoint),
+          )}
+        </div>
+      </div>
+      {error ? (
+        <p className="mt-1 px-2 text-xs text-red-600" role="alert">
+          {error}
+        </p>
+      ) : null}
       <EmailConfirmDialog ref={emailDialogRef} />
     </>
   );

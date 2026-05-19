@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth-guard";
 import { listDistinctLabNames, listLabCases, listPatientCases } from "./actions";
+import { getCardCountsForCases } from "./draw-actions";
 import { parseSinceKey, sinceDaysForKey } from "./time-range";
 import { LabKanbanBoard } from "./LabKanbanBoard";
 import { TrackingBoard } from "./TrackingBoard";
@@ -65,6 +66,13 @@ export default async function LabsPage({
   const labBoardCases = [...activeCases, ...archivedCases];
   const cases = activeCases;
 
+  // Touch counts (open contact attempts + emails sent) for the kanban cards.
+  // One batched query for everything currently visible — falls back to
+  // {} if it throws so an analytics hiccup never breaks the board.
+  const cardCounts = await getCardCountsForCases(
+    Array.from(new Set([...labBoardCases, ...focusedCases].map((c) => c.id))),
+  ).catch(() => ({}));
+
   const isPatientFocus = tab === "patients";
   const focusedPatientName = focusedCases[0]?.patient_name ?? null;
   const focusedRows = focusedCases.map((c) => ({
@@ -128,7 +136,7 @@ export default async function LabsPage({
         ) : (
           <div className="flex-1 lg:min-h-0">
             {tab === "labs" ? (
-              <LabKanbanBoard rows={labBoardCases} />
+              <LabKanbanBoard rows={labBoardCases} counts={cardCounts} />
             ) : (
               <TrackingBoard rows={cases} />
             )}

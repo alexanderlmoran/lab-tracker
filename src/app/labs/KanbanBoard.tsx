@@ -12,6 +12,7 @@ import {
 } from "@/lib/columns";
 import { PatientCard } from "./PatientCard";
 import { bulkArchive, bulkDelete, bulkSetStepCompleted } from "./actions";
+import type { CardCounts } from "./card-counts";
 
 const BULK_STEP_OPTIONS: Array<{ step: 1 | 4 | 5 | 6 | 7; label: string }> = [
   { step: 1, label: "Sample sent" },
@@ -51,13 +52,15 @@ function SelectablePatientCard({
   selectMode,
   selected,
   onToggleSelect,
+  counts,
 }: {
   group: PatientGroup;
   selectMode: boolean;
   selected: Set<string>;
   onToggleSelect: (caseIds: string[]) => void;
+  counts?: Record<string, CardCounts>;
 }) {
-  if (!selectMode) return <PatientCard group={group} />;
+  if (!selectMode) return <PatientCard group={group} counts={counts} />;
 
   // In select mode every card in the group toggles together — bulk actions
   // operate on the patient as a whole. Visual ring uses "all selected" state.
@@ -101,13 +104,19 @@ function SelectablePatientCard({
         ) : null}
       </span>
       <div className="pointer-events-none">
-        <PatientCard group={group} />
+        <PatientCard group={group} counts={counts} />
       </div>
     </div>
   );
 }
 
-export function KanbanBoard({ rows }: { rows: LabCase[] }) {
+export function KanbanBoard({
+  rows,
+  counts,
+}: {
+  rows: LabCase[];
+  counts?: Record<string, CardCounts>;
+}) {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [, startBulk] = useTransition();
@@ -240,6 +249,7 @@ export function KanbanBoard({ rows }: { rows: LabCase[] }) {
                     selectMode={selectMode}
                     selected={selected}
                     onToggleSelect={toggleSelectGroup}
+                    counts={counts}
                   />
                 ))
               )}

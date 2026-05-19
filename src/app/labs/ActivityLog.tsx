@@ -36,14 +36,26 @@ function describe(ev: LabEvent): string {
       return "Email failed";
     case "email_skipped":
       return "Email skipped";
+    case "contact_attempted":
+      return "Contact attempted";
+    case "contact_reached":
+      return "Patient reached";
     default:
       return ev.kind;
   }
 }
 
-export function ActivityLog({ caseId }: { caseId: string }) {
+export function ActivityLog({
+  caseId,
+  compact = false,
+}: {
+  caseId: string;
+  /** When true, collapse to the most recent 5 with a "Show all" expander. */
+  compact?: boolean;
+}) {
   const [events, setEvents] = useState<LabEvent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,24 +86,52 @@ export function ActivityLog({ caseId }: { caseId: string }) {
     return <p className="text-xs text-zinc-500">No activity yet.</p>;
   }
 
+  const showCompact = compact && !expanded;
+  const visible = showCompact ? events.slice(0, 5) : events;
+  const hidden = events.length - visible.length;
+
   return (
-    <ul className="divide-y divide-zinc-100 text-xs">
-      {events.map((ev) => (
-        <li key={ev.id} className="flex items-start gap-3 py-2">
-          <span className="w-32 shrink-0 font-mono text-zinc-500">
-            {fmtTs(ev.created_at)}
-          </span>
-          <span className="w-32 shrink-0 truncate text-zinc-600">
-            {ev.actor}
-          </span>
-          <span className="text-zinc-900">
-            {describe(ev)}
-            {ev.note ? (
-              <span className="ml-1 text-zinc-500">— {ev.note}</span>
-            ) : null}
-          </span>
-        </li>
-      ))}
-    </ul>
+    <div className="flex min-h-0 flex-col">
+      <ul
+        className={`divide-y divide-zinc-100 text-xs ${
+          compact && expanded ? "max-h-64 overflow-y-auto" : ""
+        }`}
+      >
+        {visible.map((ev) => (
+          <li key={ev.id} className="flex items-start gap-2 py-1.5">
+            <span className="w-28 shrink-0 font-mono text-[11px] text-zinc-500">
+              {fmtTs(ev.created_at)}
+            </span>
+            <span className="min-w-0 flex-1 text-zinc-900">
+              {describe(ev)}
+              {ev.note ? (
+                <span className="ml-1 text-zinc-500">— {ev.note}</span>
+              ) : null}
+              <span className="ml-1 text-[10px] text-zinc-400">
+                {ev.actor}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      {compact && hidden > 0 && !expanded ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="mt-1 self-start text-[11px] text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline"
+        >
+          Show all ({events.length})
+        </button>
+      ) : null}
+      {compact && expanded ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          className="mt-1 self-start text-[11px] text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline"
+        >
+          Show fewer
+        </button>
+      ) : null}
+    </div>
   );
 }

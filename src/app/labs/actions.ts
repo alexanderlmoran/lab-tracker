@@ -990,7 +990,7 @@ export type LabCaseFilters = {
   q?: string;
   /** Exact lab_name match. */
   lab?: string;
-  /** Time window — restrict to cases updated within the last N days. */
+  /** Time window — restrict to cases whose collection (service) date falls within the last N days. */
   sinceDays?: number;
 };
 
@@ -1040,8 +1040,12 @@ export async function listLabCases(opts: {
 
   const sinceDays = opts.filters?.sinceDays;
   if (typeof sinceDays === "number" && sinceDays > 0) {
-    const cutoff = new Date(Date.now() - sinceDays * 86400000).toISOString();
-    filtered = filtered.gte("updated_at", cutoff);
+    // collection_date is a DATE column (yyyy-mm-dd) — compare against a date string.
+    // Cases with no collection_date are excluded from windowed views; use "All time" to see them.
+    const cutoff = new Date(Date.now() - sinceDays * 86400000)
+      .toISOString()
+      .slice(0, 10);
+    filtered = filtered.gte("collection_date", cutoff);
   }
 
   const { data, error } = await filtered.order("updated_at", {

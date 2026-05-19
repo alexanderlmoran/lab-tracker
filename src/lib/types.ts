@@ -27,7 +27,9 @@ export type LabEventKind =
   | "email_skipped"
   | "case_bulk_imported"
   | "expected_dates_set"
-  | "tracking_refreshed";
+  | "tracking_refreshed"
+  | "contact_attempted"
+  | "contact_reached";
 
 export type LabCase = {
   id: string;
@@ -94,6 +96,15 @@ export type LabEvent = {
   note: string | null;
   meta: Record<string, unknown> | null;
   created_at: string;
+};
+
+export type DrawNote = {
+  id: string;
+  patient_key: string;
+  collection_date: string;
+  body: string;
+  updated_at: string;
+  updated_by: string | null;
 };
 
 export type EmailLog = {

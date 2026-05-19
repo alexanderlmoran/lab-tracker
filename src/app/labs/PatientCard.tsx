@@ -14,6 +14,12 @@ import {
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { CaseDetail } from "./CaseDetail";
 import { formatPersonName, formatShortDate } from "@/lib/format";
+import {
+  CountChips,
+  ZERO_COUNTS,
+  attemptTintClasses,
+  type CardCounts,
+} from "./card-counts";
 
 function timeAgo(iso: string) {
   const ms = Date.now() - new Date(iso).getTime();
@@ -91,10 +97,12 @@ function LabRow({
   row,
   onOpen,
   isLaggard,
+  counts,
 }: {
   row: LabCase;
   onOpen: (row: LabCase) => void;
   isLaggard: boolean;
+  counts: CardCounts;
 }) {
   const done = completedStepCount(row);
   const staleness = getCaseStaleness(row);
@@ -122,11 +130,12 @@ function LabRow({
         onOpen(row);
       }}
       className={`flex w-full flex-col gap-0.5 rounded-md border px-1.5 py-1 text-left transition-colors hover:bg-zinc-50 ${
-        probablyReady
+        attemptTintClasses(counts.openAttempts) ??
+        (probablyReady
           ? "border-purple-300 bg-purple-50"
           : isLaggard
             ? "border-amber-200 bg-amber-50/40"
-            : "border-zinc-200 bg-white"
+            : "border-zinc-200 bg-white")
       }`}
     >
       <div className="flex items-center justify-between gap-2">
@@ -138,6 +147,7 @@ function LabRow({
         </span>
       </div>
       <div className="flex flex-wrap items-center gap-1">
+        <CountChips counts={counts} />
         {countdown ? (
             <span
               title={
@@ -210,7 +220,13 @@ function LabRow({
   );
 }
 
-export function PatientCard({ group }: { group: PatientGroup }) {
+export function PatientCard({
+  group,
+  counts,
+}: {
+  group: PatientGroup;
+  counts?: Record<string, CardCounts>;
+}) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [activeRow, setActiveRow] = useState<LabCase | null>(null);
 
@@ -278,6 +294,7 @@ export function PatientCard({ group }: { group: PatientGroup }) {
               row={c}
               onOpen={openLabDetail}
               isLaggard={c.id === laggardId && group.cases.length > 1}
+              counts={counts?.[c.id] ?? ZERO_COUNTS}
             />
           ))}
         </div>
@@ -317,7 +334,10 @@ export function PatientCard({ group }: { group: PatientGroup }) {
               </button>
             </div>
             <div className="overflow-y-auto px-6 py-5">
-              <CaseDetail row={activeRow} />
+              <CaseDetail
+                row={activeRow}
+                initialOpenAttempts={counts?.[activeRow.id]?.openAttempts ?? 0}
+              />
             </div>
             <div className="flex items-center justify-end gap-2 border-t border-zinc-200 px-6 py-3">
               <Link
