@@ -161,7 +161,11 @@ function ContactAttemptButton({
     start(async () => {
       const r = await recordContactAttempt({ caseId, note: reason });
       if (!r.ok) {
-        setError(r.error ?? "Failed");
+        const msg = r.error ?? "Failed to record contact attempt";
+        setError(msg);
+        // Loud alert — the tiny inline error was easy to miss and made
+        // it look like the action silently failed.
+        alert(`Contact attempt failed:\n\n${msg}`);
         return;
       }
       onAttempt(r.data?.openAttempts ?? openAttempts + 1);
@@ -181,7 +185,9 @@ function ContactAttemptButton({
     start(async () => {
       const r = await recordContactAttempt({ caseId, note: trimmed });
       if (!r.ok) {
-        setError(r.error ?? "Failed");
+        const msg = r.error ?? "Failed to record contact attempt";
+        setError(msg);
+        alert(`Contact attempt failed:\n\n${msg}`);
         return;
       }
       onAttempt(r.data?.openAttempts ?? openAttempts + 1);
