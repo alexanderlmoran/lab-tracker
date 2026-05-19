@@ -7,24 +7,25 @@ export type { CardCounts };
 export const ZERO_COUNTS: CardCounts = { openAttempts: 0, emailCount: 0 };
 
 /**
- * Background + border classes applied to the whole card based on open
- * Nadia-style contact attempts. Escalates amber → orange → rose so the
- * operator sees at a glance who hasn't been reached yet.
- *
- * Returns null when there are no open attempts so the caller can fall
- * back to its default (likely-ready highlight, laggard tint, plain white).
+ * Color classes for the contact-attempt chip — same palette as the
+ * tracking-status badges so escalation reads visually:
+ *   1 attempt  → amber
+ *   2 attempts → orange
+ *   3+         → rose
  */
-export function attemptTintClasses(openAttempts: number): string | null {
-  if (openAttempts <= 0) return null;
-  if (openAttempts === 1) return "border-amber-300 bg-amber-100";
-  if (openAttempts === 2) return "border-orange-300 bg-orange-100";
-  return "border-rose-400 bg-rose-100";
+function attemptChipClasses(openAttempts: number): string {
+  if (openAttempts === 1) return "bg-amber-100 text-amber-800";
+  if (openAttempts === 2) return "bg-orange-100 text-orange-800";
+  return "bg-rose-100 text-rose-800";
 }
 
 /**
  * The touch chips that sit alongside the existing badges row on each
  * card. Renders nothing when both counts are zero so quiet cards stay
- * quiet.
+ * quiet. The contact-attempt chip uses the same shape and palette as the
+ * tracking-status chips (Delivered, In transit, etc) — escalates from
+ * amber → orange → rose so the operator catches it at a glance without a
+ * full-card color change.
  */
 export function CountChips({ counts }: { counts: CardCounts }) {
   const { openAttempts, emailCount } = counts;
@@ -34,7 +35,7 @@ export function CountChips({ counts }: { counts: CardCounts }) {
       {openAttempts > 0 ? (
         <span
           title={`${openAttempts} contact attempt${openAttempts === 1 ? "" : "s"} since last reached`}
-          className="rounded bg-white/70 px-1 py-0.5 text-[9px] font-medium tabular-nums text-zinc-700"
+          className={`rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide tabular-nums ${attemptChipClasses(openAttempts)}`}
         >
           📞 {openAttempts}
         </span>
@@ -42,7 +43,7 @@ export function CountChips({ counts }: { counts: CardCounts }) {
       {emailCount > 0 ? (
         <span
           title={`${emailCount} email${emailCount === 1 ? "" : "s"} sent on this case`}
-          className="rounded bg-white/70 px-1 py-0.5 text-[9px] font-medium tabular-nums text-zinc-700"
+          className="rounded bg-zinc-100 px-1 py-0.5 text-[9px] font-medium tabular-nums text-zinc-600"
         >
           ✉️ {emailCount}
         </span>

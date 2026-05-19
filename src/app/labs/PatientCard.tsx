@@ -14,12 +14,7 @@ import {
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { CaseDetail } from "./CaseDetail";
 import { formatPersonName, formatShortDate } from "@/lib/format";
-import {
-  CountChips,
-  ZERO_COUNTS,
-  attemptTintClasses,
-  type CardCounts,
-} from "./card-counts";
+import { CountChips, ZERO_COUNTS, type CardCounts } from "./card-counts";
 
 function timeAgo(iso: string) {
   const ms = Date.now() - new Date(iso).getTime();
@@ -130,12 +125,11 @@ function LabRow({
         onOpen(row);
       }}
       className={`flex w-full flex-col gap-0.5 rounded-md border px-1.5 py-1 text-left transition-colors hover:bg-zinc-50 ${
-        attemptTintClasses(counts.openAttempts) ??
-        (probablyReady
+        probablyReady
           ? "border-purple-300 bg-purple-50"
           : isLaggard
             ? "border-amber-200 bg-amber-50/40"
-            : "border-zinc-200 bg-white")
+            : "border-zinc-200 bg-white"
       }`}
     >
       <div className="flex items-center justify-between gap-2">

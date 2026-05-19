@@ -142,6 +142,7 @@ function ContactAttemptButton({
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const router = useRouter();
 
   // Close on outside click — the dropdown is a plain absolute div, not a
   // <dialog>, so we wire dismissal ourselves.
@@ -164,6 +165,9 @@ function ContactAttemptButton({
         return;
       }
       onAttempt(r.data?.openAttempts ?? openAttempts + 1);
+      // revalidatePath fires server-side; this ensures the kanban behind
+      // the open modal also re-renders so the 📞 chip appears immediately.
+      router.refresh();
     });
   }
 
@@ -181,6 +185,7 @@ function ContactAttemptButton({
         return;
       }
       onAttempt(r.data?.openAttempts ?? openAttempts + 1);
+      router.refresh();
     });
   }
 
@@ -190,7 +195,7 @@ function ContactAttemptButton({
         type="button"
         onClick={() => setMenuOpen((v) => !v)}
         disabled={pending}
-        title="Log that staff attempted to reach the patient. Card tints amber → orange → rose as attempts pile up."
+        title="Log that staff attempted to reach the patient. Card shows a 📞 N chip that escalates amber → orange → rose as attempts pile up."
         className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs text-amber-900 hover:bg-amber-100 disabled:opacity-50"
       >
         {pending
@@ -238,6 +243,7 @@ function ReachedButton({
 }) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
 
   function onClick() {
     setError(null);
@@ -248,6 +254,7 @@ function ReachedButton({
         return;
       }
       onReached();
+      router.refresh();
     });
   }
 

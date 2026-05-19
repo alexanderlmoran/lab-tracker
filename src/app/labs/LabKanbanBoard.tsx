@@ -18,12 +18,7 @@ import {
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { CaseDetail } from "./CaseDetail";
 import { formatPersonName, formatShortDate } from "@/lib/format";
-import {
-  CountChips,
-  ZERO_COUNTS,
-  attemptTintClasses,
-  type CardCounts,
-} from "./card-counts";
+import { CountChips, ZERO_COUNTS, type CardCounts } from "./card-counts";
 
 function formatExpectedRange(min: string | null, max: string | null): string | null {
   if (!min && !max) return null;
@@ -85,20 +80,13 @@ function LabCard({
     ? `${row.lab_name} · ${row.lab_panel}`
     : row.lab_name;
 
-  // Open contact attempts take precedence over the probably-ready highlight —
-  // a patient we can't reach is more actionable than one whose results may be in.
-  const tint = attemptTintClasses(counts.openAttempts);
-  const baseTone = tint
-    ? tint
-    : probablyReady
-      ? "border-purple-300 bg-purple-50"
-      : "border-zinc-200 bg-white";
-
   return (
     <button
       type="button"
       onClick={() => onOpen(row)}
-      className={`flex w-full flex-col gap-0.5 rounded-md border p-1.5 text-left shadow-sm transition-shadow hover:shadow ${baseTone}`}
+      className={`flex w-full flex-col gap-0.5 rounded-md border bg-white p-1.5 text-left shadow-sm transition-shadow hover:shadow ${
+        probablyReady ? "border-purple-300 bg-purple-50" : "border-zinc-200"
+      }`}
     >
       <div className="flex items-baseline justify-between gap-2">
         <p className="min-w-0 flex-1 truncate text-[12px] font-medium leading-tight text-zinc-900">
