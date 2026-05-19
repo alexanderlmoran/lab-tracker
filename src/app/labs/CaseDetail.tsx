@@ -18,10 +18,55 @@ import { CaseDialog } from "./CaseDialog";
 import { LabPortalLinks } from "./LabPortalLinks";
 import { RefreshLabStatusButton } from "./RefreshLabStatusButton";
 import { RefreshTrackingButton } from "./RefreshTrackingButton";
-import { attachTrackingFromScan, markCaseClosed } from "./actions";
+import { attachTrackingFromScan, deleteLabCase, markCaseClosed } from "./actions";
+import { useRouter } from "next/navigation";
 import { getLabDestination, trackingDestinationWarning } from "@/lib/labs/catalog";
 // PracticeBetter integration removed 2026-05-12 — was abandoned 2026-05-11
 // per the project memo. Staff now upload results to PB manually if needed.
+
+/**
+ * Soft-delete the open case. Routes through deleteLabCase, which sets
+ * deleted_at — the row is recoverable from /labs/settings → Deleted, not
+ * truly destroyed. Confirmation is double-tap (the action is destructive
+ * and lives a click away from non-destructive controls).
+ */
+function DeleteCaseButton({ caseId }: { caseId: string }) {
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
+  function onClick() {
+    if (
+      !confirm(
+        "Delete this case?\n\nIt's a soft delete — the row moves to Settings → Deleted where you can restore it. Patient emails sent so far stay logged.",
+      )
+    ) {
+      return;
+    }
+    setError(null);
+    start(async () => {
+      const r = await deleteLabCase(caseId);
+      if (!r.ok) {
+        setError(r.error ?? "Failed to delete");
+        return;
+      }
+      router.refresh();
+    });
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={pending}
+        className="rounded-md border border-rose-300 bg-white px-2.5 py-1 text-xs text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+        title="Soft-delete this case (recoverable from Settings → Deleted)"
+      >
+        {pending ? "Deleting…" : "Delete case"}
+      </button>
+      {error ? <span className="text-[11px] text-red-600">{error}</span> : null}
+    </div>
+  );
+}
 
 function MarkClosedButton({
   caseId,
@@ -337,6 +382,20 @@ export function CaseDetail({ row }: { row: LabCase }) {
           Activity
         </h3>
         <ActivityLog caseId={row.id} />
+      </section>
+
+      <section className="border-t border-zinc-200 pt-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            Danger zone
+          </h3>
+          <DeleteCaseButton caseId={row.id} />
+        </div>
+        <p className="mt-1 text-[11px] text-zinc-500">
+          Soft-deletes the case. Recoverable from Settings → Deleted. To
+          archive instead (keep it visible in the Completed lane), use the
+          card menu&apos;s Archive action.
+        </p>
       </section>
     </div>
   );
