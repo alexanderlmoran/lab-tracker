@@ -16,6 +16,7 @@ import {
   type CentnerCsvRow,
 } from "@/lib/labs/centner-import";
 import { saveSalesInvoices } from "../sales/actions";
+import { searchPatients } from "../patient-search-action";
 import { LAB_CATALOG, findLabByName } from "@/lib/labs/catalog";
 import {
   aiNormalizeImportDrafts,
@@ -216,6 +217,10 @@ export function ImportClient() {
   // (default for any classified duplicate). "import" = pass forceImport=true
   // so the server-side dup check is overridden.
   const [dupDecision, setDupDecision] = useState<Record<string, "skip" | "import">>({});
+  // Raw CSV text from the most recent upload, capped to a sane size. Passed
+  // through to AI normalization so the model can cross-reference legend
+  // lines and annotations across rows.
+  const [rawCsvText, setRawCsvText] = useState<string | null>(null);
 
   async function persistSalesRows(rows: CentnerCsvRow[]) {
     if (rows.length === 0) return;
@@ -251,6 +256,10 @@ export function ImportClient() {
   async function onFile(file: File) {
     const text = await file.text();
     const table = parseCsv(text);
+    // Stash the raw CSV (capped) so the AI normalization call can reason
+    // across rows — pick up legend lines, comment columns, retroactive
+    // annotations like "abby - vibrant - total tox" elsewhere on the sheet.
+    setRawCsvText(text.length > 12000 ? text.slice(0, 12000) : text);
 
     // Detect Centner format by header signature first; fall back to the
     // canonical Lab Shipping layout if no Centner header is present.
@@ -358,6 +367,7 @@ export function ImportClient() {
         rawLab: d.rawCarrier,
         patientName: d.patientName,
       })),
+      csvContext: rawCsvText ?? undefined,
     });
     if (!r.ok) {
       setAiStatus("failed");
@@ -474,13 +484,85 @@ export function ImportClient() {
   function pickCandidate(key: string, c: PBSuggestion) {
     // CSV trumps the past-patient suggestion on name — only fill in the
     // contact fields. Operator can still edit the name manually if needed.
-    updateDraft(key, {
-      patientEmail: c.email,
-      patientPhone: c.phone,
-      patientDobIso: c.dobIso,
-      matchKind: "exact_one",
-      warning: null,
-    });
+    // Picking a candidate also propagates to every other draft with the
+    // same patient name; the operator is implicitly confirming "this is
+    // who they are", so re-typing the email N more times is busywork.
+    const source = drafts.find((d) => d.draftKey === key);
+    const targetName = source?.patientName.trim().toLowerCase() ?? "";
+    setDrafts((prev) =>
+      prev.map((d) => {
+        if (d.draftKey === key) {
+          return {
+            ...d,
+            patientEmail: c.email,
+            patientPhone: c.phone,
+            patientDobIso: c.dobIso,
+            matchKind: "exact_one",
+            warning: null,
+          };
+        }
+        if (
+          targetName &&
+          d.patientName.trim().toLowerCase() === targetName &&
+          !d.skipReason
+        ) {
+          return {
+            ...d,
+            patientEmail: c.email,
+            patientPhone: c.phone,
+            patientDobIso: c.dobIso,
+            matchKind: "exact_one",
+            warning: null,
+          };
+        }
+        return d;
+      }),
+    );
+  }
+
+  /**
+   * Copy this draft's patientEmail/Phone/DOB to every other non-skipped
+   * draft that has the same patientName (case-insensitive). Used by the
+   * inline "Apply to N rows" button after the operator types an email
+   * manually. Does nothing if no other drafts share the name.
+   */
+  function spreadPatientInfoToSameName(key: string) {
+    const source = drafts.find((d) => d.draftKey === key);
+    if (!source) return;
+    const targetName = source.patientName.trim().toLowerCase();
+    if (!targetName) return;
+    setDrafts((prev) =>
+      prev.map((d) => {
+        if (d.draftKey === key) return d;
+        if (d.skipReason) return d;
+        if (d.patientName.trim().toLowerCase() !== targetName) return d;
+        return {
+          ...d,
+          patientEmail: source.patientEmail,
+          patientPhone: source.patientPhone,
+          patientDobIso: source.patientDobIso,
+          matchKind: source.patientEmail ? "exact_one" : d.matchKind,
+          warning: source.patientEmail ? null : d.warning,
+        };
+      }),
+    );
+  }
+
+  /** How many OTHER non-skipped drafts share the same patient name and
+   * still need this draft's email? Drives the "Apply to N rows" button. */
+  function countSameNameRowsNeedingFill(key: string): number {
+    const source = drafts.find((d) => d.draftKey === key);
+    if (!source || !source.patientEmail) return 0;
+    const targetName = source.patientName.trim().toLowerCase();
+    if (!targetName) return 0;
+    let n = 0;
+    for (const d of drafts) {
+      if (d.draftKey === key) continue;
+      if (d.skipReason) continue;
+      if (d.patientName.trim().toLowerCase() !== targetName) continue;
+      if (d.patientEmail !== source.patientEmail) n += 1;
+    }
+    return n;
   }
 
   function setLabFromCatalogName(key: string, catalogName: string) {
@@ -895,6 +977,13 @@ export function ImportClient() {
                       ))}
                     </div>
                   ) : null}
+                  {!d.skipReason ? (
+                    <InlinePatientSearch
+                      key={`${d.draftKey}-search`}
+                      seedHint={d.patientName}
+                      onPick={(c) => pickCandidate(d.draftKey, c)}
+                    />
+                  ) : null}
                 </td>
                 <td className="px-3 py-2 align-top">
                   <input
@@ -908,6 +997,20 @@ export function ImportClient() {
                     placeholder="—"
                     className="w-56 rounded border border-zinc-200 bg-white px-2 py-1 text-zinc-900"
                   />
+                  {(() => {
+                    const n = countSameNameRowsNeedingFill(d.draftKey);
+                    if (n === 0) return null;
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => spreadPatientInfoToSameName(d.draftKey)}
+                        className="mt-1 inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-800 hover:bg-blue-100"
+                        title="Copy this email/phone/DOB to other rows with the same patient name"
+                      >
+                        Apply to {n} row{n === 1 ? "" : "s"} with same name
+                      </button>
+                    );
+                  })()}
                 </td>
                 <td className="px-3 py-2 align-top">
                   <select
@@ -1071,6 +1174,7 @@ export function ImportClient() {
               setParseStats(null);
               setDupMap({});
               setDupDecision({});
+              setRawCsvText(null);
             }}
             className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50"
           >
@@ -1091,6 +1195,144 @@ export function ImportClient() {
 
       {commitMessage ? (
         <p className="text-xs text-red-600">{commitMessage}</p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Tiny inline typeahead for finding a patient across lab_cases + patients_seed
+ * when the auto-detected candidate chips aren't enough. Lives folded; opens
+ * a search input on click. Results are scoped per-row and pick via the same
+ * pickCandidate path that drives the chips, so the "spread to same-name
+ * rows" behaviour still applies. Seeded-only patients carry an "no prior
+ * labs" hint, matching the new-case picker.
+ */
+function InlinePatientSearch({
+  seedHint,
+  onPick,
+}: {
+  seedHint: string;
+  onPick: (c: PBSuggestion) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<
+    Array<{
+      key: string;
+      name: string | null;
+      email: string | null;
+      phone: string | null;
+      dobIso: string | null;
+      seededOnly?: boolean;
+    }>
+  >([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const term = q.trim();
+    if (term.length < 2) {
+      setResults([]);
+      return;
+    }
+    setLoading(true);
+    let cancelled = false;
+    const handle = setTimeout(async () => {
+      const r = await searchPatients({ query: term, limit: 10 });
+      if (cancelled) return;
+      setResults(r.ok ? (r.data ?? []) : []);
+      setLoading(false);
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [q, open]);
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setOpen(true);
+          setQ(seedHint);
+        }}
+        className="mt-1 inline-flex items-center gap-1 rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[10px] text-zinc-600 hover:bg-zinc-50"
+      >
+        🔍 Search all patients
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-1 rounded border border-zinc-200 bg-white p-1.5">
+      <div className="flex items-center gap-1">
+        <input
+          autoFocus
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Type 2+ chars…"
+          className="w-44 rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-900 placeholder:text-zinc-400"
+        />
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false);
+            setQ("");
+            setResults([]);
+          }}
+          className="text-[11px] text-zinc-500 hover:text-zinc-800"
+          title="Close search"
+        >
+          ✕
+        </button>
+      </div>
+      {loading ? (
+        <p className="mt-1 text-[10px] text-zinc-400">Searching…</p>
+      ) : results.length === 0 && q.trim().length >= 2 ? (
+        <p className="mt-1 text-[10px] text-zinc-400">No matches.</p>
+      ) : results.length > 0 ? (
+        <ul className="mt-1 max-h-40 overflow-y-auto rounded border border-zinc-100">
+          {results.map((r) => (
+            <li key={r.key}>
+              <button
+                type="button"
+                onClick={() => {
+                  onPick({
+                    recordId: r.key,
+                    firstName: r.name?.split(/\s+/)[0] ?? null,
+                    lastName:
+                      r.name && r.name.split(/\s+/).length > 1
+                        ? r.name.split(/\s+/).slice(-1)[0]
+                        : null,
+                    email: r.email,
+                    phone: r.phone,
+                    dobIso: r.dobIso,
+                  });
+                  setOpen(false);
+                  setQ("");
+                  setResults([]);
+                }}
+                className="block w-full px-2 py-1 text-left text-[11px] hover:bg-zinc-50"
+              >
+                <div className="flex items-center gap-1">
+                  <span className="font-medium text-zinc-900">
+                    {r.name ?? "—"}
+                  </span>
+                  {r.seededOnly ? (
+                    <span className="rounded bg-amber-50 px-1 py-px text-[9px] text-amber-800">
+                      no prior labs
+                    </span>
+                  ) : null}
+                </div>
+                <div className="text-[10px] text-zinc-500">
+                  {r.email ?? "no email"}
+                </div>
+              </button>
+            </li>
+          ))}
+        </ul>
       ) : null}
     </div>
   );

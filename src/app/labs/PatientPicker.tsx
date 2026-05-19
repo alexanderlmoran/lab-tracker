@@ -155,7 +155,19 @@ export function PatientPicker({ initial }: { initial?: LabCase | null }) {
                   i === activeIdx ? "bg-zinc-100" : "hover:bg-zinc-50"
                 }`}
               >
-                <div className="font-medium text-zinc-900">{s.name ?? "—"}</div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-zinc-900">
+                    {s.name ?? "—"}
+                  </span>
+                  {s.seededOnly ? (
+                    <span
+                      className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-800"
+                      title="In the seed list but no prior lab case — this would be their first."
+                    >
+                      no prior labs
+                    </span>
+                  ) : null}
+                </div>
                 <div className="text-xs text-zinc-500">
                   {s.email ?? "no email on file"}
                 </div>

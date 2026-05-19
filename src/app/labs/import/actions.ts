@@ -11,6 +11,8 @@ import {
   type NormalizeResult,
 } from "@/lib/ai/normalize-import";
 import { listEffectiveLabs } from "@/lib/labs/effective";
+import { getLabAliasPairs } from "@/lib/labs/catalog";
+import { listSeededPatients } from "@/lib/labs/patients-seed";
 
 /**
  * Patient match outcome attached to a draft. "exact_one" — single PB record
@@ -84,41 +86,88 @@ async function matchPatientToCache(
   const { first, last } = tokenize(trimmed);
   const safe = trimmed.replace(/[%_,()]/g, " ");
 
-  // Search past patients in our own lab_cases table. Dedupe by email so the
-  // same patient with N prior cases shows up once. Preference order:
-  //   1. first + last both match (anywhere in patient_name)
-  //   2. last name only
-  //   3. raw substring of the entered text
-  const { data, error } = await db
-    .from("lab_cases")
-    .select("patient_name, patient_email, patient_phone, patient_dob, updated_at")
-    .ilike("patient_name", `%${safe}%`)
-    .order("updated_at", { ascending: false })
-    .limit(50);
-  if (error || !data) return { kind: "none", candidates: [] };
+  // Search past patients in our own lab_cases table AND the patients_seed
+  // table in parallel. lab_cases is the live source of truth; patients_seed
+  // is the operator-curated import (PB export, Zenoti list) for people who
+  // haven't yet had a case in our DB. Dedupe by email so the same patient
+  // appearing in both surfaces once.
+  const [casesRes, seedRes] = await Promise.all([
+    db
+      .from("lab_cases")
+      .select("patient_name, patient_email, patient_phone, patient_dob, updated_at")
+      .ilike("patient_name", `%${safe}%`)
+      .order("updated_at", { ascending: false })
+      .limit(50),
+    db
+      .from("patients_seed")
+      .select("patient_name, email, phone, dob")
+      .ilike("patient_name", `%${safe}%`)
+      .limit(50),
+  ]);
+  if (casesRes.error && seedRes.error) return { kind: "none", candidates: [] };
 
   const byEmail = new Map<string, PastCaseRow>();
-  for (const r of data as PastCaseRow[]) {
+  for (const r of (casesRes.data ?? []) as PastCaseRow[]) {
     const key = r.patient_email.toLowerCase();
     if (!byEmail.has(key)) byEmail.set(key, r);
+  }
+  for (const r of (seedRes.data ?? []) as Array<{
+    patient_name: string;
+    email: string;
+    phone: string | null;
+    dob: string | null;
+  }>) {
+    const key = r.email.toLowerCase();
+    if (!byEmail.has(key)) {
+      byEmail.set(key, {
+        patient_name: r.patient_name,
+        patient_email: r.email,
+        patient_phone: r.phone,
+        patient_dob: r.dob,
+      });
+    }
   }
   const candidates = [...byEmail.values()].map(rowToSuggestion);
   if (candidates.length === 0) {
     // Last-resort: last name only — useful when CSV row has a typo'd first.
+    // Same dual-source search as the primary pass.
     const fallback = last || first;
     if (!fallback) return { kind: "none", candidates: [] };
-    const { data: fbData } = await db
-      .from("lab_cases")
-      .select("patient_name, patient_email, patient_phone, patient_dob, updated_at")
-      .ilike("patient_name", `%${fallback}%`)
-      .order("updated_at", { ascending: false })
-      .limit(20);
-    if (!fbData || fbData.length === 0) return { kind: "none", candidates: [] };
+    const [fbCases, fbSeed] = await Promise.all([
+      db
+        .from("lab_cases")
+        .select("patient_name, patient_email, patient_phone, patient_dob, updated_at")
+        .ilike("patient_name", `%${fallback}%`)
+        .order("updated_at", { ascending: false })
+        .limit(20),
+      db
+        .from("patients_seed")
+        .select("patient_name, email, phone, dob")
+        .ilike("patient_name", `%${fallback}%`)
+        .limit(20),
+    ]);
     const fbBy = new Map<string, PastCaseRow>();
-    for (const r of fbData as PastCaseRow[]) {
+    for (const r of (fbCases.data ?? []) as PastCaseRow[]) {
       const key = r.patient_email.toLowerCase();
       if (!fbBy.has(key)) fbBy.set(key, r);
     }
+    for (const r of (fbSeed.data ?? []) as Array<{
+      patient_name: string;
+      email: string;
+      phone: string | null;
+      dob: string | null;
+    }>) {
+      const key = r.email.toLowerCase();
+      if (!fbBy.has(key)) {
+        fbBy.set(key, {
+          patient_name: r.patient_name,
+          patient_email: r.email,
+          patient_phone: r.phone,
+          patient_dob: r.dob,
+        });
+      }
+    }
+    if (fbBy.size === 0) return { kind: "none", candidates: [] };
     return {
       kind: "ambiguous",
       candidates: [...fbBy.values()].map(rowToSuggestion),
@@ -191,6 +240,9 @@ export async function aiNormalizeImportDrafts(input: {
     rawLab: string;
     patientName: string;
   }>;
+  /** Free-text context from the CSV (legend lines, comment columns) so the
+   * model can cross-reference annotations across rows. */
+  csvContext?: string;
 }): Promise<ActionResult<NormalizeResult[]>> {
   await requireSignedIn();
   if (input.drafts.length === 0) return { ok: true, data: [] };
@@ -206,7 +258,10 @@ export async function aiNormalizeImportDrafts(input: {
     knownLabs = [];
   }
 
-  // Recent distinct patient names — bounded query (most recent 500).
+  // Known patients for the AI fuzzy-match: union of recent lab_cases rows
+  // (most recent 500) AND the operator-curated patients_seed list. The seed
+  // adds people who exist in PB/Zenoti but haven't had a case yet —
+  // critical for the very first import after they're added.
   let knownPatients: string[] = [];
   try {
     const { data } = await db
@@ -223,6 +278,14 @@ export async function aiNormalizeImportDrafts(input: {
         knownPatients.push(n);
       }
     }
+    const seeded = await listSeededPatients();
+    for (const s of seeded) {
+      const key = s.patientName.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        knownPatients.push(s.patientName);
+      }
+    }
   } catch {
     knownPatients = [];
   }
@@ -236,6 +299,8 @@ export async function aiNormalizeImportDrafts(input: {
       })),
       knownLabs,
       knownPatients,
+      labAliases: getLabAliasPairs(),
+      csvContext: input.csvContext,
     });
     return { ok: true, data: results };
   } catch (err) {

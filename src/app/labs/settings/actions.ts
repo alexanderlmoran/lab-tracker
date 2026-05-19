@@ -13,6 +13,11 @@ import {
   listLabPortalsFromDb,
   type LabPortalRow,
 } from "@/lib/lab-portals/server";
+import {
+  listSeededPatients,
+  upsertSeededPatients,
+  type PatientSeedRow,
+} from "@/lib/labs/patients-seed";
 import { renderTestEmail } from "@/lib/email/render";
 import {
   EMAIL_DEFAULTS,
@@ -1162,3 +1167,210 @@ export async function sendTestEmail(input: {
     };
   }
 }
+
+// ── Patient seed list ─────────────────────────────────────────────────
+
+export type PatientSeedListRow = {
+  patientName: string;
+  email: string;
+  phone: string | null;
+  dobIso: string | null;
+};
+
+export type PatientSeedOverview = {
+  total: number;
+  sample: PatientSeedListRow[];
+};
+
+/**
+ * Cheap server query for the Settings panel's initial render. Returns the
+ * total row count plus the first 50 rows alphabetically — enough to fill
+ * the visible table without serializing the whole seed (which would blow
+ * past Next's 1 MB RSC payload limit at 27k+ rows).
+ */
+export async function getPatientSeedOverview(): Promise<PatientSeedOverview> {
+  await requireRole("admin");
+  const db = getSupabaseAdmin();
+  const [{ count }, { data }] = await Promise.all([
+    db.from("patients_seed").select("id", { count: "exact", head: true }),
+    db
+      .from("patients_seed")
+      .select("patient_name, email, phone, dob")
+      .order("patient_name", { ascending: true })
+      .limit(50),
+  ]);
+  const sample = ((data ?? []) as Array<{
+    patient_name: string;
+    email: string;
+    phone: string | null;
+    dob: string | null;
+  }>).map((r) => ({
+    patientName: r.patient_name,
+    email: r.email,
+    phone: r.phone,
+    dobIso: r.dob,
+  }));
+  return { total: count ?? 0, sample };
+}
+
+/**
+ * Paginated browse for the settings table. Cheap because patients_seed is
+ * indexed on patient_name and we bound the page size.
+ */
+export async function listPatientSeedPage(input: {
+  offset: number;
+  limit?: number;
+}): Promise<PatientSeedListRow[]> {
+  await requireRole("admin");
+  const offset = Math.max(0, Math.floor(input.offset));
+  const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
+  const db = getSupabaseAdmin();
+  const { data } = await db
+    .from("patients_seed")
+    .select("patient_name, email, phone, dob")
+    .order("patient_name", { ascending: true })
+    .range(offset, offset + limit - 1);
+  return ((data ?? []) as Array<{
+    patient_name: string;
+    email: string;
+    phone: string | null;
+    dob: string | null;
+  }>).map((r) => ({
+    patientName: r.patient_name,
+    email: r.email,
+    phone: r.phone,
+    dobIso: r.dob,
+  }));
+}
+
+/**
+ * Type-ahead search the seed by name or email. Caps results to keep the
+ * client-side payload tiny — operator only needs to confirm "is this
+ * person in the seed?" not page through 27k rows.
+ */
+export async function searchPatientSeed(input: {
+  query: string;
+}): Promise<PatientSeedListRow[]> {
+  await requireRole("admin");
+  const q = input.query.trim();
+  if (q.length < 2) return [];
+  const db = getSupabaseAdmin();
+  const safe = q.replace(/[%_,()]/g, " ");
+  const { data } = await db
+    .from("patients_seed")
+    .select("patient_name, email, phone, dob")
+    .or(`patient_name.ilike.%${safe}%,email.ilike.%${safe}%`)
+    .order("patient_name", { ascending: true })
+    .limit(50);
+  return ((data ?? []) as Array<{
+    patient_name: string;
+    email: string;
+    phone: string | null;
+    dob: string | null;
+  }>).map((r) => ({
+    patientName: r.patient_name,
+    email: r.email,
+    phone: r.phone,
+    dobIso: r.dob,
+  }));
+}
+
+// Per-row schema. Validated row-by-row rather than as a batch so one bad
+// row doesn't drop the other 1,499 in a 1,500-row chunk. Email validation
+// is lenient (substring "@") because the wild Centner export contains
+// legacy addresses that fail strict RFC checks but are still better than
+// nothing for matching. Phone gets soft-truncated.
+const SeedRowSchema = z.object({
+  patientName: z.string().trim().min(1).max(200),
+  email: z
+    .string()
+    .trim()
+    .min(3)
+    .max(200)
+    .refine((s) => s.includes("@") && s.indexOf("@") < s.length - 1),
+  phone: z.string().max(80).nullable().transform((v) => (v ? v.slice(0, 40) : v)),
+  dobIso: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .nullable()
+    .or(z.literal("").transform(() => null)),
+});
+
+const SeedUploadInput = z.object({
+  rows: z.array(z.unknown()),
+  source: z.enum(["manual", "practicebetter", "zenoti", "csv_upload"]).default("csv_upload"),
+});
+
+/**
+ * Bulk upload seed patients from a CSV. Re-uploading the same source updates
+ * existing rows in place via email-based upsert — operator can refresh their
+ * PB export periodically without dup-ing rows.
+ *
+ * Rows that fail the per-row schema are counted as `skipped`, not raised as
+ * fatal errors. A whole-batch failure now only happens when the DB write
+ * itself fails (network, RLS, constraint other than email uniqueness).
+ */
+export async function uploadPatientSeed(input: {
+  rows: Array<{
+    patientName: string;
+    email: string;
+    phone: string | null;
+    dobIso: string | null;
+  }>;
+  source?: PatientSeedRow["source"];
+}): Promise<ActionResult<{ inserted: number; failed: number; skipped: number }>> {
+  await requireRole("admin");
+  const parsed = SeedUploadInput.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+  const validRows: Array<{
+    patientName: string;
+    email: string;
+    phone: string | null;
+    dobIso: string | null;
+  }> = [];
+  let skipped = 0;
+  for (const raw of parsed.data.rows) {
+    const r = SeedRowSchema.safeParse(raw);
+    if (r.success) validRows.push(r.data);
+    else skipped += 1;
+  }
+  if (validRows.length === 0) {
+    return { ok: true, data: { inserted: 0, failed: 0, skipped } };
+  }
+  const result = await upsertSeededPatients(
+    validRows.map((r) => ({
+      ...r,
+      source: parsed.data.source,
+    })),
+  );
+  if (result.error) {
+    return { ok: false, error: `DB upsert failed: ${result.error}` };
+  }
+  revalidatePath("/labs/settings");
+  return {
+    ok: true,
+    data: { inserted: result.inserted, failed: result.failed, skipped },
+  };
+}
+
+export async function deletePatientSeed(input: {
+  email: string;
+  /** Required so we delete the specific (email, name) row — family members
+   * sharing one email each get their own row, so email alone would wipe
+   * the whole household. */
+  patientName: string;
+}): Promise<ActionResult> {
+  await requireRole("admin");
+  const db = getSupabaseAdmin();
+  const { error } = await db
+    .from("patients_seed")
+    .delete()
+    .eq("email", input.email.trim().toLowerCase())
+    .eq("patient_name", input.patientName);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/labs/settings");
+  return { ok: true };
+}
+

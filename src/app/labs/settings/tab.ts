@@ -9,6 +9,7 @@ export type SettingsTab =
   | "emails"
   | "labs"
   | "portals"
+  | "patients"
   | "archived"
   | "deleted";
 
@@ -18,6 +19,7 @@ export const SETTINGS_TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: "emails", label: "Email templates" },
   { key: "labs", label: "Lab catalog" },
   { key: "portals", label: "Lab portals" },
+  { key: "patients", label: "Patient seed" },
   { key: "archived", label: "Archived" },
   { key: "deleted", label: "Deleted" },
 ];
@@ -28,6 +30,7 @@ export function parseSettingsTab(value: string | undefined): SettingsTab {
     case "emails":
     case "labs":
     case "portals":
+    case "patients":
     case "archived":
     case "deleted":
       return value;

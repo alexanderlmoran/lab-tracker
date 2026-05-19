@@ -11,17 +11,20 @@ import Anthropic from "@anthropic-ai/sdk";
  */
 
 const SYSTEM_PROMPT = `You normalize messy CSV rows from a lab shipping log. For each row you receive:
-- a raw lab/carrier name (often misspelled, miscapitalized, abbreviated)
-- a raw patient name (same)
+- a raw lab/carrier name (often misspelled, miscapitalized, abbreviated, or domain slang)
+- a raw patient name (same — handle misspellings like "Frereshteh"->"Fereshteh")
 
 You return the canonical match for each, with a confidence score.
 
 RULES (do not violate these):
 1. For lab_suggested: you MUST pick a value EXACTLY from the provided "known_labs" list, OR return null if no lab in the list is a plausible match. Never invent.
 2. For patient_suggested: you MUST pick a value EXACTLY from the provided "known_patients" list, OR return null if no plausible match. Pure capitalization fixes are allowed for patient names not in the list — in that case return the cleanly-cased version of the input.
-3. Confidence is 0.0 to 1.0. 0.95+ = obvious typo/case fix to a known value. 0.7–0.94 = strong match but slight ambiguity. <0.7 = guessing — prefer null instead.
-4. If raw input is already exactly correct, return it unchanged with confidence 1.0.
-5. Output ONLY a JSON object — no prose, no code fences. Schema:
+3. Use "lab_aliases" as your primary key→value mapping: when the raw lab matches any alias key (case-insensitively, including substrings — e.g. raw "KK panel" matches alias "kk"), pick that alias's canonical lab. Confidence for an alias match starts at 0.95.
+4. Confidence is 0.0 to 1.0. 0.95+ = obvious typo/case fix or alias hit. 0.7–0.94 = strong match but slight ambiguity. <0.7 = guessing — prefer null instead.
+5. If raw input is already exactly correct, return it unchanged with confidence 1.0.
+6. When patient name in the raw is a clear misspelling of a known_patients entry (>=70% character overlap, same starting letters), match with confidence 0.85+. Examples: "FEReshteh"->"Fereshteh", "shireen"->"Shirin", "natali"->"Nathalie".
+7. When "sheet_context" is provided it contains the raw CSV text — read it for legend/footnote rows ("KK = Kennedy Krieger", "Total tox = toxin waster"), comment columns, and rows where the SAME patient appears with more specific lab/panel info ("abby scarpello vibrant total tox" elsewhere on the sheet informs an earlier vague "Vibrant" row). Cross-row context like this should bump confidence on the inferred row to 0.85+.
+8. Output ONLY a JSON object — no prose, no code fences. Schema:
 {
   "results": [
     {
@@ -72,6 +75,12 @@ export async function aiNormalizeDrafts(input: {
   rows: NormalizeInputRow[];
   knownLabs: string[];
   knownPatients: string[];
+  /** Alias -> canonical lab name. Lets the model resolve domain slang like
+   * "KK" or "total tox" deterministically rather than guessing. */
+  labAliases?: Array<{ alias: string; canonical: string }>;
+  /** Optional sheet-wide context (legend lines, comment rows, summary
+   * annotations). Used for cross-row inference in Phase 3. */
+  csvContext?: string;
 }): Promise<NormalizeResult[]> {
   if (input.rows.length === 0) return [];
 
@@ -82,6 +91,8 @@ export async function aiNormalizeDrafts(input: {
       // Cap patient list to a reasonable size to keep token costs bounded —
       // recent patients matter more than ancient ones.
       known_patients: input.knownPatients.slice(0, 400),
+      lab_aliases: input.labAliases ?? [],
+      ...(input.csvContext ? { sheet_context: input.csvContext } : {}),
       rows: input.rows.map((r) => ({
         row_key: r.rowKey,
         raw_lab: r.rawLab,

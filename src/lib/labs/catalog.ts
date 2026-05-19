@@ -119,7 +119,7 @@ export const LAB_CATALOG: LabCatalogEntry[] = [
 
   // ── Vibrant — uncategorized ──────────────────────────────────────────
   { name: "Vibrant - Total Immunoglobulins", provider: "Vibrant", panel: "Total Immunoglobulins", turnaroundDaysMin: null, turnaroundDaysMax: null, aliases: ["Labs - Vibrant - Total Immunoglobulins"] },
-  { name: "Vibrant - Total Tox (urine)", provider: "Vibrant", panel: "Total Tox (urine)", turnaroundDaysMin: 7, turnaroundDaysMax: 7, aliases: ["Labs - Vibrant - Total Tox (urine)"] },
+  { name: "Vibrant - Total Tox (urine)", provider: "Vibrant", panel: "Total Tox (urine)", turnaroundDaysMin: 7, turnaroundDaysMax: 7, aliases: ["Labs - Vibrant - Total Tox (urine)", "total tox", "totaltox", "vibrant total tox", "vibrant - total tox", "toxin waster", "vibrant tox"] },
   { name: "Vibrant - Total Tox (urine) [retired]", provider: "Vibrant", panel: "Total Tox (urine) [retired]", turnaroundDaysMin: null, turnaroundDaysMax: null, retired: true, aliases: ["(retired) Labs - Vibrant - Total Tox (urine)"] },
   { name: "Vibrant - Auto-Immune", provider: "Vibrant", panel: "Auto-Immune", turnaroundDaysMin: null, turnaroundDaysMax: null, aliases: ["Labs - Vibrant - Auto-Immune"] },
   { name: "Vibrant - Viral Infections", provider: "Vibrant", panel: "Viral Infections", turnaroundDaysMin: null, turnaroundDaysMax: null, aliases: ["Labs - Vibrant - Viral Infections"] },
@@ -223,6 +223,23 @@ const ALIAS_INDEX: Map<string, LabCatalogEntry> = (() => {
 export function findLabByName(raw: string): LabCatalogEntry | null {
   if (!raw) return null;
   return ALIAS_INDEX.get(normalizeLabKey(raw)) ?? null;
+}
+
+/**
+ * Flattened (alias -> canonical name) list for downstream consumers like the
+ * AI normalize prompt. Skips the canonical name itself (already passed as a
+ * known_label) to keep the payload short.
+ */
+export function getLabAliasPairs(): Array<{ alias: string; canonical: string }> {
+  const out: Array<{ alias: string; canonical: string }> = [];
+  for (const e of LAB_CATALOG) {
+    const canonicalKey = normalizeLabKey(e.name);
+    for (const a of e.aliases ?? []) {
+      if (normalizeLabKey(a) === canonicalKey) continue;
+      out.push({ alias: a, canonical: e.name });
+    }
+  }
+  return out;
 }
 
 /**

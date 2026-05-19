@@ -8,7 +8,9 @@ import {
   listKnownEmailAddresses,
   listLabPortals,
   listLabsCatalog,
+  getPatientSeedOverview,
 } from "./actions";
+import { PatientSeedPanel } from "./PatientSeedPanel";
 import { listLabCases } from "../actions";
 import { GeneralSettingsForm } from "./GeneralSettingsForm";
 import { ChangePasswordForm } from "../account/ChangePasswordForm";
@@ -50,6 +52,7 @@ export default async function SettingsPage({
   const wantsArchived = isAdmin && tab === "archived";
   const wantsDeleted = isAdmin && tab === "deleted";
   const wantsPortals = isAdmin && tab === "portals";
+  const wantsPatients = isAdmin && tab === "patients";
 
   const [
     settings,
@@ -61,6 +64,7 @@ export default async function SettingsPage({
     archivedCases,
     deletedCases,
     portals,
+    patientSeed,
   ] = await Promise.all([
     // Org settings live on the General tab but only render for admins —
     // staff still hits General for the password section, no app_settings
@@ -76,6 +80,7 @@ export default async function SettingsPage({
       : Promise.resolve(null),
     wantsDeleted ? listLabCases({ view: "deleted" }) : Promise.resolve(null),
     wantsPortals ? listLabPortals() : Promise.resolve(null),
+    wantsPatients ? getPatientSeedOverview() : Promise.resolve(null),
   ]);
 
   return (
@@ -154,6 +159,18 @@ export default async function SettingsPage({
             description="Edit per-lab sign-in URLs. The lab key must match the lab_name used on cases — these power the portal buttons on the case detail card."
           >
             <LabPortalsPanel portals={portals} />
+          </Section>
+        ) : null}
+
+        {wantsPatients && patientSeed ? (
+          <Section
+            title="Patient seed"
+            description="Pre-load patients who exist in PracticeBetter / Zenoti but haven't had a lab case yet. CSV import will auto-fill email/phone/DOB from this list on their first case."
+          >
+            <PatientSeedPanel
+              initialSample={patientSeed.sample}
+              total={patientSeed.total}
+            />
           </Section>
         ) : null}
 

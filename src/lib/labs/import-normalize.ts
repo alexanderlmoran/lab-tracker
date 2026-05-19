@@ -143,23 +143,52 @@ const ISO = (d: Date): string =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 /**
- * Split a multi-patient name cell into individual patient names. Source
- * separators we've seen in the wild: ";", " and ", "&", commas (when safe).
- * Empty parts are dropped. Whitespace trimmed.
+ * Split a multi-patient name cell into individual patient names. Real-world
+ * separators we see: ";", " and ", "&", and plain commas.
  *
- * We deliberately don't split on plain commas in single-patient rows like
- * "Smith, John" — the heuristic: only split on comma when the cell contains
- * "; " or " and " (signaling a true list). Otherwise commas stay literal.
+ * Heuristic:
+ *  • Explicit joiner (;, " and ", &) → split on all delimiters incl. commas.
+ *  • Comma-only → split iff every part is multi-word; otherwise we assume
+ *    "Smith, John" (Last, First) format and keep the cell as one name.
+ *
+ * After splitting, any single-word part inherits the surname of the nearest
+ * multi-word part — covers "John and Cherie Arscott" → ["John Arscott",
+ * "Cherie Arscott"], where the first person's surname was implicit.
  */
 export function splitPatientNames(raw: string): string[] {
   const s = (raw ?? "").trim();
   if (!s) return [];
-  const looksLikeList = /;|\s+and\s+|&/.test(s);
-  if (!looksLikeList) return [s];
-  return s
-    .split(/;|\s+and\s+|&|,/)
-    .map((p) => p.trim())
-    .filter(Boolean);
+
+  const hasExplicitJoiner = /;|\s+and\s+|&/i.test(s);
+  let parts: string[];
+  if (hasExplicitJoiner) {
+    parts = s.split(/;|\s+and\s+|&|,/i).map((p) => p.trim()).filter(Boolean);
+  } else if (s.includes(",")) {
+    const commaParts = s.split(",").map((p) => p.trim()).filter(Boolean);
+    const allMultiWord = commaParts.every(
+      (p) => p.split(/\s+/).filter(Boolean).length >= 2,
+    );
+    parts = allMultiWord ? commaParts : [s];
+  } else {
+    parts = [s];
+  }
+
+  if (parts.length < 2) return parts;
+  return parts.map((p, i) => {
+    if (p.split(/\s+/).filter(Boolean).length >= 2) return p;
+    // Find the surname (last whitespace-separated token) of the nearest
+    // multi-word neighbour — prefer rightward (typical "X and Y Surname"
+    // pattern), fall back to leftward for "Surname Mom and Kid".
+    for (let j = i + 1; j < parts.length; j++) {
+      const tokens = parts[j].split(/\s+/).filter(Boolean);
+      if (tokens.length >= 2) return `${p} ${tokens[tokens.length - 1]}`;
+    }
+    for (let j = i - 1; j >= 0; j--) {
+      const tokens = parts[j].split(/\s+/).filter(Boolean);
+      if (tokens.length >= 2) return `${p} ${tokens[tokens.length - 1]}`;
+    }
+    return p;
+  });
 }
 
 const SKIP_CARRIERS = new Set(["centner", "centner labs"]);
@@ -181,16 +210,31 @@ export function rowToDrafts(row: ShippingCsvRow): ImportDraft[] {
     return null;
   })();
 
-  // Resolve lab catalog entry (best-effort; "other" and unrecognized fall
-  // through to null with a warning so the operator can pick in the preview).
-  const catalogEntry = carrierRaw ? findLabByName(carrierRaw) : null;
+  // Resolve lab catalog entry. The Contents column often names the actual
+  // panel ("total tox", "zoomer gut"), while Carrier names the provider
+  // ("Vibrant", "Doctors Data"). Try the combined "Carrier + Contents"
+  // hint first — that's how aliases like "vibrant total tox" find
+  // "Vibrant - Total Tox (urine)" without ambiguity. Fall back to Carrier
+  // alone (resolving to the provider's "panel unspecified" entry where
+  // one exists), then null + warning.
+  const contentsRaw = (row.contents ?? "").toLowerCase().trim();
+  const combinedHint = contentsRaw ? `${carrierRaw} ${contentsRaw}` : carrierRaw;
+  const catalogEntry =
+    (combinedHint ? findLabByName(combinedHint) : null) ??
+    (contentsRaw ? findLabByName(contentsRaw) : null) ??
+    (carrierRaw ? findLabByName(carrierRaw) : null);
   let warning: string | null = null;
   if (skipReason === null) {
     if (!catalogEntry) warning = `Unrecognized lab "${row.carrier}" — pick one before import`;
   }
 
   const labProvider = catalogEntry ? catalogEntry.provider : null;
-  const labPanel = null; // shipping CSV never has panel info
+  // When the carrier matches a catalog entry with a specific panel
+  // (Access -> "Blood Panel", SpectraCell -> "with Interpretation"),
+  // adopt that panel so the dropdown selects the actual catalog row.
+  // Multi-panel providers like Vibrant fall back to a `panel: null`
+  // entry ("Vibrant (panel unspecified)"), so this still leaves them blank.
+  const labPanel = catalogEntry ? catalogEntry.panel : null;
   const expected = computeExpected(dateAnchor, catalogEntry);
 
   // Synthesize notes from columns the schema can't house directly.
