@@ -12,6 +12,7 @@ import {
 } from "@/lib/columns";
 import { StepChecklist } from "./StepChecklist";
 import { ActivityLog } from "./ActivityLog";
+import { EmailLogPanel } from "./EmailLogPanel";
 import { BarcodeScanner } from "./BarcodeScanner";
 import { CaseDialog } from "./CaseDialog";
 import { LabPortalLinks } from "./LabPortalLinks";
@@ -322,6 +323,13 @@ export function CaseDetail({ row }: { row: LabCase }) {
           />
         </div>
         <StepChecklist initial={row} />
+      </section>
+
+      <section>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+          Emails
+        </h3>
+        <EmailLogPanel caseId={row.id} />
       </section>
 
       <section>

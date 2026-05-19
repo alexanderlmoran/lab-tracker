@@ -1374,3 +1374,128 @@ export async function deletePatientSeed(input: {
   return { ok: true };
 }
 
+// ── Lab turnaround stats ──────────────────────────────────────────────
+
+export type LabTurnaroundRow = {
+  labName: string;
+  labPanel: string | null;
+  sampleCount: number;
+  meanDays: number;
+  p50Days: number;
+  p90Days: number;
+  catalogMin: number | null;
+  catalogMax: number | null;
+  /** Days the observed p50 exceeds the catalog's max — positive means
+   * the catalog under-estimates actual real-world turnaround. */
+  drift: number | null;
+};
+
+/**
+ * Per-lab actual-vs-expected turnaround dashboard. For every lab+panel,
+ * compute the days between collection_date and the first time step 4
+ * (Complete results received) was toggled true. Compare to the
+ * catalog's stored turnaroundDaysMin/Max. Useful for spotting labs that
+ * have gotten slower over time so the expected-result-date predictions
+ * (and the stale-detection thresholds derived from them) can be tuned.
+ */
+export async function getLabTurnaroundStats(): Promise<
+  ActionResult<LabTurnaroundRow[]>
+> {
+  await requireRole("admin");
+  const db = getSupabaseAdmin();
+
+  // First step-4-completed event per case. created_at ordering keeps the
+  // earliest one when the operator toggles step 4 off/on for cleanup.
+  const { data: events, error: evErr } = await db
+    .from("lab_events")
+    .select("case_id, created_at")
+    .eq("kind", "step_toggled")
+    .eq("step", 4)
+    .eq("completed", true)
+    .order("created_at", { ascending: true });
+  if (evErr) return { ok: false, error: evErr.message };
+
+  const firstStep4: Map<string, string> = new Map();
+  for (const e of (events ?? []) as Array<{ case_id: string; created_at: string }>) {
+    if (!firstStep4.has(e.case_id)) firstStep4.set(e.case_id, e.created_at);
+  }
+  if (firstStep4.size === 0) return { ok: true, data: [] };
+
+  // Fetch the cases for those events to get lab_name/panel + collection_date.
+  const caseIds = [...firstStep4.keys()];
+  const cases: Array<{
+    id: string;
+    lab_name: string;
+    lab_panel: string | null;
+    collection_date: string | null;
+    deleted_at: string | null;
+  }> = [];
+  const CHUNK = 200;
+  for (let i = 0; i < caseIds.length; i += CHUNK) {
+    const slice = caseIds.slice(i, i + CHUNK);
+    const { data, error } = await db
+      .from("lab_cases")
+      .select("id, lab_name, lab_panel, collection_date, deleted_at")
+      .in("id", slice);
+    if (error) return { ok: false, error: error.message };
+    for (const r of (data ?? []) as typeof cases) cases.push(r);
+  }
+
+  type Bucket = { lab: string; panel: string | null; days: number[] };
+  const buckets = new Map<string, Bucket>();
+  for (const c of cases) {
+    if (c.deleted_at || !c.collection_date) continue;
+    const eventAt = firstStep4.get(c.id);
+    if (!eventAt) continue;
+    const ms =
+      new Date(eventAt).getTime() -
+      new Date(`${c.collection_date}T00:00:00Z`).getTime();
+    const days = Math.floor(ms / 86_400_000);
+    if (days < 0 || days > 365) continue;
+    const key = `${c.lab_name}|||${c.lab_panel ?? ""}`;
+    let b = buckets.get(key);
+    if (!b) {
+      b = { lab: c.lab_name, panel: c.lab_panel, days: [] };
+      buckets.set(key, b);
+    }
+    b.days.push(days);
+  }
+
+  const { listEffectiveLabs } = await import("@/lib/labs/effective");
+  const catalog = await listEffectiveLabs();
+  const findCatalog = (provider: string, panel: string | null) =>
+    catalog.find(
+      (e) =>
+        e.provider.toLowerCase() === provider.toLowerCase() &&
+        (e.panel ?? null) === (panel ?? null),
+    ) ?? null;
+
+  const rows: LabTurnaroundRow[] = [];
+  for (const b of buckets.values()) {
+    const sorted = [...b.days].sort((a, c) => a - c);
+    const sum = sorted.reduce((s, v) => s + v, 0);
+    const mean = sum / sorted.length;
+    const pickPercentile = (q: number) =>
+      sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];
+    const p50 = pickPercentile(0.5);
+    const p90 = pickPercentile(0.9);
+    const entry = findCatalog(b.lab, b.panel);
+    const catalogMin = entry?.turnaroundDaysMin ?? null;
+    const catalogMax = entry?.turnaroundDaysMax ?? null;
+    const drift = catalogMax != null ? p50 - catalogMax : null;
+    rows.push({
+      labName: b.lab,
+      labPanel: b.panel,
+      sampleCount: sorted.length,
+      meanDays: Math.round(mean * 10) / 10,
+      p50Days: p50,
+      p90Days: p90,
+      catalogMin,
+      catalogMax,
+      drift,
+    });
+  }
+
+  rows.sort((a, b) => b.sampleCount - a.sampleCount);
+  return { ok: true, data: rows };
+}

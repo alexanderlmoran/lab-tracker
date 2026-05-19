@@ -10,6 +10,7 @@ import {
   getColumnFor,
 } from "@/lib/columns";
 import { searchPatients, type PatientSuggestion } from "./patient-search-action";
+import { updatePatientAcrossCases } from "./actions";
 import { CaseDetail } from "./CaseDetail";
 import { formatPersonName, formatShortDate } from "@/lib/format";
 
@@ -185,13 +186,22 @@ function FocusedView({
               : ""}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={clearPatient}
-          className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50"
-        >
-          ← Look up another patient
-        </button>
+        <div className="flex items-center gap-2">
+          <EditPatientDialog
+            currentEmail={email}
+            currentName={patientName}
+            currentPhone={cases.find((c) => c.patient_phone)?.patient_phone ?? null}
+            currentDobIso={cases.find((c) => c.patient_dob)?.patient_dob ?? null}
+            onSaved={() => router.refresh()}
+          />
+          <button
+            type="button"
+            onClick={clearPatient}
+            className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50"
+          >
+            ← Look up another patient
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8 lg:flex-1 lg:min-h-0">
@@ -272,5 +282,203 @@ function FocusLabCard({ row, onOpen }: { row: FocusedCase; onOpen: () => void })
         {row.archived ? " · archived" : ""}
       </p>
     </button>
+  );
+}
+
+/**
+ * Edit a patient across every one of their non-deleted cases. The app
+ * stores patient info per-case (no separate patients table), so this is
+ * a bulk update keyed on the patient's current email. The new email also
+ * becomes the URL key for the focused view; we rewrite ?patient= on save.
+ */
+function EditPatientDialog({
+  currentEmail,
+  currentName,
+  currentPhone,
+  currentDobIso,
+  onSaved,
+}: {
+  currentEmail: string;
+  currentName: string;
+  currentPhone: string | null;
+  currentDobIso: string | null;
+  onSaved: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const [name, setName] = useState(currentName);
+  const [email, setEmail] = useState(currentEmail);
+  const [phone, setPhone] = useState(currentPhone ?? "");
+  const [dob, setDob] = useState(currentDobIso ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, startSave] = useTransition();
+  const router = useRouter();
+
+  function open() {
+    setError(null);
+    setName(currentName);
+    setEmail(currentEmail);
+    setPhone(currentPhone ?? "");
+    setDob(currentDobIso ?? "");
+    queueMicrotask(() => dialogRef.current?.showModal());
+  }
+  function close() {
+    dialogRef.current?.close();
+  }
+
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    const trimmedName = name.trim();
+    const trimmedEmail = email.trim();
+    if (!trimmedName) {
+      setError("Name is required.");
+      return;
+    }
+    if (!trimmedEmail || !trimmedEmail.includes("@")) {
+      setError("A valid email is required.");
+      return;
+    }
+    startSave(async () => {
+      const r = await updatePatientAcrossCases({
+        currentEmail,
+        name: trimmedName !== currentName ? trimmedName : undefined,
+        email:
+          trimmedEmail.toLowerCase() !== currentEmail.toLowerCase()
+            ? trimmedEmail
+            : undefined,
+        phone:
+          (phone.trim() || null) !== (currentPhone ?? null)
+            ? phone.trim() || null
+            : undefined,
+        dobIso:
+          (dob.trim() || null) !== (currentDobIso ?? null)
+            ? dob.trim() || null
+            : undefined,
+      });
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      close();
+      // If email changed, the URL key is stale — repoint to the new email
+      // so the focused view reloads against the updated rows.
+      if (
+        trimmedEmail.toLowerCase() !== currentEmail.toLowerCase()
+      ) {
+        const u = new URL(window.location.href);
+        u.searchParams.set("patient", trimmedEmail.toLowerCase());
+        router.replace(
+          u.pathname + (u.searchParams.toString() ? `?${u.searchParams}` : ""),
+        );
+      } else {
+        onSaved();
+      }
+    });
+  }
+
+  const inputClass =
+    "w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900";
+  const labelClass = "block text-xs font-medium text-zinc-700";
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={open}
+        className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50"
+      >
+        Edit patient
+      </button>
+      <dialog
+        ref={dialogRef}
+        className="w-full max-w-md rounded-lg border border-zinc-200 bg-white p-0 shadow-xl backdrop:bg-zinc-900/40"
+      >
+        <form onSubmit={onSubmit} className="flex flex-col">
+          <div className="border-b border-zinc-200 px-5 py-3">
+            <h2 className="text-sm font-semibold text-zinc-900">Edit patient</h2>
+            <p className="mt-0.5 text-[11px] text-zinc-500">
+              Changes apply to every one of this patient&apos;s lab cases.
+            </p>
+          </div>
+          <div className="space-y-3 px-5 py-4">
+            <div>
+              <label className={labelClass} htmlFor="ep-name">
+                Name
+              </label>
+              <input
+                id="ep-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className={inputClass}
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className={labelClass} htmlFor="ep-email">
+                Email
+              </label>
+              <input
+                id="ep-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className={inputClass}
+              />
+              <p className="mt-0.5 text-[10px] text-zinc-500">
+                Changing the email re-keys all of this patient&apos;s cases
+                under the new address.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={labelClass} htmlFor="ep-phone">
+                  Phone
+                </label>
+                <input
+                  id="ep-phone"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="ep-dob">
+                  DOB
+                </label>
+                <input
+                  id="ep-dob"
+                  type="date"
+                  value={dob}
+                  onChange={(e) => setDob(e.target.value)}
+                  className={inputClass}
+                />
+              </div>
+            </div>
+            {error ? (
+              <p className="text-xs text-rose-700" role="alert">
+                {error}
+              </p>
+            ) : null}
+          </div>
+          <div className="flex items-center justify-end gap-2 border-t border-zinc-200 px-5 py-3">
+            <button
+              type="button"
+              onClick={close}
+              disabled={saving}
+              className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+            >
+              {saving ? "Saving…" : "Save changes"}
+            </button>
+          </div>
+        </form>
+      </dialog>
+    </>
   );
 }

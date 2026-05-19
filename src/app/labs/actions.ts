@@ -1116,6 +1116,118 @@ export async function listPatientCases(
   return (data ?? []) as LabCase[];
 }
 
+const PatientUpdateInput = z.object({
+  currentEmail: z.string().email().max(200),
+  name: z.string().trim().min(1).max(200).optional(),
+  email: z.string().email().max(200).optional(),
+  phone: z.string().trim().max(40).nullable().optional(),
+  dobIso: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .nullable()
+    .optional(),
+});
+
+/**
+ * Update a patient's identity across every one of their non-deleted lab
+ * cases in one operation. The app stores patient_name/email/phone/dob
+ * directly on lab_cases (no separate patients table), so "edit the
+ * patient" is a bulk-update over all their rows keyed by current email.
+ *
+ * If a row exists in patients_seed for the same email, that row is
+ * updated too so the corrected info survives the next CSV re-import.
+ *
+ * Caller passes only the fields they want changed; undefined fields are
+ * left untouched. Returns the number of cases + seed rows updated.
+ */
+export async function updatePatientAcrossCases(input: {
+  currentEmail: string;
+  name?: string;
+  email?: string;
+  phone?: string | null;
+  dobIso?: string | null;
+}): Promise<ActionResult<{ casesUpdated: number; seedUpdated: number }>> {
+  const user = await requireSignedIn();
+  const parsed = PatientUpdateInput.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+  const db = getSupabaseAdmin();
+
+  const update: Record<string, string | null> = {};
+  if (parsed.data.name !== undefined) update.patient_name = parsed.data.name;
+  if (parsed.data.email !== undefined) update.patient_email = parsed.data.email;
+  if (parsed.data.phone !== undefined) update.patient_phone = parsed.data.phone;
+  if (parsed.data.dobIso !== undefined) update.patient_dob = parsed.data.dobIso;
+  if (Object.keys(update).length === 0) {
+    return { ok: true, data: { casesUpdated: 0, seedUpdated: 0 } };
+  }
+
+  const currentEmailLower = parsed.data.currentEmail.toLowerCase();
+
+  // Pull affected case IDs first so we can log per-case events. ilike to
+  // be case-insensitive, deleted rows skipped.
+  const { data: affected, error: fetchErr } = await db
+    .from("lab_cases")
+    .select("id")
+    .ilike("patient_email", currentEmailLower)
+    .is("deleted_at", null);
+  if (fetchErr) return { ok: false, error: fetchErr.message };
+  const caseIds = ((affected ?? []) as Array<{ id: string }>).map((r) => r.id);
+
+  let casesUpdated = 0;
+  if (caseIds.length > 0) {
+    const { error: updErr } = await db
+      .from("lab_cases")
+      .update(update)
+      .in("id", caseIds);
+    if (updErr) return { ok: false, error: updErr.message };
+    casesUpdated = caseIds.length;
+
+    // One audit event per case so the activity log reflects the bulk edit.
+    const noteParts: string[] = [];
+    if (parsed.data.name !== undefined) noteParts.push(`name → "${parsed.data.name}"`);
+    if (parsed.data.email !== undefined) noteParts.push(`email → ${parsed.data.email}`);
+    if (parsed.data.phone !== undefined)
+      noteParts.push(`phone → ${parsed.data.phone ?? "(none)"}`);
+    if (parsed.data.dobIso !== undefined)
+      noteParts.push(`dob → ${parsed.data.dobIso ?? "(none)"}`);
+    const note = `Patient updated across cases: ${noteParts.join(", ")}`;
+    await db.from("lab_events").insert(
+      caseIds.map((id) => ({
+        case_id: id,
+        kind: "case_edited" as const,
+        actor: user.email ?? "admin",
+        note,
+      })),
+    );
+  }
+
+  // Mirror into patients_seed when one or more rows match the old email.
+  // Composite key is (email, patient_name) so we update by email alone and
+  // let Postgres handle the new constraint via the update set.
+  let seedUpdated = 0;
+  const seedUpdate: Record<string, string | null> = {};
+  if (parsed.data.name !== undefined) seedUpdate.patient_name = parsed.data.name;
+  if (parsed.data.email !== undefined)
+    seedUpdate.email = parsed.data.email.toLowerCase();
+  if (parsed.data.phone !== undefined) seedUpdate.phone = parsed.data.phone;
+  if (parsed.data.dobIso !== undefined) seedUpdate.dob = parsed.data.dobIso;
+  if (Object.keys(seedUpdate).length > 0) {
+    const { data: seedMatched, error: seedErr } = await db
+      .from("patients_seed")
+      .update(seedUpdate)
+      .eq("email", currentEmailLower)
+      .select("id");
+    if (!seedErr && seedMatched) {
+      seedUpdated = seedMatched.length;
+    }
+  }
+
+  revalidatePath("/labs");
+  return { ok: true, data: { casesUpdated, seedUpdated } };
+}
+
 /** One row per unique patient_email (case-insensitive grouping), with case
  * counts and most-recent activity. */
 export async function listPatients(opts?: {

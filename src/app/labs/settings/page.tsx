@@ -9,8 +9,10 @@ import {
   listLabPortals,
   listLabsCatalog,
   getPatientSeedOverview,
+  getLabTurnaroundStats,
 } from "./actions";
 import { PatientSeedPanel } from "./PatientSeedPanel";
+import { TurnaroundPanel } from "./TurnaroundPanel";
 import { listLabCases } from "../actions";
 import { GeneralSettingsForm } from "./GeneralSettingsForm";
 import { ChangePasswordForm } from "../account/ChangePasswordForm";
@@ -53,6 +55,7 @@ export default async function SettingsPage({
   const wantsDeleted = isAdmin && tab === "deleted";
   const wantsPortals = isAdmin && tab === "portals";
   const wantsPatients = isAdmin && tab === "patients";
+  const wantsTurnarounds = isAdmin && tab === "turnarounds";
 
   const [
     settings,
@@ -65,6 +68,7 @@ export default async function SettingsPage({
     deletedCases,
     portals,
     patientSeed,
+    turnarounds,
   ] = await Promise.all([
     // Org settings live on the General tab but only render for admins —
     // staff still hits General for the password section, no app_settings
@@ -81,6 +85,7 @@ export default async function SettingsPage({
     wantsDeleted ? listLabCases({ view: "deleted" }) : Promise.resolve(null),
     wantsPortals ? listLabPortals() : Promise.resolve(null),
     wantsPatients ? getPatientSeedOverview() : Promise.resolve(null),
+    wantsTurnarounds ? getLabTurnaroundStats() : Promise.resolve(null),
   ]);
 
   return (
@@ -171,6 +176,21 @@ export default async function SettingsPage({
               initialSample={patientSeed.sample}
               total={patientSeed.total}
             />
+          </Section>
+        ) : null}
+
+        {wantsTurnarounds && turnarounds ? (
+          <Section
+            title="Turnarounds"
+            description="Observed days from collection_date to step 4 (Complete results received), per lab + panel. Drift highlights labs where the catalog's stored turnaround under-estimates reality."
+          >
+            {turnarounds.ok ? (
+              <TurnaroundPanel rows={turnarounds.data ?? []} />
+            ) : (
+              <p className="text-xs text-rose-700">
+                Couldn&apos;t load stats: {turnarounds.error}
+              </p>
+            )}
           </Section>
         ) : null}
 
