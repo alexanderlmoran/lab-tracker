@@ -11,6 +11,7 @@ import { TimeRangeTabs } from "./TimeRangeTabs";
 import { SearchBar } from "./SearchBar";
 import { RefreshAllTrackingButton } from "./RefreshAllTrackingButton";
 import { HudPulse } from "./HudPulse";
+import { LabsLegend } from "./LabsLegend";
 
 export const dynamic = "force-dynamic";
 
@@ -98,6 +99,7 @@ export default async function LabsPage({
               <div className="flex-1 min-w-0">
                 <SearchBar labNames={labNames} />
               </div>
+              <LabsLegend />
               <Link
                 href="/labs/archived"
                 className="text-xs text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline"
