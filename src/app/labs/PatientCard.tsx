@@ -14,7 +14,16 @@ import {
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { CaseDetail } from "./CaseDetail";
 import { formatPersonName, formatShortDate } from "@/lib/format";
-import { CountChips, ZERO_COUNTS, type CardCounts } from "./card-counts";
+import {
+  ZERO_COUNTS,
+  attemptCardClasses,
+  CHIP,
+  TRACKING_BADGE,
+  RailChip,
+  AttemptRailChip,
+  EmailRailChip,
+  type CardCounts,
+} from "./card-counts";
 
 function timeAgo(iso: string) {
   const ms = Date.now() - new Date(iso).getTime();
@@ -52,19 +61,6 @@ function formatExpectedRange(min: string | null, max: string | null): string | n
   return fmt(max ?? min ?? "");
 }
 
-const TRACKING_BADGE: Record<string, { label: string; className: string }> = {
-  pre_transit: { label: "Pre-transit", className: "bg-zinc-100 text-zinc-700" },
-  in_transit: { label: "In transit", className: "bg-blue-100 text-blue-800" },
-  out_for_delivery: {
-    label: "Out for delivery",
-    className: "bg-indigo-100 text-indigo-800",
-  },
-  delivered: { label: "Delivered", className: "bg-emerald-100 text-emerald-800" },
-  exception: { label: "Exception", className: "bg-rose-100 text-rose-800" },
-  returned: { label: "Returned", className: "bg-rose-100 text-rose-800" },
-  unknown: { label: "Unknown", className: "bg-zinc-100 text-zinc-500" },
-};
-
 /**
  * "Probably ready" alert criteria — surfaces a case that very likely has
  * results back from the lab but hasn't been marked as complete yet.
@@ -99,7 +95,6 @@ function LabRow({
   isLaggard: boolean;
   counts: CardCounts;
 }) {
-  const done = completedStepCount(row);
   const staleness = getCaseStaleness(row);
   const labLabel = row.lab_panel
     ? `${row.lab_name} · ${row.lab_panel}`
@@ -116,6 +111,9 @@ function LabRow({
     trackingStatus: row.tracking_status,
     trackingLocation: row.tracking_location,
   });
+  const trackingMeta = row.tracking_status
+    ? TRACKING_BADGE[row.tracking_status]
+    : null;
 
   return (
     <button
@@ -124,92 +122,89 @@ function LabRow({
         e.stopPropagation();
         onOpen(row);
       }}
-      className={`flex w-full flex-col gap-0.5 rounded-md border px-1.5 py-1 text-left transition-colors hover:bg-zinc-50 ${
+      className={`flex w-full gap-2 rounded-md border px-1.5 py-1 text-left transition-colors hover:bg-slate-50 ${
         probablyReady
-          ? "border-purple-300 bg-purple-50"
-          : isLaggard
-            ? "border-amber-200 bg-amber-50/40"
-            : "border-zinc-200 bg-white"
+          ? "border-blue-300 bg-blue-50"
+          : counts.openAttempts > 0
+            ? attemptCardClasses(counts.openAttempts)
+            : isLaggard
+              ? "border-yellow-200 bg-yellow-50/40"
+              : "border-slate-200 bg-white"
       }`}
     >
-      <div className="flex items-center justify-between gap-2">
-        <p className="min-w-0 flex-1 truncate text-[11.5px] font-medium leading-tight text-zinc-800">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <p className="truncate text-[11.5px] font-medium leading-tight text-zinc-800">
           {labLabel}
         </p>
-        <span className="shrink-0 text-[10px] tabular-nums text-zinc-500">
-          {done}/9
-        </span>
+        {row.collection_date || expected || row.tracking_number ? (
+          <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-zinc-400">
+            {row.collection_date ? (
+              <span title="Collection date">
+                Drawn {formatShortDate(row.collection_date)}
+              </span>
+            ) : null}
+            {expected ? <span>↳ {expected}</span> : null}
+            {row.tracking_number ? (
+              <span className="truncate">TRK {row.tracking_number}</span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
-      <div className="flex flex-wrap items-center gap-1">
-        <CountChips counts={counts} />
+
+      <div className="flex shrink-0 flex-col items-end gap-0.5">
+        {trackingMeta ? (
+          <RailChip
+            className={trackingMeta.className}
+            title={
+              trackingMeta.label +
+              (row.tracking_location ? ` · ${row.tracking_location}` : "") +
+              (row.tracking_status_detail ? ` — ${row.tracking_status_detail}` : "")
+            }
+          >
+            {trackingMeta.label}
+          </RailChip>
+        ) : row.tracking_status ? (
+          <RailChip className={CHIP.muted}>{row.tracking_status}</RailChip>
+        ) : null}
+        {probablyReady ? (
+          <RailChip className={CHIP.state} title="Likely ready — check lab portal">
+            ready?
+          </RailChip>
+        ) : null}
+        <AttemptRailChip openAttempts={counts.openAttempts} />
         {countdown ? (
-            <span
-              title={
-                countdown.tone === "overdue"
-                  ? `Expected by ${formatShortDate(row.expected_result_at_max)} — past`
-                  : `Expected by ${formatShortDate(row.expected_result_at_max)}`
-              }
-              className={`rounded px-1 py-0.5 text-[9px] font-medium tabular-nums tracking-wide ${
-                countdown.tone === "overdue"
-                  ? "bg-rose-100 text-rose-700"
-                  : countdown.tone === "due"
-                    ? "bg-amber-100 text-amber-800"
-                    : "bg-zinc-100 text-zinc-600"
-              }`}
-            >
-              {countdown.label}
-            </span>
-          ) : null}
-          {destWarning ? (
-            <span
-              title={destWarning}
-              className="rounded bg-orange-100 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-orange-800"
-            >
-              wrong city?
-            </span>
-          ) : null}
-          {probablyReady ? (
-            <span
-              title="Likely ready — check lab portal"
-              className="rounded bg-purple-100 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-purple-700"
-            >
-              ready?
-            </span>
-          ) : null}
-          {row.tracking_status ? (
-            <span
-              className={`rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
-                TRACKING_BADGE[row.tracking_status]?.className ?? "bg-zinc-100 text-zinc-500"
-              }`}
-              title={
-                (TRACKING_BADGE[row.tracking_status]?.label ?? row.tracking_status) +
-                (row.tracking_location ? ` · ${row.tracking_location}` : "") +
-                (row.tracking_status_detail ? ` — ${row.tracking_status_detail}` : "")
-              }
-            >
-              {TRACKING_BADGE[row.tracking_status]?.label ?? row.tracking_status}
-            </span>
-          ) : null}
-          {staleness.stale ? (
-            <span
-              title={`No progress in ${staleness.daysSinceProgress} days`}
-              className="rounded bg-amber-100 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-800"
-            >
-              {staleness.daysSinceProgress}d
-            </span>
-          ) : null}
+          <RailChip
+            className={
+              countdown.tone === "overdue"
+                ? CHIP.alert
+                : countdown.tone === "due"
+                  ? CHIP.caution
+                  : CHIP.good
+            }
+            title={
+              countdown.tone === "overdue"
+                ? `Expected by ${formatShortDate(row.expected_result_at_max)} — past`
+                : `Expected by ${formatShortDate(row.expected_result_at_max)}`
+            }
+          >
+            {countdown.label}
+          </RailChip>
+        ) : null}
+        {destWarning ? (
+          <RailChip className={CHIP.warn} title={destWarning}>
+            wrong city?
+          </RailChip>
+        ) : null}
+        <EmailRailChip emailCount={counts.emailCount} />
+        {staleness.stale ? (
+          <RailChip
+            className={CHIP.caution}
+            title={`No progress in ${staleness.daysSinceProgress} days`}
+          >
+            {staleness.daysSinceProgress}d
+          </RailChip>
+        ) : null}
       </div>
-      {(row.collection_date || expected || row.tracking_number) ? (
-        <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-zinc-400">
-          {row.collection_date ? (
-            <span title="Collection date">
-              Drawn {formatShortDate(row.collection_date)}
-            </span>
-          ) : null}
-          {expected ? <span>↳ {expected}</span> : null}
-          {row.tracking_number ? <span className="truncate">TRK {row.tracking_number}</span> : null}
-        </div>
-      ) : null}
     </button>
   );
 }

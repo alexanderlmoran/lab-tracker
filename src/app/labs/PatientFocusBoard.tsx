@@ -13,7 +13,13 @@ import { searchPatients, type PatientSuggestion } from "./patient-search-action"
 import { updatePatientAcrossCases } from "./actions";
 import { CaseDetail } from "./CaseDetail";
 import { formatPersonName, formatShortDate } from "@/lib/format";
-import { CountChips, ZERO_COUNTS, type CardCounts } from "./card-counts";
+import {
+  ZERO_COUNTS,
+  attemptCardClasses,
+  AttemptRailChip,
+  EmailRailChip,
+  type CardCounts,
+} from "./card-counts";
 
 /**
  * Single-patient focused kanban. Replaces the old "By patient" grid view —
@@ -296,20 +302,23 @@ function FocusLabCard({
     <button
       type="button"
       onClick={onOpen}
-      className="flex w-full flex-col gap-0.5 rounded-md border border-zinc-200 bg-white p-1.5 text-left shadow-sm transition-shadow hover:shadow"
+      className={`flex w-full gap-2 rounded-md border p-1.5 text-left shadow-sm transition-shadow hover:shadow ${attemptCardClasses(counts.openAttempts)}`}
     >
-      <div className="flex items-center justify-between gap-2">
-        <p className="min-w-0 flex-1 truncate text-[12px] font-medium leading-tight text-zinc-900">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <p className="truncate text-[12px] font-medium leading-tight text-zinc-900">
           {labLabel}
         </p>
-        <span className="flex shrink-0 items-center gap-1">
-          <CountChips counts={counts} />
-        </span>
+        <p className="truncate text-[10.5px] text-zinc-500">
+          {row.collection_date ? `Drawn ${formatShortDate(row.collection_date)}` : "No collection date"}
+          {row.archived ? " · archived" : ""}
+        </p>
       </div>
-      <p className="truncate text-[10.5px] text-zinc-500">
-        {row.collection_date ? `Drawn ${formatShortDate(row.collection_date)}` : "No collection date"}
-        {row.archived ? " · archived" : ""}
-      </p>
+      {counts.openAttempts > 0 || counts.emailCount > 0 ? (
+        <div className="flex shrink-0 flex-col items-end gap-0.5">
+          <AttemptRailChip openAttempts={counts.openAttempts} />
+          <EmailRailChip emailCount={counts.emailCount} />
+        </div>
+      ) : null}
     </button>
   );
 }

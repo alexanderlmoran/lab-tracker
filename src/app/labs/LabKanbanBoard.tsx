@@ -8,17 +8,23 @@ import {
   COLUMN_LABEL,
   LAB_BOARD_COLUMN_ORDER,
   type ColumnKey,
-  completedStepCount,
   expectedCountdown,
   getCaseStaleness,
-  getCaseWorkflow,
   getColumnFor,
-  getWorkflowSteps,
 } from "@/lib/columns";
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { CaseDetail } from "./CaseDetail";
 import { formatPersonName, formatShortDate } from "@/lib/format";
-import { CountChips, ZERO_COUNTS, type CardCounts } from "./card-counts";
+import {
+  ZERO_COUNTS,
+  attemptCardClasses,
+  CHIP,
+  TRACKING_BADGE,
+  RailChip,
+  AttemptRailChip,
+  EmailRailChip,
+  type CardCounts,
+} from "./card-counts";
 
 function formatExpectedRange(min: string | null, max: string | null): string | null {
   if (!min && !max) return null;
@@ -29,19 +35,6 @@ function formatExpectedRange(min: string | null, max: string | null): string | n
   if (min && max && min !== max) return `${fmt(min)} – ${fmt(max)}`;
   return fmt(max ?? min ?? "");
 }
-
-const TRACKING_BADGE: Record<string, { label: string; className: string }> = {
-  pre_transit: { label: "Pre-transit", className: "bg-zinc-100 text-zinc-700" },
-  in_transit: { label: "In transit", className: "bg-blue-100 text-blue-800" },
-  out_for_delivery: {
-    label: "Out for delivery",
-    className: "bg-indigo-100 text-indigo-800",
-  },
-  delivered: { label: "Delivered", className: "bg-emerald-100 text-emerald-800" },
-  exception: { label: "Exception", className: "bg-rose-100 text-rose-800" },
-  returned: { label: "Returned", className: "bg-rose-100 text-rose-800" },
-  unknown: { label: "Unknown", className: "bg-zinc-100 text-zinc-500" },
-};
 
 function isProbablyReady(row: LabCase): boolean {
   if (row.step4_complete_received) return false;
@@ -61,8 +54,6 @@ function LabCard({
   onOpen: (row: LabCase) => void;
   counts: CardCounts;
 }) {
-  const done = completedStepCount(row);
-  const totalSteps = getWorkflowSteps(getCaseWorkflow(row)).length;
   const expected = formatExpectedRange(
     row.expected_result_at_min,
     row.expected_result_at_max,
@@ -79,85 +70,90 @@ function LabCard({
   const labLabel = row.lab_panel
     ? `${row.lab_name} · ${row.lab_panel}`
     : row.lab_name;
+  const trackingMeta = row.tracking_status
+    ? TRACKING_BADGE[row.tracking_status]
+    : null;
 
   return (
     <button
       type="button"
       onClick={() => onOpen(row)}
-      className={`flex w-full flex-col gap-0.5 rounded-md border bg-white p-1.5 text-left shadow-sm transition-shadow hover:shadow ${
-        probablyReady ? "border-purple-300 bg-purple-50" : "border-zinc-200"
+      className={`flex w-full gap-2 rounded-md border p-1.5 text-left shadow-sm transition-shadow hover:shadow ${
+        probablyReady
+          ? "border-blue-300 bg-blue-50"
+          : attemptCardClasses(counts.openAttempts)
       }`}
     >
-      <div className="flex items-baseline justify-between gap-2">
-        <p className="min-w-0 flex-1 truncate text-[12px] font-medium leading-tight text-zinc-900">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <p className="truncate text-[12px] font-medium leading-tight text-zinc-900">
           {labLabel}
         </p>
-        <span className="shrink-0 text-[10px] tabular-nums text-zinc-500">{done}/{totalSteps}</span>
-      </div>
-      <p className="truncate text-[11px] text-zinc-500">{formatPersonName(row.patient_name)}</p>
-
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
-          <CountChips counts={counts} />
-          {countdown ? (
-            <span
-              title={
-                countdown.tone === "overdue"
-                  ? `Expected by ${formatShortDate(row.expected_result_at_max)} — past`
-                  : `Expected by ${formatShortDate(row.expected_result_at_max)}`
-              }
-              className={`rounded px-1 py-0.5 text-[9px] font-medium tabular-nums tracking-wide ${
-                countdown.tone === "overdue"
-                  ? "bg-rose-100 text-rose-700"
-                  : countdown.tone === "due"
-                    ? "bg-amber-100 text-amber-800"
-                    : "bg-zinc-100 text-zinc-600"
-              }`}
-            >
-              {countdown.label}
-            </span>
-          ) : null}
-          {destWarning ? (
-            <span
-              title={destWarning}
-              className="rounded bg-orange-100 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-orange-800"
-            >
-              wrong city?
-            </span>
-          ) : null}
-          {probablyReady ? (
-            <span
-              title="Likely ready — check lab portal"
-              className="rounded bg-purple-100 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-purple-700"
-            >
-              ready?
-            </span>
-          ) : null}
-          {row.tracking_status ? (
-            <span
-              className={`rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
-                TRACKING_BADGE[row.tracking_status]?.className ??
-                "bg-zinc-100 text-zinc-500"
-              }`}
-              title={row.tracking_status_detail ?? undefined}
-            >
-              {TRACKING_BADGE[row.tracking_status]?.label ?? row.tracking_status}
-            </span>
-          ) : null}
-          {stale.stale ? (
-            <span className="rounded bg-amber-100 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-800">
-              {stale.daysSinceProgress}d
-            </span>
-          ) : null}
-        </div>
+        <p className="truncate text-[11px] text-zinc-500">
+          {formatPersonName(row.patient_name)}
+        </p>
+        {expected || row.tracking_number ? (
+          <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-zinc-400">
+            {expected ? <span>↳ {expected}</span> : null}
+            {row.tracking_number ? (
+              <span className="truncate">TRK {row.tracking_number}</span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
-      {(row.tracking_number || expected) ? (
-        <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-zinc-400">
-          {expected ? <span>↳ {expected}</span> : null}
-          {row.tracking_number ? <span className="truncate">TRK {row.tracking_number}</span> : null}
-        </div>
-      ) : null}
+      <div className="flex shrink-0 flex-col items-end gap-0.5">
+        {trackingMeta ? (
+          <RailChip
+            className={trackingMeta.className}
+            title={row.tracking_status_detail ?? undefined}
+          >
+            {trackingMeta.label}
+          </RailChip>
+        ) : row.tracking_status ? (
+          <RailChip className={CHIP.muted}>{row.tracking_status}</RailChip>
+        ) : null}
+        {probablyReady ? (
+          <RailChip
+            className={CHIP.state}
+            title="Likely ready — check lab portal"
+          >
+            ready?
+          </RailChip>
+        ) : null}
+        <AttemptRailChip openAttempts={counts.openAttempts} />
+        {countdown ? (
+          <RailChip
+            className={
+              countdown.tone === "overdue"
+                ? CHIP.alert
+                : countdown.tone === "due"
+                  ? CHIP.caution
+                  : CHIP.good
+            }
+            title={
+              countdown.tone === "overdue"
+                ? `Expected by ${formatShortDate(row.expected_result_at_max)} — past`
+                : `Expected by ${formatShortDate(row.expected_result_at_max)}`
+            }
+          >
+            {countdown.label}
+          </RailChip>
+        ) : null}
+        {destWarning ? (
+          <RailChip className={CHIP.warn} title={destWarning}>
+            wrong city?
+          </RailChip>
+        ) : null}
+        <EmailRailChip emailCount={counts.emailCount} />
+        {stale.stale ? (
+          <RailChip
+            className={CHIP.caution}
+            title={`No progress in ${stale.daysSinceProgress} days`}
+          >
+            {stale.daysSinceProgress}d
+          </RailChip>
+        ) : null}
+      </div>
     </button>
   );
 }
@@ -209,8 +205,8 @@ function LabFilterBar({
         onClick={onToggleProbablyReady}
         className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
           probablyReadyOnly
-            ? "border-purple-300 bg-purple-50 text-purple-800"
-            : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50"
+            ? "border-blue-300 bg-blue-50 text-blue-800"
+            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
         }`}
       >
         Likely ready
@@ -220,8 +216,8 @@ function LabFilterBar({
         onClick={onToggleStale}
         className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
           staleOnly
-            ? "border-amber-300 bg-amber-50 text-amber-800"
-            : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50"
+            ? "border-yellow-300 bg-yellow-50 text-yellow-800"
+            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
         }`}
       >
         Stale only

@@ -189,40 +189,55 @@ export async function getCardCountsForCases(
   if (caseIds.length === 0) return {};
   const db = getSupabaseAdmin();
 
-  const [eventsRes, emailsRes] = await Promise.all([
-    db
-      .from("lab_events")
-      .select("case_id, kind, created_at")
-      .in("case_id", caseIds)
-      .in("kind", ["contact_attempted", "contact_reached"])
-      .order("created_at", { ascending: false }),
-    db
-      .from("email_logs")
-      .select("case_id")
-      .in("case_id", caseIds),
-  ]);
-  if (eventsRes.error) throw new Error(eventsRes.error.message);
-  if (emailsRes.error) throw new Error(emailsRes.error.message);
+  // PostgREST encodes `.in()` as a query string. Once we hit a couple
+  // hundred UUIDs the URL exceeds the request size limit and the fetch
+  // tears down with a generic "fetch failed" (no Supabase error object).
+  // Chunk to keep each request comfortably under that limit.
+  const CHUNK = 100;
+  const chunks: string[][] = [];
+  for (let i = 0; i < caseIds.length; i += CHUNK) {
+    chunks.push(caseIds.slice(i, i + CHUNK));
+  }
+
+  const eventRows: Array<{ case_id: string; kind: string; created_at: string }> = [];
+  const emailRows: Array<{ case_id: string }> = [];
+
+  for (const ids of chunks) {
+    const [eventsRes, emailsRes] = await Promise.all([
+      db
+        .from("lab_events")
+        .select("case_id, kind, created_at")
+        .in("case_id", ids)
+        .in("kind", ["contact_attempted", "contact_reached"])
+        .order("created_at", { ascending: false }),
+      db.from("email_logs").select("case_id").in("case_id", ids),
+    ]);
+    if (eventsRes.error) throw new Error(eventsRes.error.message);
+    if (emailsRes.error) throw new Error(emailsRes.error.message);
+    if (eventsRes.data) eventRows.push(...(eventsRes.data as typeof eventRows));
+    if (emailsRes.data) emailRows.push(...(emailsRes.data as typeof emailRows));
+  }
 
   const result: Record<string, CardCounts> = {};
   for (const id of caseIds) result[id] = { openAttempts: 0, emailCount: 0 };
 
-  // Events come back newest-first; per case, walk until we hit a reached event.
-  const seenReached = new Set<string>();
-  for (const ev of eventsRes.data ?? []) {
-    const row = ev as { case_id: string; kind: string };
-    if (seenReached.has(row.case_id)) continue;
-    if (row.kind === "contact_reached") {
-      seenReached.add(row.case_id);
-      continue;
-    }
-    if (row.kind === "contact_attempted") {
-      result[row.case_id].openAttempts++;
+  // Chunked results aren't globally sorted, so group per case then sort
+  // newest-first and walk until a contact_reached event is encountered.
+  const byCase = new Map<string, Array<{ kind: string; created_at: string }>>();
+  for (const ev of eventRows) {
+    const arr = byCase.get(ev.case_id) ?? [];
+    arr.push({ kind: ev.kind, created_at: ev.created_at });
+    byCase.set(ev.case_id, arr);
+  }
+  for (const [caseId, evs] of byCase) {
+    evs.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    for (const ev of evs) {
+      if (ev.kind === "contact_reached") break;
+      if (ev.kind === "contact_attempted") result[caseId].openAttempts++;
     }
   }
-  for (const e of emailsRes.data ?? []) {
-    const row = e as { case_id: string };
-    if (result[row.case_id]) result[row.case_id].emailCount++;
+  for (const e of emailRows) {
+    if (result[e.case_id]) result[e.case_id].emailCount++;
   }
   return result;
 }
