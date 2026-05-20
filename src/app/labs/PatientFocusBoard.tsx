@@ -13,6 +13,7 @@ import { searchPatients, type PatientSuggestion } from "./patient-search-action"
 import { updatePatientAcrossCases } from "./actions";
 import { CaseDetail } from "./CaseDetail";
 import { formatPersonName, formatShortDate } from "@/lib/format";
+import { CountChips, ZERO_COUNTS, type CardCounts } from "./card-counts";
 
 /**
  * Single-patient focused kanban. Replaces the old "By patient" grid view —
@@ -36,10 +37,12 @@ export function PatientFocusBoard({
   initialEmail,
   initialCases,
   initialName,
+  counts,
 }: {
   initialEmail: string | null;
   initialCases: FocusedCase[];
   initialName: string | null;
+  counts?: Record<string, CardCounts>;
 }) {
   const mode: Mode = initialEmail
     ? { kind: "focused", email: initialEmail }
@@ -53,6 +56,7 @@ export function PatientFocusBoard({
       email={mode.email}
       cases={initialCases}
       patientName={initialName ?? mode.email}
+      counts={counts}
     />
   );
 }
@@ -137,10 +141,12 @@ function FocusedView({
   email,
   cases,
   patientName,
+  counts,
 }: {
   email: string;
   cases: FocusedCase[];
   patientName: string;
+  counts?: Record<string, CardCounts>;
 }) {
   const router = useRouter();
   const dialogRef = useRef<HTMLDialogElement | null>(null);
@@ -221,7 +227,14 @@ function FocusedView({
                 {items.length === 0 ? (
                   <p className="px-2 py-3 text-[11px] text-zinc-400">—</p>
                 ) : (
-                  items.map((c) => <FocusLabCard key={c.id} row={c} onOpen={() => open(c)} />)
+                  items.map((c) => (
+                    <FocusLabCard
+                      key={c.id}
+                      row={c}
+                      onOpen={() => open(c)}
+                      counts={counts?.[c.id] ?? ZERO_COUNTS}
+                    />
+                  ))
                 )}
               </div>
             </section>
@@ -255,7 +268,10 @@ function FocusedView({
               </button>
             </div>
             <div className="overflow-y-auto px-6 py-5">
-              <CaseDetail row={activeCase} />
+              <CaseDetail
+                row={activeCase}
+                initialOpenAttempts={counts?.[activeCase.id]?.openAttempts ?? 0}
+              />
             </div>
           </div>
         ) : null}
@@ -264,7 +280,15 @@ function FocusedView({
   );
 }
 
-function FocusLabCard({ row, onOpen }: { row: FocusedCase; onOpen: () => void }) {
+function FocusLabCard({
+  row,
+  onOpen,
+  counts,
+}: {
+  row: FocusedCase;
+  onOpen: () => void;
+  counts: CardCounts;
+}) {
   const labLabel = row.lab_panel
     ? `${row.lab_name} · ${row.lab_panel}`
     : row.lab_name;
@@ -274,9 +298,14 @@ function FocusLabCard({ row, onOpen }: { row: FocusedCase; onOpen: () => void })
       onClick={onOpen}
       className="flex w-full flex-col gap-0.5 rounded-md border border-zinc-200 bg-white p-1.5 text-left shadow-sm transition-shadow hover:shadow"
     >
-      <p className="truncate text-[12px] font-medium leading-tight text-zinc-900">
-        {labLabel}
-      </p>
+      <div className="flex items-center justify-between gap-2">
+        <p className="min-w-0 flex-1 truncate text-[12px] font-medium leading-tight text-zinc-900">
+          {labLabel}
+        </p>
+        <span className="flex shrink-0 items-center gap-1">
+          <CountChips counts={counts} />
+        </span>
+      </div>
       <p className="truncate text-[10.5px] text-zinc-500">
         {row.collection_date ? `Drawn ${formatShortDate(row.collection_date)}` : "No collection date"}
         {row.archived ? " · archived" : ""}

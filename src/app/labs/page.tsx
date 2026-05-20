@@ -115,6 +115,7 @@ export default async function LabsPage({
               initialEmail={focusedPatient}
               initialCases={focusedRows}
               initialName={focusedPatientName}
+              counts={cardCounts}
             />
           </div>
         ) : (tab === "labs" ? labBoardCases : cases).length === 0 ? (
