@@ -111,13 +111,6 @@ export function HudPulse({ user, cases }: HudPulseProps) {
           </div>
         </div>
 
-        {hasCases ? (
-          <span className="count-chip" title="Active cases (everything except Protocol received)">
-            <span className="n">{totalActive}</span>
-            <span className="lbl">active</span>
-          </span>
-        ) : null}
-
         <nav className="nav" aria-label="Lab tracker sections">
           {navItems
             .filter((n) => n.show)
@@ -129,34 +122,46 @@ export function HudPulse({ user, cases }: HudPulseProps) {
             ))}
         </nav>
 
-        {hasCases ? (
-          <span className="glance">
-            {staleCount > 0 ? (
-              <span
-                className="chip stale"
-                title={`${staleCount} ${staleCount === 1 ? "case" : "cases"} idle past the stale threshold`}
-              >
-                <span className="dot" />
-                <span className="num">{staleCount}</span>
-                <span>stale</span>
-              </span>
-            ) : null}
-            {lastSyncLabel ? (
-              <span className="chip sync" title="Most recent tracking refresh in the visible queue">
-                <span className="dot" />
-                Synced {lastSyncLabel}
-              </span>
-            ) : null}
-          </span>
-        ) : null}
-
-        <UserChip email={user.email} role={user.role} />
-
-        <form action={logoutAction}>
-          <button type="submit" className="signout">
-            Sign out
-          </button>
-        </form>
+        <div className="hud-right">
+          {hasCases ? (
+            <span
+              className="count-chip"
+              title="Active cases (everything except Protocol received)"
+            >
+              <span className="n">{totalActive}</span>
+              <span className="lbl">active</span>
+            </span>
+          ) : null}
+          {hasCases ? (
+            <span className="glance">
+              {staleCount > 0 ? (
+                <span
+                  className="chip stale"
+                  title={`${staleCount} ${staleCount === 1 ? "case" : "cases"} idle past the stale threshold`}
+                >
+                  <span className="dot" />
+                  <span className="num">{staleCount}</span>
+                  <span>stale</span>
+                </span>
+              ) : null}
+              {lastSyncLabel ? (
+                <span
+                  className="chip sync"
+                  title="Most recent tracking refresh in the visible queue"
+                >
+                  <span className="dot" />
+                  Synced {lastSyncLabel}
+                </span>
+              ) : null}
+            </span>
+          ) : null}
+          <UserChip email={user.email} role={user.role} />
+          <form action={logoutAction}>
+            <button type="submit" className="signout">
+              Sign out
+            </button>
+          </form>
+        </div>
       </div>
 
       {hasCases ? <FlowStrip counts={counts} /> : null}

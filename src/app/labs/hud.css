@@ -107,6 +107,15 @@
  * margins. Kept defined in case any other surface still references it. */
 .hud--pulse .spacer { display: none; }
 
+/* Right-side group: active count, stale/sync glance chips, user chip,
+ * sign out. Kept together so the relationship between "what's the state
+ * of the queue" and "who's looking at it" is visually obvious. */
+.hud--pulse .hud-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
 /* Glance chips on the right */
 .hud--pulse .glance { display: inline-flex; align-items: center; gap: 8px; }
 .hud--pulse .chip {

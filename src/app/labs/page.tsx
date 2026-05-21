@@ -88,38 +88,25 @@ export default async function LabsPage({
 
       <main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col px-4 pb-16 pt-3 lg:min-h-0 lg:pb-4">
         <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+          <CaseDialog
+            mode="create"
+            triggerLabel="+ New case"
+            triggerClassName="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-zinc-800"
+          />
           <LabsTabs tab={tab} />
           {!isPatientFocus ? (
             <>
-              <span className="text-[11px] text-zinc-500 tabular-nums">
-                {hasFilters
-                  ? `${cases.length} match`
-                  : `${cases.length} active`}
-              </span>
               <div className="min-w-[180px] flex-1">
                 <SearchBar labNames={labNames} />
               </div>
               <TimeRangeTabs since={since} />
               {tab === "labs" ? <KanbanFilterChips /> : null}
-              <span className="ml-auto flex items-center gap-2">
-                <RefreshAllTrackingButton />
+              <RefreshAllTrackingButton />
+              <span className="ml-auto">
                 <LabsLegend />
-                <CaseDialog
-                  mode="create"
-                  triggerLabel="+ New case"
-                  triggerClassName="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-zinc-800"
-                />
               </span>
             </>
-          ) : (
-            <span className="ml-auto">
-              <CaseDialog
-                mode="create"
-                triggerLabel="+ New case"
-                triggerClassName="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-zinc-800"
-              />
-            </span>
-          )}
+          ) : null}
         </div>
 
         {isPatientFocus ? (
