@@ -4,8 +4,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
 import { SINCE_PRESETS, type SinceKey } from "./time-range";
 
-const PRESETS = SINCE_PRESETS;
-
 export function TimeRangeTabs({ since }: { since: SinceKey }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -23,30 +21,17 @@ export function TimeRangeTabs({ since }: { since: SinceKey }) {
   }
 
   return (
-    <div
-      role="tablist"
+    <select
       aria-label="Time range"
-      className="inline-flex rounded-md border border-zinc-200 bg-white p-0.5"
+      value={since}
+      onChange={(e) => select(e.target.value as SinceKey)}
+      className="rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 focus:border-zinc-500 focus:outline-none"
     >
-      {PRESETS.map((p) => {
-        const active = p.key === since;
-        return (
-          <button
-            key={p.key}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            onClick={() => select(p.key)}
-            className={`rounded-[5px] px-3 py-1 text-xs font-medium transition-colors ${
-              active
-                ? "bg-zinc-900 text-white"
-                : "text-zinc-600 hover:bg-zinc-100"
-            }`}
-          >
-            {p.label}
-          </button>
-        );
-      })}
-    </div>
+      {SINCE_PRESETS.map((p) => (
+        <option key={p.key} value={p.key}>
+          {p.label}
+        </option>
+      ))}
+    </select>
   );
 }

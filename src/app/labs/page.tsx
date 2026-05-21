@@ -9,6 +9,7 @@ import { PatientFocusBoard } from "./PatientFocusBoard";
 import { LabsTabs, type LabsTab } from "./LabsTabs";
 import { TimeRangeTabs } from "./TimeRangeTabs";
 import { SearchBar } from "./SearchBar";
+import { KanbanFilterChips } from "./KanbanFilterChips";
 import { RefreshAllTrackingButton } from "./RefreshAllTrackingButton";
 import { HudPulse } from "./HudPulse";
 import { LabsLegend } from "./LabsLegend";
@@ -86,30 +87,38 @@ export default async function LabsPage({
       <HudPulse user={user} cases={cases} />
 
       <main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col px-4 pb-16 pt-3 lg:min-h-0 lg:pb-4">
-        <div className="mb-2 flex flex-wrap items-center gap-2">
+        <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <LabsTabs tab={tab} />
           {!isPatientFocus ? (
             <>
-              <TimeRangeTabs since={since} />
-              <div className="text-xs text-zinc-500 tabular-nums">
+              <span className="text-xs text-zinc-500 tabular-nums">
                 {hasFilters
                   ? `${cases.length} matching ${cases.length === 1 ? "case" : "cases"}`
                   : `${cases.length} active ${cases.length === 1 ? "case" : "cases"}`}
+              </span>
+              <div className="ml-auto flex flex-wrap items-center gap-2">
+                <LabsLegend />
+                <Link
+                  href="/labs/archived"
+                  className="text-xs text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline"
+                >
+                  Archive →
+                </Link>
+                <RefreshAllTrackingButton />
               </div>
-              <div className="flex-1 min-w-0">
-                <SearchBar labNames={labNames} />
-              </div>
-              <LabsLegend />
-              <Link
-                href="/labs/archived"
-                className="text-xs text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline"
-              >
-                Archive →
-              </Link>
-              <RefreshAllTrackingButton />
             </>
           ) : null}
         </div>
+
+        {!isPatientFocus ? (
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="flex-1 min-w-[220px]">
+              <SearchBar labNames={labNames} />
+            </div>
+            <TimeRangeTabs since={since} />
+            {tab === "labs" ? <KanbanFilterChips /> : null}
+          </div>
+        ) : null}
 
         {isPatientFocus ? (
           <div className="flex-1 lg:min-h-0">

@@ -50,18 +50,19 @@ export function SearchBar({ labNames }: { labNames: string[] }) {
   const hasFilters = q.length > 0 || lab.length > 0;
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-md border border-zinc-200 bg-white p-2">
+    <div className="flex w-full flex-wrap items-center gap-2">
       <input
         type="search"
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder="Search patient name, email, or tracking #"
-        className="min-w-[240px] flex-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none"
+        className="min-w-[200px] flex-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none"
       />
       <select
         value={lab}
         onChange={(e) => onLabChange(e.target.value)}
-        className="rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-900 focus:border-zinc-500 focus:outline-none"
+        aria-label="Lab filter"
+        className="rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 focus:border-zinc-500 focus:outline-none"
       >
         <option value="">All labs</option>
         {labNames.map((name) => (

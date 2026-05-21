@@ -16,7 +16,13 @@ import { CaseDialog } from "./CaseDialog";
 import { LabPortalLinks } from "./LabPortalLinks";
 import { RefreshLabStatusButton } from "./RefreshLabStatusButton";
 import { RefreshTrackingButton } from "./RefreshTrackingButton";
-import { attachTrackingFromScan, deleteLabCase, markCaseClosed } from "./actions";
+import {
+  archiveLabCase,
+  attachTrackingFromScan,
+  deleteLabCase,
+  markCaseClosed,
+  unarchiveLabCase,
+} from "./actions";
 import {
   getDrawNote,
   markPatientReached,
@@ -58,6 +64,59 @@ function DeleteCaseButton({ caseId }: { caseId: string }) {
         title="Soft-delete this case (recoverable from Settings → Deleted)"
       >
         {pending ? "Deleting…" : "Delete case"}
+      </button>
+      {error ? <span className="text-[11px] text-red-600">{error}</span> : null}
+    </div>
+  );
+}
+
+function ArchiveCaseButton({
+  caseId,
+  isArchived,
+}: {
+  caseId: string;
+  isArchived: boolean;
+}) {
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
+  function onClick() {
+    const msg = isArchived
+      ? "Unarchive this case?\n\nIt will return to the active lanes."
+      : "Archive this case?\n\nIt moves to the Completed lane and stops appearing in Stale/Likely-ready filters. You can unarchive it any time.";
+    if (!confirm(msg)) return;
+    setError(null);
+    start(async () => {
+      const r = isArchived
+        ? await unarchiveLabCase(caseId)
+        : await archiveLabCase(caseId);
+      if (!r.ok) {
+        setError(r.error ?? "Failed");
+        return;
+      }
+      router.refresh();
+    });
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={pending}
+        className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+        title={
+          isArchived
+            ? "Move back to active lanes"
+            : "Move to Completed lane (keeps the case but hides it from active filters)"
+        }
+      >
+        {pending
+          ? isArchived
+            ? "Unarchiving…"
+            : "Archiving…"
+          : isArchived
+            ? "Unarchive"
+            : "Archive"}
       </button>
       {error ? <span className="text-[11px] text-red-600">{error}</span> : null}
     </div>
@@ -659,16 +718,23 @@ export function CaseDetail({
       </section>
 
       <section className="border-t border-zinc-200 pt-3">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
             Danger zone
           </h3>
-          <DeleteCaseButton caseId={row.id} />
+          <div className="flex flex-wrap items-center gap-2">
+            <ArchiveCaseButton
+              caseId={row.id}
+              isArchived={Boolean(row.archived_at)}
+            />
+            <DeleteCaseButton caseId={row.id} />
+          </div>
         </div>
         <p className="mt-1 text-[11px] text-zinc-500">
-          Soft-deletes the case. Recoverable from Settings → Deleted. To
-          archive instead (keep it visible in the Completed lane), use the
-          card menu&apos;s Archive action.
+          <span className="font-medium text-zinc-600">Archive</span> moves the
+          case to the Completed lane (recoverable, keeps email history visible).{" "}
+          <span className="font-medium text-zinc-600">Delete</span> soft-deletes
+          it — recoverable from Settings → Deleted.
         </p>
       </section>
     </div>

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import type { LabCase } from "@/lib/types";
 import {
   COLUMN_LABEL,
@@ -183,54 +183,6 @@ function StaticColumn({
   );
 }
 
-function LabFilterBar({
-  probablyReadyOnly,
-  staleOnly,
-  onToggleProbablyReady,
-  onToggleStale,
-  total,
-  filtered,
-}: {
-  probablyReadyOnly: boolean;
-  staleOnly: boolean;
-  onToggleProbablyReady: () => void;
-  onToggleStale: () => void;
-  total: number;
-  filtered: number;
-}) {
-  return (
-    <div className="mb-3 flex flex-wrap items-center gap-2">
-      <button
-        type="button"
-        onClick={onToggleProbablyReady}
-        className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
-          probablyReadyOnly
-            ? "border-blue-300 bg-blue-50 text-blue-800"
-            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-        }`}
-      >
-        Likely ready
-      </button>
-      <button
-        type="button"
-        onClick={onToggleStale}
-        className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
-          staleOnly
-            ? "border-yellow-300 bg-yellow-50 text-yellow-800"
-            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-        }`}
-      >
-        Stale only
-      </button>
-      <span className="ml-auto text-xs text-zinc-500">
-        {filtered === total
-          ? `${total} lab${total === 1 ? "" : "s"}`
-          : `${filtered} of ${total} labs`}
-      </span>
-    </div>
-  );
-}
-
 export function LabKanbanBoard({
   rows,
   counts,
@@ -238,19 +190,10 @@ export function LabKanbanBoard({
   rows: LabCase[];
   counts?: Record<string, CardCounts>;
 }) {
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   const probablyReadyOnly = searchParams.get("ready") === "1";
   const staleOnly = searchParams.get("stale") === "1";
-
-  function updateParam(key: string, value: string | null) {
-    const params = new URLSearchParams(searchParams.toString());
-    if (value === null || value === "") params.delete(key);
-    else params.set(key, value);
-    const qs = params.toString();
-    router.replace(qs ? `/labs?${qs}` : "/labs");
-  }
 
   const filtered = useMemo(() => {
     let list = rows;
@@ -298,17 +241,6 @@ export function LabKanbanBoard({
 
   return (
     <div className="flex h-full flex-col">
-      <LabFilterBar
-        probablyReadyOnly={probablyReadyOnly}
-        staleOnly={staleOnly}
-        onToggleProbablyReady={() =>
-          updateParam("ready", probablyReadyOnly ? null : "1")
-        }
-        onToggleStale={() => updateParam("stale", staleOnly ? null : "1")}
-        total={rows.length}
-        filtered={filtered.length}
-      />
-
       <div className="flex flex-row flex-nowrap gap-1.5 pb-2 lg:flex-1 lg:min-h-0">
         {LAB_BOARD_COLUMN_ORDER.map((col) => {
           const colRows = grouped[col];
