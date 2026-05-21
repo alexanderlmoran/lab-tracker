@@ -1,7 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { refreshSupabaseSession } from "@/utils/supabase/session";
 
-const PUBLIC_PREFIXES = ["/login", "/auth/"];
+// /api/cron/* runs on a schedule (Supabase pg_cron or Vercel cron) and
+// authenticates via Authorization: Bearer ${CRON_SECRET} in each route
+// handler — it has no Supabase session, so it must skip this middleware.
+const PUBLIC_PREFIXES = ["/login", "/auth/", "/api/cron/"];
 
 export async function proxy(request: NextRequest) {
   const { response, user } = await refreshSupabaseSession(request);
