@@ -75,7 +75,7 @@ export function RailChip({
   return (
     <span
       title={title}
-      className={`block rounded px-1 py-0.5 text-center text-[9px] font-medium uppercase tabular-nums tracking-wide ${className}`}
+      className={`block rounded px-1 py-0 text-center text-[9px] font-medium uppercase leading-[14px] tabular-nums tracking-wide ${className}`}
     >
       {children}
     </span>

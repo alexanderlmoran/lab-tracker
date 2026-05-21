@@ -85,10 +85,10 @@ function LabCard({
       }`}
     >
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <p className="truncate text-[12px] font-medium leading-tight text-zinc-900">
+        <p className="truncate text-[13px] font-medium leading-tight text-zinc-900">
           {labLabel}
         </p>
-        <p className="truncate text-[11px] text-zinc-500">
+        <p className="truncate text-[12px] text-zinc-500">
           {formatPersonName(row.patient_name)}
         </p>
         {expected || row.tracking_number ? (

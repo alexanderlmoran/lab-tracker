@@ -22,11 +22,48 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family:
+    var(--font-geist-sans),
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Arial,
+    sans-serif;
 }
 
 /* Tailwind v4 preflight resets `margin: 0` globally, which kills the native
  * centering of <dialog> elements opened with .showModal(). Restore it. */
 dialog[open] {
   margin: auto;
+}
+
+/* Cross-platform scrollbar normalization. Windows Chrome paints a persistent
+ * ~15px scrollbar that visibly eats horizontal space inside kanban columns,
+ * truncating card content that fits fine on Mac (overlay scrollbar). Force a
+ * thin scrollbar everywhere and reserve a stable gutter so layout doesn't
+ * shift between platforms or between empty/scrollable states. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #d4d4d8 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #a1a1aa;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Reserve scrollbar space in kanban column bodies so the right-rail chips
+ * land in the same horizontal position regardless of whether the column
+ * actually overflows. */
+.kanban-col > div[class*="overflow-y-auto"] {
+  scrollbar-gutter: stable;
 }
