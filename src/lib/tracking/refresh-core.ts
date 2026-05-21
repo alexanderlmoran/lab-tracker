@@ -13,12 +13,16 @@ import {
   type FedExTrackResult,
 } from "./fedex";
 import type { TrackingStatus } from "@/lib/types";
+import { findLabByName, predictResultDates } from "@/lib/labs/catalog";
 
 type CaseRow = {
   id: string;
   tracking_number: string | null;
   tracking_status: TrackingStatus | null;
   step1_sample_sent?: boolean;
+  lab_name: string | null;
+  expected_result_at_min: string | null;
+  expected_result_at_max: string | null;
 };
 
 /**
@@ -38,23 +42,62 @@ async function onDeliveredTransition(args: {
   caseId: string;
   actor: string;
   step1AlreadyDone: boolean;
+  labName: string | null;
+  expectedMinAlready: string | null;
+  expectedMaxAlready: string | null;
+  deliveredAtIso: string | null;
 }): Promise<void> {
-  if (args.step1AlreadyDone) return;
+  // Step 1 tick.
+  if (!args.step1AlreadyDone) {
+    try {
+      await args.db
+        .from("lab_cases")
+        .update({ step1_sample_sent: true })
+        .eq("id", args.caseId);
+      await args.db.from("lab_events").insert({
+        case_id: args.caseId,
+        kind: "step_toggled",
+        step: 1,
+        completed: true,
+        actor: args.actor,
+        note: "Auto-advanced: FedEx delivered sample to lab",
+      });
+    } catch (err) {
+      console.error("[tracking] step1 tick failed", err);
+    }
+  }
+
+  // Expected-result-date prediction. Only fill if both are blank — never
+  // overwrite a manual entry. Anchor on the delivery date so the turnaround
+  // clock starts when the lab actually received the sample, which is when
+  // the catalog's turnaroundDaysMin/Max are measured from.
+  if (args.expectedMinAlready || args.expectedMaxAlready) return;
+  if (!args.deliveredAtIso) return;
+  if (!args.labName) return;
+  const entry = findLabByName(args.labName);
+  if (!entry) return;
+  if (entry.turnaroundDaysMin == null && entry.turnaroundDaysMax == null) return;
+  const { minIso, maxIso } = predictResultDates(
+    new Date(args.deliveredAtIso),
+    entry,
+  );
+  if (!minIso && !maxIso) return;
   try {
     await args.db
       .from("lab_cases")
-      .update({ step1_sample_sent: true })
+      .update({
+        expected_result_at_min: minIso,
+        expected_result_at_max: maxIso,
+      })
       .eq("id", args.caseId);
     await args.db.from("lab_events").insert({
       case_id: args.caseId,
-      kind: "step_toggled",
-      step: 1,
-      completed: true,
+      kind: "note",
       actor: args.actor,
-      note: "Auto-advanced: FedEx delivered sample to lab",
+      note: `Auto-set expected result window: ${minIso ?? "?"} – ${maxIso ?? "?"} (${entry.name} turnaround)`,
     });
   } catch (err) {
-    console.error("[tracking] onDeliveredTransition failed", err);
+    console.error("[tracking] expected-date fill failed", err);
   }
 }
 
@@ -102,7 +145,9 @@ export async function refreshTrackingForActiveCasesCore(opts: {
 
   const { data, error } = await db
     .from("lab_cases")
-    .select("id, tracking_number, tracking_status, step1_sample_sent")
+    .select(
+      "id, tracking_number, tracking_status, step1_sample_sent, lab_name, expected_result_at_min, expected_result_at_max",
+    )
     .is("deleted_at", null)
     .is("archived_at", null)
     .not("tracking_number", "is", null)
@@ -153,13 +198,18 @@ export async function refreshTrackingForActiveCasesCore(opts: {
         actor: opts.actor,
         note: `${r.status}${r.location ? ` · ${r.location}` : ""}${r.statusDetail ? ` — ${r.statusDetail}` : ""}`,
       });
-      // First-time delivered transition: ensure step 1 is ticked.
+      // First-time delivered transition: tick step 1 and auto-fill the
+      // expected-result window from the lab catalog turnaround.
       if (r.status === "delivered" && c.tracking_status !== "delivered") {
         await onDeliveredTransition({
           db,
           caseId: c.id,
           actor: opts.actor,
           step1AlreadyDone: Boolean(c.step1_sample_sent),
+          labName: c.lab_name,
+          expectedMinAlready: c.expected_result_at_min,
+          expectedMaxAlready: c.expected_result_at_max,
+          deliveredAtIso: r.deliveredAtIso ?? null,
         });
       }
     }
