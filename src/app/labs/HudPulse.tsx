@@ -8,7 +8,6 @@ import {
   getColumnFor,
   type ColumnKey,
 } from "@/lib/columns";
-import { CaseDialog } from "./CaseDialog";
 import { UserChip } from "./UserChip";
 import { logoutAction } from "../login/actions";
 import "./hud.css";
@@ -130,8 +129,6 @@ export function HudPulse({ user, cases }: HudPulseProps) {
             ))}
         </nav>
 
-        <span className="spacer" />
-
         {hasCases ? (
           <span className="glance">
             {staleCount > 0 ? (
@@ -152,16 +149,6 @@ export function HudPulse({ user, cases }: HudPulseProps) {
             ) : null}
           </span>
         ) : null}
-
-        <CaseDialog
-          mode="create"
-          triggerLabel={
-            // The "+" glyph is rendered as a span inside the trigger so it
-            // inherits the design's spacing; we pass it as part of the label.
-            "+ New case"
-          }
-          triggerClassName="new-btn"
-        />
 
         <UserChip email={user.email} role={user.role} />
 
