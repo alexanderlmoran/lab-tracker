@@ -58,6 +58,9 @@ type Job = {
   patientName: string;
   patientDob: string | null;
   labName: string;
+  /** Verbatim Zenoti service name (e.g. "Labs - Access Custom"). Optional
+   * — older cases pre-dating the migration may not have it. */
+  zenotiServiceName: string | null;
   collectionDate: string | null;
   /** Accession # from the PDF (preferred) or case row. Used to build a
    * traceable PB lab title. May be null for pre-accession-edit cases. */
@@ -66,14 +69,31 @@ type Job = {
   pdfSignedUrl: string;
 };
 
-/** Compose the title shown on the PB chart. Two goals:
- *  - At-a-glance recognition of which lab it is.
- *  - Traceability — clinician can look up the accession # in the source
- *    lab portal if questions arise.
- *  Falls back to bare labName when accession is missing. */
-function composePbLabTitle(labName: string, accession: string | null): string {
-  if (!accession) return labName;
-  return `${labName} — Acc# ${accession}`;
+/** Strips the "Labs - " prefix from a Zenoti service name. The prefix is
+ * an internal Centner taxonomy detail that doesn't belong in front of a
+ * clinician on PB. "Labs - Access Custom" → "Access Custom". */
+function cleanServiceName(raw: string | null): string | null {
+  if (!raw) return null;
+  return raw.replace(/^\s*Labs\s*-\s*/i, "").trim() || null;
+}
+
+/** Compose the title shown on the PB chart. Order of preference:
+ *   1. Cleaned Zenoti service name + accession  ("Access Custom · Acc# 007143558")
+ *   2. Cleaned Zenoti service name only          ("Access Custom")
+ *   3. lab_name + accession                      ("Access · Acc# 007143558")
+ *   4. lab_name                                  ("Access")
+ * Clinicians scan the chart left-to-right; richer titles let them tell
+ * "Access — basic panel" from "Access — custom panel" without opening
+ * the PDF. Accession # supports look-up in the source lab portal. */
+function composePbLabTitle(
+  labName: string,
+  serviceName: string | null,
+  accession: string | null,
+): string {
+  const cleaned = cleanServiceName(serviceName);
+  const head = cleaned ?? labName;
+  if (!accession) return head;
+  return `${head} · Acc# ${accession}`;
 }
 
 async function claimNext(): Promise<Job | null> {
@@ -140,7 +160,7 @@ async function processJob(job: Job) {
       consultantId: PB_CONSULTANT_ID!,
       patientName: job.patientName,
       patientDob: job.patientDob ?? undefined,
-      labName: composePbLabTitle(job.labName, job.accession),
+      labName: composePbLabTitle(job.labName, job.zenotiServiceName, job.accession),
       dateOrdered,
       pdfPath,
       pdfFilename: job.pdfFilename,

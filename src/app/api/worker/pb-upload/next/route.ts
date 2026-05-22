@@ -84,7 +84,9 @@ export async function POST(request: Request) {
   // Hydrate case + pdf details for the worker.
   const { data: kase, error: caseErr } = await db
     .from("lab_cases")
-    .select("id, patient_name, patient_dob, lab_name, lab_external_ref, collection_date")
+    .select(
+      "id, patient_name, patient_dob, lab_name, lab_external_ref, collection_date, zenoti_service_name",
+    )
     .eq("id", claimed.case_id)
     .single();
   if (caseErr || !kase) {
@@ -125,6 +127,9 @@ export async function POST(request: Request) {
       patientName: kase.patient_name,
       patientDob: kase.patient_dob,
       labName: kase.lab_name,
+      // Verbatim Zenoti service ("Labs - Access Custom") — worker uses
+      // this to build a richer PB title than bare labName.
+      zenotiServiceName: (kase.zenoti_service_name as string | null) ?? null,
       collectionDate: kase.collection_date,
       // PDF-attached accession (preferred — what's actually printed on
       // the document). Falls back to the case's lab_external_ref if a

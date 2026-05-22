@@ -108,10 +108,14 @@ export async function POST(request: Request) {
     if (appt.note) noteParts.push(appt.note);
     const composedNote = noteParts.join(" • ");
 
-    // First, look up an existing row by zenoti_appointment_id.
+    // First, look up an existing row by zenoti_appointment_id. We include
+    // deleted_at because if the case was previously soft-deleted but
+    // Zenoti now reports the appointment as active again, we should
+    // RESTORE the case rather than create a duplicate or silently leave
+    // it deleted.
     const { data: existing, error: lookupErr } = await db
       .from("lab_cases")
-      .select("id")
+      .select("id, deleted_at, zenoti_service_name")
       .eq("zenoti_appointment_id", appt.zenotiAppointmentId)
       .maybeSingle();
 
@@ -121,9 +125,34 @@ export async function POST(request: Request) {
     }
 
     if (existing) {
+      const existingCaseId = existing.id as string;
+      const wasDeleted = Boolean(existing.deleted_at);
+      const needsServiceNameBackfill = !existing.zenoti_service_name && appt.serviceName;
+
+      if (wasDeleted || needsServiceNameBackfill) {
+        const restorePatch: Record<string, unknown> = {};
+        if (wasDeleted) restorePatch.deleted_at = null;
+        if (needsServiceNameBackfill)
+          restorePatch.zenoti_service_name = appt.serviceName;
+        await db.from("lab_cases").update(restorePatch).eq("id", existingCaseId);
+
+        if (wasDeleted) {
+          await db.from("lab_events").insert({
+            case_id: existingCaseId,
+            kind: "case_restored",
+            actor: "worker:zenoti-sync",
+            note: `Restored: Zenoti appointment ${appt.zenotiAppointmentId} reappeared in sync after prior deletion`,
+            meta: {
+              zenoti_appointment_id: appt.zenotiAppointmentId,
+              service_name: appt.serviceName,
+            },
+          });
+        }
+      }
+
       results.push({
         zenotiAppointmentId: appt.zenotiAppointmentId,
-        caseId: existing.id as string,
+        caseId: existingCaseId,
         created: false,
       });
       continue;
@@ -137,6 +166,7 @@ export async function POST(request: Request) {
       collection_date: appt.collectionDate ?? null,
       zenoti_appointment_id: appt.zenotiAppointmentId,
       zenoti_guest_id: appt.zenotiGuestId,
+      zenoti_service_name: appt.serviceName,
       notes: composedNote,
       auto_send_emails: true,
     };
