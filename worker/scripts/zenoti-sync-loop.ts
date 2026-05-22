@@ -40,19 +40,29 @@ function todayLocal(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-async function pushToTracker(appts: LabAppointment[]): Promise<void> {
+type SyncedDateCensus = { date: string; allAppointmentIds: string[] };
+
+async function pushToTracker(
+  appts: LabAppointment[],
+  syncedDates: SyncedDateCensus[],
+): Promise<void> {
   const active = appts.filter((a) => !a.cancelled);
   const cancelledAppointmentIds = appts
     .filter((a) => a.cancelled)
     .map((a) => a.zenotiAppointmentId);
-  if (active.length === 0 && cancelledAppointmentIds.length === 0) return;
+  // Even with zero appointments to upsert/cancel, we still want to POST so
+  // the reconciliation pass can clean up hard-deleted cases for the date.
   const res = await request(`${BASE}/api/worker/cases`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${SECRET}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ appointments: active, cancelledAppointmentIds }),
+    body: JSON.stringify({
+      appointments: active,
+      cancelledAppointmentIds,
+      syncedDates,
+    }),
   });
   const text = await res.body.text();
   if (res.statusCode !== 200) {
@@ -64,12 +74,19 @@ async function pushToTracker(appts: LabAppointment[]): Promise<void> {
     existing: number;
     cancelledReceived?: number;
     cancelledDeleted?: number;
+    reconciledDeleted?: number;
     errors: { zenotiAppointmentId: string; error: string }[];
   };
-  if (json.created > 0 || (json.cancelledDeleted ?? 0) > 0 || json.errors.length > 0) {
+  if (
+    json.created > 0 ||
+    (json.cancelledDeleted ?? 0) > 0 ||
+    (json.reconciledDeleted ?? 0) > 0 ||
+    json.errors.length > 0
+  ) {
     log(
       `pushed ${json.received} • +${json.created} new • ${json.existing} existing` +
         ` • cancellations: ${json.cancelledReceived ?? 0} reported / ${json.cancelledDeleted ?? 0} deleted` +
+        ` • reconciled: ${json.reconciledDeleted ?? 0} hard-deletions` +
         ` • ${json.errors.length} errors`,
     );
   }
@@ -79,6 +96,7 @@ async function tick(): Promise<void> {
   try {
     const today = todayLocal();
     const all: LabAppointment[] = [];
+    const syncedDates: SyncedDateCensus[] = [];
     for (let i = 0; i <= DAYS_AHEAD; i++) {
       const d = addDays(today, i);
       const appts = await fetchZenotiLabAppointments({
@@ -87,8 +105,15 @@ async function tick(): Promise<void> {
         includeCancelled: true, // we need cancellations for auto-archive
       });
       all.push(...appts);
+      // Census for the reconciliation pass: every lab appointment ID
+      // Zenoti returned for this date. Cases whose ID isn't in here got
+      // hard-deleted upstream and need cleanup.
+      syncedDates.push({
+        date: d,
+        allAppointmentIds: appts.map((a) => a.zenotiAppointmentId),
+      });
     }
-    await pushToTracker(all);
+    await pushToTracker(all, syncedDates);
   } catch (err) {
     log(`tick error: ${err instanceof Error ? err.message : String(err)}`);
   }

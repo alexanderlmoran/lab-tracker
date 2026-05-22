@@ -37,7 +37,27 @@ const Body = z.object({
    * case exists for any of these IDs and isn't already soft-deleted, it
    * will be soft-deleted (deleted_at set + lab_events row appended). */
   cancelledAppointmentIds: z.array(z.string().min(1)).optional().default([]),
+  /** Per-date census of every appointment ID the worker observed in
+   * Zenoti's setDate response (active + cancelled combined). Drives
+   * deletion reconciliation: tracker cases on these dates whose
+   * zenoti_appointment_id is NOT in the census were hard-deleted in
+   * Zenoti and need to be soft-deleted here too. Each entry must cover a
+   * COMPLETE day's appointments, otherwise innocent cases get axed. */
+  syncedDates: z
+    .array(
+      z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        allAppointmentIds: z.array(z.string().min(1)),
+      }),
+    )
+    .optional()
+    .default([]),
 });
+
+// Safety: cases created in the last N minutes are NEVER reconciled away,
+// even if their zenoti_appointment_id is missing from the census. Protects
+// against races where the sync runs while a case is being created.
+const RECONCILE_GRACE_MS = 5 * 60 * 1000;
 
 type SyncResult = {
   zenotiAppointmentId: string;
@@ -202,6 +222,69 @@ export async function POST(request: Request) {
     cancellations.push({ zenotiAppointmentId: zId, caseId: caseRow.id as string, action: "deleted" });
   }
 
+  // ── Deletion reconciliation: catch hard-deletions where Zenoti
+  //    forgets the appointment entirely (it disappears from setDate
+  //    responses, so the cancellation path above never triggers).
+  //    For each synced date, any tracker case with collection_date=date
+  //    + zenoti_appointment_id NOT IN the census is presumed deleted.
+  const reconcileGraceCutoff = new Date(
+    Date.now() - RECONCILE_GRACE_MS,
+  ).toISOString();
+  const reconciled: { caseId: string; zenotiAppointmentId: string; date: string }[] = [];
+  for (const sd of parsed.syncedDates) {
+    const { data: existingCases, error: queryErr } = await db
+      .from("lab_cases")
+      .select("id, zenoti_appointment_id, created_at")
+      .eq("collection_date", sd.date)
+      .not("zenoti_appointment_id", "is", null)
+      .is("deleted_at", null);
+    if (queryErr) {
+      errors.push({
+        zenotiAppointmentId: `reconcile:${sd.date}`,
+        error: queryErr.message,
+      });
+      continue;
+    }
+
+    const census = new Set(sd.allAppointmentIds);
+    type CaseRow = { id: string; zenoti_appointment_id: string; created_at: string };
+    const orphans = ((existingCases ?? []) as CaseRow[]).filter(
+      (c) =>
+        !census.has(c.zenoti_appointment_id) &&
+        c.created_at < reconcileGraceCutoff,
+    );
+
+    for (const orphan of orphans) {
+      const { error: delErr } = await db
+        .from("lab_cases")
+        .update({ deleted_at: new Date().toISOString() })
+        .eq("id", orphan.id);
+      if (delErr) {
+        errors.push({
+          zenotiAppointmentId: orphan.zenoti_appointment_id,
+          error: `reconcile delete: ${delErr.message}`,
+        });
+        continue;
+      }
+      await db.from("lab_events").insert({
+        case_id: orphan.id,
+        kind: "case_deleted",
+        actor: "worker:zenoti-sync",
+        note: `Soft-deleted: Zenoti appointment ${orphan.zenoti_appointment_id} no longer present in ${sd.date} sync (presumed hard-deleted upstream)`,
+        meta: {
+          zenoti_appointment_id: orphan.zenoti_appointment_id,
+          synced_date: sd.date,
+          census_size: sd.allAppointmentIds.length,
+        },
+      });
+      reconciled.push({
+        caseId: orphan.id,
+        zenotiAppointmentId: orphan.zenoti_appointment_id,
+        date: sd.date,
+      });
+    }
+  }
+
   return NextResponse.json({
     ok: errors.length === 0,
     received: parsed.appointments.length,
@@ -209,8 +292,10 @@ export async function POST(request: Request) {
     existing: results.filter((r) => !r.created).length,
     cancelledReceived: parsed.cancelledAppointmentIds.length,
     cancelledDeleted: cancellations.filter((c) => c.action === "deleted").length,
+    reconciledDeleted: reconciled.length,
     errors,
     results,
     cancellations,
+    reconciled,
   });
 }
