@@ -129,19 +129,40 @@ export async function POST(request: Request) {
       const wasDeleted = Boolean(existing.deleted_at);
       const needsServiceNameBackfill = !existing.zenoti_service_name && appt.serviceName;
 
-      if (wasDeleted || needsServiceNameBackfill) {
+      // Restore guard: only restore cases that the SYNC previously deleted.
+      // If a human staff member soft-deleted the case via the UI, leave it
+      // alone — they had a reason (Zenoti appointment is operationally dead
+      // even if the API still echoes it, duplicate booking, etc.). Without
+      // this guard, the user's "delete" click and the next sync tick fight
+      // forever (Brittany Arnason loop, 2026-05-22).
+      let shouldRestore = wasDeleted;
+      if (wasDeleted) {
+        const { data: lastDelete } = await db
+          .from("lab_events")
+          .select("actor")
+          .eq("case_id", existingCaseId)
+          .eq("kind", "case_deleted")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const deletedByUser =
+          lastDelete && !(lastDelete.actor as string).startsWith("worker:");
+        if (deletedByUser) shouldRestore = false;
+      }
+
+      if (shouldRestore || needsServiceNameBackfill) {
         const restorePatch: Record<string, unknown> = {};
-        if (wasDeleted) restorePatch.deleted_at = null;
+        if (shouldRestore) restorePatch.deleted_at = null;
         if (needsServiceNameBackfill)
           restorePatch.zenoti_service_name = appt.serviceName;
         await db.from("lab_cases").update(restorePatch).eq("id", existingCaseId);
 
-        if (wasDeleted) {
+        if (shouldRestore) {
           await db.from("lab_events").insert({
             case_id: existingCaseId,
             kind: "case_restored",
             actor: "worker:zenoti-sync",
-            note: `Restored: Zenoti appointment ${appt.zenotiAppointmentId} reappeared in sync after prior deletion`,
+            note: `Restored: Zenoti appointment ${appt.zenotiAppointmentId} reappeared in sync after prior auto-reconciliation`,
             meta: {
               zenoti_appointment_id: appt.zenotiAppointmentId,
               service_name: appt.serviceName,

@@ -22,6 +22,9 @@ type LabRowState = {
   peptide: string;
   collectionDate: string;
   trackingNumber: string;
+  /** Lab portal accession # — populated by scraper auto-match if blank,
+   * or manually entered here to short-circuit the matching cascade. */
+  labExternalRef: string;
   pickupConfirmation: string;
   partialExpected: boolean;
 };
@@ -31,6 +34,7 @@ export type LabRowPayload = {
   labPanel: string | null;
   collectionDate: string | null;
   trackingNumber: string | null;
+  labExternalRef: string | null;
   pickupConfirmation: string | null;
   partialExpected: boolean;
 };
@@ -41,6 +45,7 @@ function emptyRow(): LabRowState {
     peptide: "",
     collectionDate: "",
     trackingNumber: "",
+    labExternalRef: "",
     pickupConfirmation: "",
     partialExpected: false,
   };
@@ -71,6 +76,7 @@ function rowToPayload(row: LabRowState): LabRowPayload {
     labPanel,
     collectionDate: row.collectionDate || null,
     trackingNumber: row.trackingNumber.trim() || null,
+    labExternalRef: row.labExternalRef.trim() || null,
     pickupConfirmation: row.pickupConfirmation.trim() || null,
     partialExpected: row.partialExpected,
   };
@@ -297,6 +303,20 @@ export function NewCaseFormFields() {
                       }}
                     />
                   ) : null}
+                </div>
+
+                <div>
+                  <label className={labelClass}>Accession #</label>
+                  <input
+                    type="text"
+                    value={row.labExternalRef}
+                    onChange={(e) =>
+                      updateRow(i, { labExternalRef: e.target.value })
+                    }
+                    maxLength={64}
+                    placeholder="e.g. 007143558"
+                    className={`${inputClass} mt-1`}
+                  />
                 </div>
 
                 <div>
