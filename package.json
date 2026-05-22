@@ -3,7 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --webpack",
+    "dev": "concurrently --kill-others-on-fail --prefix-colors=\"cyan,magenta,yellow,green\" --names=\"next,pb,zenoti,attach\" \"npm:dev:next\" \"npm:dev:pb\" \"npm:dev:zenoti\" \"npm:dev:auto-attach\"",
+    "dev:next": "next dev --webpack",
+    "dev:pb": "cd worker && npx tsx scripts/pb-upload-worker.ts",
+    "dev:zenoti": "cd worker && npx tsx scripts/zenoti-sync-loop.ts",
+    "dev:auto-attach": "cd worker && npx tsx scripts/auto-attach-test-pdf.ts",
+    "dev:next-only": "next dev --webpack",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -34,6 +39,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^9.2.1",
     "eslint": "^9",
     "eslint-config-next": "16.2.5",
     "tailwindcss": "^4",
