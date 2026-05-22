@@ -15,12 +15,18 @@ export type ColumnKey =
 // `completed` is intentionally excluded: it's an archive bucket, not a
 // step you "jump" to from the menu. The By-Lab board uses
 // LAB_BOARD_COLUMN_ORDER below to append it.
+// Order reflects the natural lifecycle of a card. Pending Upload sits right
+// after Sample Sent because that's the lane staff most need to monitor —
+// it's where human approval is owed. A card with both partial + complete
+// results passes through Pending Upload TWICE: once when partial arrives
+// (then → Partial Uploaded) and again when complete arrives (then →
+// Complete Uploaded). That intentional "back to Pending" surfaces the work.
 export const COLUMN_ORDER: ColumnKey[] = [
   "untouched",
   "sample_sent",
+  "pending_upload",
   "partial_results",
   "complete_results",
-  "pending_upload",
   "rof_scheduled",
   "rof_done",
   "closed",
@@ -34,8 +40,11 @@ export const LAB_BOARD_COLUMN_ORDER: ColumnKey[] = [
 export const COLUMN_LABEL: Record<ColumnKey, string> = {
   untouched: "New",
   sample_sent: "Sample Sent",
-  partial_results: "Partial Results",
-  complete_results: "Complete Results",
+  // "Uploaded" labels emphasize the PB-side outcome (not merely "we got the
+  // data back"). A card only lands in these lanes once the PDF actually
+  // landed on the patient's PB chart. Pre-upload states sit in Pending Upload.
+  partial_results: "Partial Uploaded",
+  complete_results: "Complete Uploaded",
   pending_upload: "Pending Upload",
   rof_scheduled: "ROF Scheduled",
   rof_done: "ROF Done",
@@ -198,20 +207,19 @@ export function getColumnFor(
   if (c.step8_protocol_emailed && c.step9_sales_followup) return "closed";
   if (c.step7_rof_completed) return "rof_done";
   if (c.step6_rof_scheduled) return "rof_scheduled";
-  // Pending Upload pulls cases out of partial/complete when a scraper has
-  // attached a PDF that hasn't been approved yet. Step5 (and step3) gate the
-  // forward progression — staff approval in the modal flips them to true.
-  if (
-    attachment?.hasPendingPdf &&
-    (c.step4_complete_received || c.step2_partial_received) &&
-    !c.step5_complete_uploaded
-  ) {
-    return "pending_upload";
-  }
-  if (c.step4_complete_received || c.step5_complete_uploaded)
-    return "complete_results";
-  if (c.step2_partial_received || c.step3_partial_uploaded)
-    return "partial_results";
+
+  // Column placement is now pure step-state. The lane names match the
+  // BOOLEAN they require, so a "Partial Uploaded" card has step3 truly
+  // flipped, not just "lab told us about it". Any intermediate state
+  // (received-but-not-yet-uploaded, scraper-hasn't-attached-PDF-yet,
+  // worker-in-flight) lives in Pending Upload until the relevant step
+  // boolean flips. The `attachment` arg is no longer consulted here —
+  // it remains for backwards compatibility with callers that still
+  // pass it.
+  if (c.step5_complete_uploaded) return "complete_results";
+  if (c.step4_complete_received) return "pending_upload"; // complete received, awaiting upload
+  if (c.step3_partial_uploaded) return "partial_results";
+  if (c.step2_partial_received) return "pending_upload"; // partial received, awaiting upload
   if (c.step1_sample_sent) return "sample_sent";
   return "untouched";
 }
