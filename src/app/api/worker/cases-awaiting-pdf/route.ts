@@ -11,6 +11,13 @@
 //   - step4_complete_received OR step2_partial_received is true
 //   - step5_complete_uploaded is false
 //   - no non-superseded lab_case_pdfs row exists
+//   - case was created in the last AUTO_ATTACH_WINDOW_MS (default 30 min)
+//
+// The recency filter is a SAFETY GATE: even when the auto-attach watcher
+// is running, it should never touch cases that pre-date this dev session.
+// If a real (older) case is waiting for a real scraper, the watcher won't
+// stomp it with the canned test PDF. Demo cases — booked seconds ago —
+// pass through.
 //
 // Auth: Bearer WORKER_SHARED_SECRET — same as other /api/worker/* routes.
 
@@ -18,6 +25,11 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 
 export const dynamic = "force-dynamic";
+
+// 30 minutes. Tunable via env if a demo runs long.
+const AUTO_ATTACH_WINDOW_MS = Number(
+  process.env.AUTO_ATTACH_WINDOW_MS ?? "1800000",
+);
 
 type ResponseCase = {
   caseId: string;
@@ -38,16 +50,22 @@ export async function POST(request: Request) {
   }
 
   const db = getSupabaseAdmin();
+  const recencyCutoff = new Date(
+    Date.now() - AUTO_ATTACH_WINDOW_MS,
+  ).toISOString();
 
   // Pull candidate cases — narrow at the DB to keep memory bounded.
+  // The created_at filter is the SAFETY GATE described in the header.
   const { data: cases, error } = await db
     .from("lab_cases")
     .select(
-      "id, patient_name, patient_dob, lab_name, collection_date, lab_external_ref, step2_partial_received, step4_complete_received, step5_complete_uploaded, archived_at",
+      "id, patient_name, patient_dob, lab_name, collection_date, lab_external_ref, step2_partial_received, step4_complete_received, step5_complete_uploaded, archived_at, created_at, deleted_at",
     )
     .not("lab_external_ref", "is", null)
     .eq("step5_complete_uploaded", false)
-    .is("archived_at", null);
+    .is("archived_at", null)
+    .is("deleted_at", null)
+    .gte("created_at", recencyCutoff);
 
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
@@ -63,6 +81,8 @@ export async function POST(request: Request) {
     step2_partial_received: boolean;
     step4_complete_received: boolean;
     step5_complete_uploaded: boolean;
+    created_at: string;
+    deleted_at: string | null;
   };
   const candidates = ((cases ?? []) as Row[]).filter(
     (c) => c.step4_complete_received || c.step2_partial_received,

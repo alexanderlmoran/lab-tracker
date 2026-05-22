@@ -113,44 +113,73 @@ export async function POST(request: Request) {
 
   // A PDF arriving from the scraper IS the signal that the lab has the
   // results — no point making staff click step 4 (or step 2 for partial)
-  // by hand. Cascade: step4 implies step1 done; the form's setStepCompleted
-  // path handles cascade properly via a server action, but in this worker
-  // context we set the boolean directly and emit a step_toggled event so
-  // the activity log reflects the auto-toggle. Idempotent — if step is
-  // already true, the row just stays true.
+  // by hand. Match the form's setStepCompleted(cascadePrior:true) semantics:
+  // when we set step 4, we also tick step 1 (and step 2/3 for partials) if
+  // they're still false — otherwise the activity log shows step 4 done
+  // with step 1 still open, which is structurally inconsistent.
   const stepToFlip = parsed.isPartial ? 2 : 4;
-  const stepColumn =
+  const targetColumn =
     stepToFlip === 2 ? "step2_partial_received" : "step4_complete_received";
 
-  // Read current step state to know if we're actually flipping or no-op.
+  // The cascade set for a step 4 auto-toggle: step 1, step 2, step 3
+  // (per the form's "tick prior workflow steps" behavior). For step 2,
+  // only step 1 cascades.
+  const cascadeColumns: string[] =
+    stepToFlip === 4
+      ? ["step1_sample_sent", "step2_partial_received", "step3_partial_uploaded"]
+      : ["step1_sample_sent"];
+
   const { data: caseSteps } = await db
     .from("lab_cases")
-    .select(stepColumn)
+    .select(
+      "step1_sample_sent, step2_partial_received, step3_partial_uploaded, step4_complete_received",
+    )
     .eq("id", parsed.caseId)
     .single();
-  const stepAlreadyTrue = Boolean(
-    (caseSteps as Record<string, boolean> | null)?.[stepColumn],
-  );
 
-  if (!stepAlreadyTrue) {
-    await db
-      .from("lab_cases")
-      .update({ [stepColumn]: true })
-      .eq("id", parsed.caseId);
+  const stepStateRow = (caseSteps as Record<string, boolean> | null) ?? {};
+  const updates: Record<string, boolean> = {};
+  const newlyToggled: { col: string; step: number }[] = [];
 
-    await db.from("lab_events").insert({
-      case_id: parsed.caseId,
-      kind: "step_toggled",
-      step: stepToFlip,
-      completed: true,
-      actor: parsed.source,
-      note: `Auto-set on result PDF arrival (${parsed.pdfFilename})`,
-      meta: {
-        pdf_id: pdfRow.id,
-        external_ref: parsed.labExternalRef,
-        is_partial: parsed.isPartial ?? false,
-      },
-    });
+  const STEP_LABEL: Record<string, number> = {
+    step1_sample_sent: 1,
+    step2_partial_received: 2,
+    step3_partial_uploaded: 3,
+    step4_complete_received: 4,
+  };
+
+  if (!stepStateRow[targetColumn]) {
+    updates[targetColumn] = true;
+    newlyToggled.push({ col: targetColumn, step: stepToFlip });
+  }
+  for (const col of cascadeColumns) {
+    if (!stepStateRow[col]) {
+      updates[col] = true;
+      newlyToggled.push({ col, step: STEP_LABEL[col] });
+    }
+  }
+
+  if (Object.keys(updates).length > 0) {
+    await db.from("lab_cases").update(updates).eq("id", parsed.caseId);
+
+    for (const t of newlyToggled) {
+      await db.from("lab_events").insert({
+        case_id: parsed.caseId,
+        kind: "step_toggled",
+        step: t.step,
+        completed: true,
+        actor: parsed.source,
+        note:
+          t.step === stepToFlip
+            ? `Auto-set on result PDF arrival (${parsed.pdfFilename})`
+            : `Auto-set by cascade from step ${stepToFlip}`,
+        meta: {
+          pdf_id: pdfRow.id,
+          external_ref: parsed.labExternalRef,
+          is_partial: parsed.isPartial ?? false,
+        },
+      });
+    }
   }
 
   await db.from("lab_events").insert({
