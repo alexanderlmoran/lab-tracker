@@ -13,6 +13,8 @@ import { ActivityLog } from "./ActivityLog";
 import { EmailLogPanel } from "./EmailLogPanel";
 import { BarcodeScanner } from "./BarcodeScanner";
 import { CaseDialog } from "./CaseDialog";
+import { PdfReviewModal } from "./PdfReviewModal";
+import { getPendingPdfForCase, type PendingPdf } from "./pdf-actions";
 import { LabPortalLinks } from "./LabPortalLinks";
 import { RefreshLabStatusButton } from "./RefreshLabStatusButton";
 import { RefreshTrackingButton } from "./RefreshTrackingButton";
@@ -563,6 +565,38 @@ export function CaseDetail({
   });
   const [openAttempts, setOpenAttempts] = useState(initialOpenAttempts);
 
+  // Pending-PDF state: only relevant when the card sits in pending_upload.
+  // Loaded lazily after CaseDetail mounts; if there's no PDF (e.g. card just
+  // moved out of the column), pendingPdf stays null and no CTA renders.
+  const [pendingPdf, setPendingPdf] = useState<PendingPdf | null>(null);
+  const [pendingPdfError, setPendingPdfError] = useState<string | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewLoading, setReviewLoading] = useState(false);
+
+  useEffect(() => {
+    // Always fetch — getPendingPdfForCase returns null when there's no
+    // non-superseded, non-approved PDF, so it self-gates. Don't tie this to
+    // `currentCol` because that's computed without the hasPendingPdf flag
+    // and can lie ("Complete Results" instead of "Pending Upload"). The
+    // banner should appear whenever staff action is owed, period.
+    let cancelled = false;
+    setReviewLoading(true);
+    getPendingPdfForCase(row.id)
+      .then((p) => {
+        if (!cancelled) setPendingPdf(p);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled)
+          setPendingPdfError(e instanceof Error ? e.message : "Failed to load PDF");
+      })
+      .finally(() => {
+        if (!cancelled) setReviewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [row.id]);
+
   return (
     <div className="flex flex-col gap-4">
       {/* Patient + Case — two-column grid on lg+, stacks on smaller screens.
@@ -668,6 +702,61 @@ export function CaseDetail({
         </h3>
         <DrawNoteEditor row={row} />
       </section>
+
+      {/* PDF review banner — shown whenever a PDF is attached but no
+       *  approve / wrong-pdf audit row exists yet. Gate on `pendingPdf`
+       *  alone (not on reviewLoading) so the banner doesn't flash on
+       *  every card while the server action is in-flight: cards with no
+       *  pending PDF should never show it at all. */}
+      {pendingPdf ? (
+        <section className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-amber-900">
+                PDF awaiting review
+              </h3>
+              <p className="mt-0.5 text-[11.5px] text-amber-800">
+                A result PDF was attached by{" "}
+                <span className="font-mono">{pendingPdf?.attachedBy ?? "scraper"}</span>
+                {pendingPdf?.externalRef
+                  ? <>
+                      {" "}with accession{" "}
+                      <span className="font-mono">{pendingPdf.externalRef}</span>
+                    </>
+                  : null}
+                . Verify the patient + accession + collection date before approving — Approve uploads to PracticeBetter.
+              </p>
+              {pendingPdfError ? (
+                <p className="mt-1 text-[11px] text-red-700">{pendingPdfError}</p>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className="shrink-0 rounded-md bg-amber-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+              disabled={reviewLoading || !pendingPdf}
+              onClick={() => setReviewOpen(true)}
+            >
+              {reviewLoading ? "Loading…" : "Review PDF"}
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {reviewOpen && pendingPdf ? (
+        <PdfReviewModal
+          pdf={pendingPdf}
+          patientName={row.patient_name}
+          onClose={(result) => {
+            setReviewOpen(false);
+            if (result.actionTaken !== "cancel") {
+              // Card has now left pending_upload (approve) or had its PDF
+              // superseded (wrong_pdf). Hide the banner immediately; the
+              // server refetch on next nav will reconcile.
+              setPendingPdf(null);
+            }
+          }}
+        />
+      ) : null}
 
       {/* Steps + action bar. Dropped the "Process" column-strip section —
        *  the workflow column is implicit in the checked steps below and the

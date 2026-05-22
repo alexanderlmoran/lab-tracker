@@ -1,5 +1,6 @@
 import { requireUser } from "@/lib/auth-guard";
 import { listDistinctLabNames, listLabCases, listPatientCases } from "./actions";
+import { listCaseIdsWithPendingPdf } from "./pdf-actions";
 import { getCardCountsForCases } from "./draw-actions";
 import { parseSinceKey, sinceDaysForKey } from "./time-range";
 import { LabKanbanBoard } from "./LabKanbanBoard";
@@ -75,6 +76,12 @@ export default async function LabsPage({
     Array.from(new Set([...labBoardCases, ...focusedCases].map((c) => c.id))),
   ).catch(() => ({}));
 
+  // Cases that have an attached PDF awaiting Approve / Wrong-PDF click.
+  // Drives the "Pending Upload" Kanban column.
+  const pendingPdfCaseIds = await listCaseIdsWithPendingPdf(
+    Array.from(new Set([...labBoardCases, ...focusedCases].map((c) => c.id))),
+  ).catch(() => [] as string[]);
+
   const isPatientFocus = tab === "patients";
   const focusedPatientName = focusedCases[0]?.patient_name ?? null;
   const focusedRows = focusedCases.map((c) => ({
@@ -137,7 +144,11 @@ export default async function LabsPage({
         ) : (
           <div className="flex-1 lg:min-h-0">
             {tab === "labs" ? (
-              <LabKanbanBoard rows={labBoardCases} counts={cardCounts} />
+              <LabKanbanBoard
+                rows={labBoardCases}
+                counts={cardCounts}
+                pendingPdfCaseIds={pendingPdfCaseIds}
+              />
             ) : (
               <TrackingBoard rows={cases} />
             )}

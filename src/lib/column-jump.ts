@@ -14,6 +14,9 @@ const COLUMN_DEFINING_STEPS: Record<ColumnKey, StepNumber[]> = {
   sample_sent: [1],
   partial_results: [3],
   complete_results: [5],
+  // pending_upload is a derived state (PDF attached, awaiting Approve click);
+  // it's not a drag-and-drop target — staff resolves it via the approval modal.
+  pending_upload: [],
   rof_scheduled: [6],
   rof_done: [7],
   closed: [8, 9],

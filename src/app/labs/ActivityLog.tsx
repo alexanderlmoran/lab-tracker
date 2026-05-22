@@ -40,6 +40,18 @@ function describe(ev: LabEvent): string {
       return "Contact attempted";
     case "contact_reached":
       return "Patient reached";
+    case "audit_approve":
+      return "PDF approved → PB upload queued";
+    case "audit_disapprove_wrong_pdf":
+      return "PDF rejected (wrong patient / corrupt) — scraper will re-match";
+    case "audit_disapprove_upload_failed":
+      return "PB upload failed";
+    case "audit_retry_upload":
+      return "Retry requested — PB upload re-queued";
+    case "audit_manual_override":
+      return "Manual override";
+    case "audit_accession_edited":
+      return "Accession # edited";
     default:
       return ev.kind;
   }

@@ -29,7 +29,16 @@ export type LabEventKind =
   | "expected_dates_set"
   | "tracking_refreshed"
   | "contact_attempted"
-  | "contact_reached";
+  | "contact_reached"
+  // Synthetic kinds — `lab_case_audit` rows are merged into the activity
+  // stream via listLabEvents() and tagged `audit_<action>` so the
+  // ActivityLog component can render them inline.
+  | "audit_approve"
+  | "audit_disapprove_wrong_pdf"
+  | "audit_disapprove_upload_failed"
+  | "audit_retry_upload"
+  | "audit_manual_override"
+  | "audit_accession_edited";
 
 export type LabCase = {
   id: string;
@@ -41,6 +50,7 @@ export type LabCase = {
   lab_name: string;
   lab_panel: string | null;
   tracking_number: string | null;
+  lab_external_ref: string | null;
   pickup_confirmation: string | null;
   collection_date: string | null;
   partial_expected: boolean;

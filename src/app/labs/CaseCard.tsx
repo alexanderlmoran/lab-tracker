@@ -127,6 +127,7 @@ export function CaseCard({
               {row.lab_name}
               {row.lab_panel ? ` · ${row.lab_panel}` : ""}
               {row.tracking_number ? ` · TRK ${row.tracking_number}` : ""}
+              {row.lab_external_ref ? ` · ACC# ${row.lab_external_ref}` : ""}
             </p>
           </div>
           <div data-menu className="relative" onPointerDown={(e) => e.stopPropagation()}>

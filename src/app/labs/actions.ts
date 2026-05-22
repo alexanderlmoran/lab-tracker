@@ -49,6 +49,7 @@ const CaseInput = z.object({
   labName: z.string().trim().min(1).max(100),
   labPanel: z.string().trim().max(100).optional().transform((v) => (v && v.length ? v : null)),
   trackingNumber: z.string().trim().max(100).optional().transform((v) => (v && v.length ? v : null)),
+  labExternalRef: z.string().trim().max(64).optional().transform((v) => (v && v.length ? v : null)),
   pickupConfirmation: z.string().trim().max(100).optional().transform((v) => (v && v.length ? v : null)),
   collectionDate: z
     .string()
@@ -74,6 +75,7 @@ function readForm(formData: FormData): unknown {
     labName: formData.get("labName"),
     labPanel: formData.get("labPanel") ?? "",
     trackingNumber: formData.get("trackingNumber") ?? "",
+    labExternalRef: formData.get("labExternalRef") ?? "",
     pickupConfirmation: formData.get("pickupConfirmation") ?? "",
     collectionDate: formData.get("collectionDate") ?? "",
     partialExpected: formData.get("partialExpected") === "on",
@@ -92,6 +94,7 @@ function dbColumns(p: ParsedCase) {
     lab_name: p.labName,
     lab_panel: p.labPanel,
     tracking_number: p.trackingNumber,
+    lab_external_ref: p.labExternalRef,
     pickup_confirmation: p.pickupConfirmation,
     collection_date: p.collectionDate,
     partial_expected: p.partialExpected,
@@ -134,6 +137,7 @@ const LabRowSchema = z.object({
   labName: z.string().trim().min(1).max(100),
   labPanel: z.string().trim().max(100).nullable().optional(),
   trackingNumber: z.string().trim().max(100).nullable().optional(),
+  labExternalRef: z.string().trim().max(64).nullable().optional(),
   pickupConfirmation: z.string().trim().max(100).nullable().optional(),
   collectionDate: z
     .string()
@@ -215,6 +219,7 @@ export async function createLabCases(
     lab_name: lab.labName,
     lab_panel: lab.labPanel ?? null,
     tracking_number: lab.trackingNumber ?? null,
+    lab_external_ref: lab.labExternalRef ?? null,
     pickup_confirmation: lab.pickupConfirmation ?? null,
     collection_date: lab.collectionDate ?? null,
     partial_expected: lab.partialExpected,
@@ -961,14 +966,58 @@ export async function attachTrackingFromScan(input: {
 export async function listLabEvents(caseId: string): Promise<LabEvent[]> {
   await requireSignedIn();
   const db = getSupabaseAdmin();
-  const { data, error } = await db
+
+  // lab_events: existing per-case step/email/edit log.
+  const eventsP = db
     .from("lab_events")
     .select("*")
     .eq("case_id", caseId)
     .order("created_at", { ascending: false })
     .limit(200);
-  if (error) throw new Error(error.message);
-  return (data ?? []) as LabEvent[];
+
+  // lab_case_audit: PDF approval workflow (approve / disapprove / upload
+  // failure / retry / accession edits). Append-only.
+  const auditP = db
+    .from("lab_case_audit")
+    .select("id, action, actor_label, notes, meta, occurred_at")
+    .eq("case_id", caseId)
+    .order("occurred_at", { ascending: false })
+    .limit(200);
+
+  const [eventsRes, auditRes] = await Promise.all([eventsP, auditP]);
+  if (eventsRes.error) throw new Error(eventsRes.error.message);
+  if (auditRes.error) throw new Error(auditRes.error.message);
+
+  const events = (eventsRes.data ?? []) as LabEvent[];
+
+  // Map audit rows into the LabEvent shape so the panel can render them
+  // alongside lab_events. We use a synthetic kind prefix `audit_*` and route
+  // it through ActivityLog's describe() switch.
+  type AuditRow = {
+    id: string;
+    action: string;
+    actor_label: string;
+    notes: string | null;
+    meta: Record<string, unknown> | null;
+    occurred_at: string;
+  };
+  const auditAsEvents: LabEvent[] = (auditRes.data as AuditRow[] | null ?? []).map(
+    (r) => ({
+      id: `audit:${r.id}`,
+      case_id: caseId,
+      kind: `audit_${r.action}` as LabEvent["kind"],
+      step: null,
+      completed: null,
+      actor: r.actor_label,
+      note: r.notes,
+      meta: r.meta,
+      created_at: r.occurred_at,
+    }),
+  );
+
+  return [...events, ...auditAsEvents].sort((a, b) =>
+    a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0,
+  );
 }
 
 export async function getLabCase(caseId: string): Promise<LabCase | null> {

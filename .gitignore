@@ -43,3 +43,13 @@ next-env.d.ts
 # local operational data (contains PII — keep out of version control)
 *.csv
 *.db
+
+# real lab PDFs — PHI, never commit
+/Centner Labs/
+/Chrome_Passwords.csv
+
+# worker scraper artifacts — contain auth cookies, HAR captures with tokens,
+# and downloaded lab PDFs. Local-only.
+/worker/captures/
+/worker/node_modules/
+/worker/dist/

@@ -4,6 +4,7 @@ export type ColumnKey =
   | "sample_sent"
   | "partial_results"
   | "complete_results"
+  | "pending_upload"
   | "rof_scheduled"
   | "rof_done"
   | "closed"
@@ -19,6 +20,7 @@ export const COLUMN_ORDER: ColumnKey[] = [
   "sample_sent",
   "partial_results",
   "complete_results",
+  "pending_upload",
   "rof_scheduled",
   "rof_done",
   "closed",
@@ -34,6 +36,7 @@ export const COLUMN_LABEL: Record<ColumnKey, string> = {
   sample_sent: "Sample Sent",
   partial_results: "Partial Results",
   complete_results: "Complete Results",
+  pending_upload: "Pending Upload",
   rof_scheduled: "ROF Scheduled",
   rof_done: "ROF Done",
   closed: "Protocol received",
@@ -105,7 +108,7 @@ const PEPTIDES_STEP_LABELS: Partial<Record<StepNumber, string>> = {
  * `completed` (archived) is not part of either strip — it's a board-level
  * bucket, not a workflow step. */
 const WORKFLOW_COLUMNS: Record<CaseWorkflow, ColumnKey[]> = {
-  default: ["untouched", "sample_sent", "partial_results", "complete_results", "rof_scheduled", "rof_done", "closed"],
+  default: ["untouched", "sample_sent", "partial_results", "complete_results", "pending_upload", "rof_scheduled", "rof_done", "closed"],
   peptides: ["untouched", "sample_sent", "closed"],
 };
 
@@ -167,7 +170,21 @@ export function highestCompletedStep(c: LabCase): number {
   return highest;
 }
 
-export function getColumnFor(c: LabCase): ColumnKey {
+/**
+ * Optional per-case attachment state. When the scraper has attached a PDF
+ * to a case but no human has approved/disapproved it yet, the case surfaces
+ * in the "Pending Upload" column instead of "Complete Results" so staff can
+ * see at a glance what needs their click. Derived from joins against
+ * `lab_case_pdfs` and `lab_case_audit`; absence of the arg = old behavior.
+ */
+export type CaseAttachmentState = {
+  hasPendingPdf: boolean;
+};
+
+export function getColumnFor(
+  c: LabCase,
+  attachment?: CaseAttachmentState,
+): ColumnKey {
   // Archived cases live in the terminal "Completed" lane regardless of which
   // workflow they came from — once archived, they're done.
   if (c.archived_at) return "completed";
@@ -181,6 +198,16 @@ export function getColumnFor(c: LabCase): ColumnKey {
   if (c.step8_protocol_emailed && c.step9_sales_followup) return "closed";
   if (c.step7_rof_completed) return "rof_done";
   if (c.step6_rof_scheduled) return "rof_scheduled";
+  // Pending Upload pulls cases out of partial/complete when a scraper has
+  // attached a PDF that hasn't been approved yet. Step5 (and step3) gate the
+  // forward progression — staff approval in the modal flips them to true.
+  if (
+    attachment?.hasPendingPdf &&
+    (c.step4_complete_received || c.step2_partial_received) &&
+    !c.step5_complete_uploaded
+  ) {
+    return "pending_upload";
+  }
   if (c.step4_complete_received || c.step5_complete_uploaded)
     return "complete_results";
   if (c.step2_partial_received || c.step3_partial_uploaded)
@@ -242,6 +269,7 @@ const COL_TO_PATIENT_COL: Record<ColumnKey, PatientColumnKey> = {
   sample_sent: "p_at_lab",
   partial_results: "p_at_lab",
   complete_results: "p_results",
+  pending_upload: "p_results",
   rof_scheduled: "p_results",
   rof_done: "p_results",
   closed: "p_done",

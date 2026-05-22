@@ -115,6 +115,23 @@ export function CaseFormFields({ initial }: { initial?: LabCase | null }) {
             </div>
 
             <div>
+              <label htmlFor="labExternalRef" className={labelClass}>
+                Accession #{" "}
+                <span className="font-normal text-zinc-400">
+                  (lab&apos;s order/result ID; auto-populated by scraper)
+                </span>
+              </label>
+              <input
+                id="labExternalRef"
+                name="labExternalRef"
+                maxLength={64}
+                defaultValue={v?.lab_external_ref ?? ""}
+                className={`${inputClass} mt-1`}
+                placeholder="e.g. 007143558"
+              />
+            </div>
+
+            <div>
               <label htmlFor="pickupConfirmation" className={labelClass}>
                 Pickup confirmation #{" "}
                 <span className="font-normal text-zinc-400">

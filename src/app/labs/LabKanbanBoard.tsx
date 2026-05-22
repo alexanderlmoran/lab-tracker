@@ -186,10 +186,18 @@ function StaticColumn({
 export function LabKanbanBoard({
   rows,
   counts,
+  pendingPdfCaseIds,
 }: {
   rows: LabCase[];
   counts?: Record<string, CardCounts>;
+  /** Case IDs whose attached PDF is still waiting on staff Approve/Wrong-PDF.
+   * Used to lift those rows into the "Pending Upload" column. */
+  pendingPdfCaseIds?: string[];
 }) {
+  const pendingPdfSet = useMemo(
+    () => new Set(pendingPdfCaseIds ?? []),
+    [pendingPdfCaseIds],
+  );
   const searchParams = useSearchParams();
 
   const probablyReadyOnly = searchParams.get("ready") === "1";
@@ -207,12 +215,15 @@ export function LabKanbanBoard({
     sample_sent: [],
     partial_results: [],
     complete_results: [],
+    pending_upload: [],
     rof_scheduled: [],
     rof_done: [],
     closed: [],
     completed: [],
   };
-  for (const r of filtered) grouped[getColumnFor(r)].push(r);
+  for (const r of filtered) {
+    grouped[getColumnFor(r, { hasPendingPdf: pendingPdfSet.has(r.id) })].push(r);
+  }
   for (const col of LAB_BOARD_COLUMN_ORDER) {
     grouped[col].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   }
