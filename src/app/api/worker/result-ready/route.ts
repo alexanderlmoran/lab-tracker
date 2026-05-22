@@ -27,6 +27,8 @@ const Body = z.object({
   pdfFilename: z.string().min(1),
   resultIssuedAt: z.string().optional(),
   source: z.string().min(1),
+  /** When true, this is a partial result (auto-toggles step2 instead of step4). */
+  isPartial: z.boolean().optional().default(false),
 });
 
 export async function POST(request: Request) {
@@ -89,6 +91,7 @@ export async function POST(request: Request) {
       external_ref: parsed.labExternalRef,
       filename: parsed.pdfFilename,
       size_bytes: pdfBytes.length,
+      is_partial: parsed.isPartial ?? false,
       result_issued_at: parsed.resultIssuedAt ?? null,
       attached_by: parsed.source,
     })
@@ -106,6 +109,48 @@ export async function POST(request: Request) {
       .from("lab_cases")
       .update({ lab_external_ref: parsed.labExternalRef })
       .eq("id", parsed.caseId);
+  }
+
+  // A PDF arriving from the scraper IS the signal that the lab has the
+  // results — no point making staff click step 4 (or step 2 for partial)
+  // by hand. Cascade: step4 implies step1 done; the form's setStepCompleted
+  // path handles cascade properly via a server action, but in this worker
+  // context we set the boolean directly and emit a step_toggled event so
+  // the activity log reflects the auto-toggle. Idempotent — if step is
+  // already true, the row just stays true.
+  const stepToFlip = parsed.isPartial ? 2 : 4;
+  const stepColumn =
+    stepToFlip === 2 ? "step2_partial_received" : "step4_complete_received";
+
+  // Read current step state to know if we're actually flipping or no-op.
+  const { data: caseSteps } = await db
+    .from("lab_cases")
+    .select(stepColumn)
+    .eq("id", parsed.caseId)
+    .single();
+  const stepAlreadyTrue = Boolean(
+    (caseSteps as Record<string, boolean> | null)?.[stepColumn],
+  );
+
+  if (!stepAlreadyTrue) {
+    await db
+      .from("lab_cases")
+      .update({ [stepColumn]: true })
+      .eq("id", parsed.caseId);
+
+    await db.from("lab_events").insert({
+      case_id: parsed.caseId,
+      kind: "step_toggled",
+      step: stepToFlip,
+      completed: true,
+      actor: parsed.source,
+      note: `Auto-set on result PDF arrival (${parsed.pdfFilename})`,
+      meta: {
+        pdf_id: pdfRow.id,
+        external_ref: parsed.labExternalRef,
+        is_partial: parsed.isPartial ?? false,
+      },
+    });
   }
 
   await db.from("lab_events").insert({

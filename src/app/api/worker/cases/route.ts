@@ -28,10 +28,15 @@ const LabAppointmentInput = z.object({
   collectionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   note: z.string().nullable().optional(),
   therapistName: z.string().nullable().optional(),
+  cancelled: z.boolean().optional().default(false),
 });
 
 const Body = z.object({
   appointments: z.array(LabAppointmentInput),
+  /** Zenoti appointment IDs that are confirmed cancelled. If a tracker
+   * case exists for any of these IDs and isn't already soft-deleted, it
+   * will be soft-deleted (deleted_at set + lab_events row appended). */
+  cancelledAppointmentIds: z.array(z.string().min(1)).optional().default([]),
 });
 
 type SyncResult = {
@@ -156,12 +161,56 @@ export async function POST(request: Request) {
     });
   }
 
+  // ── Cancellations: soft-delete tracker cases that map to cancelled
+  //    Zenoti appointments. We use deleted_at (soft-delete) not
+  //    archived_at because semantically the appointment never happened —
+  //    the case shouldn't sit in Completed lane.
+  const cancellations: { zenotiAppointmentId: string; caseId: string | null; action: "deleted" | "skipped" }[] = [];
+  for (const zId of parsed.cancelledAppointmentIds) {
+    const { data: caseRow, error: lookupErr } = await db
+      .from("lab_cases")
+      .select("id, deleted_at")
+      .eq("zenoti_appointment_id", zId)
+      .maybeSingle();
+    if (lookupErr) {
+      errors.push({ zenotiAppointmentId: zId, error: `cancel lookup: ${lookupErr.message}` });
+      continue;
+    }
+    if (!caseRow) {
+      cancellations.push({ zenotiAppointmentId: zId, caseId: null, action: "skipped" });
+      continue;
+    }
+    if (caseRow.deleted_at) {
+      cancellations.push({ zenotiAppointmentId: zId, caseId: caseRow.id as string, action: "skipped" });
+      continue;
+    }
+    const { error: delErr } = await db
+      .from("lab_cases")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", caseRow.id);
+    if (delErr) {
+      errors.push({ zenotiAppointmentId: zId, error: `cancel update: ${delErr.message}` });
+      continue;
+    }
+    await db.from("lab_events").insert({
+      case_id: caseRow.id,
+      kind: "case_deleted",
+      actor: "worker:zenoti-sync",
+      note: `Soft-deleted: Zenoti appointment ${zId} was cancelled / no-show`,
+      meta: { zenoti_appointment_id: zId },
+    });
+    cancellations.push({ zenotiAppointmentId: zId, caseId: caseRow.id as string, action: "deleted" });
+  }
+
   return NextResponse.json({
     ok: errors.length === 0,
     received: parsed.appointments.length,
     created: results.filter((r) => r.created).length,
     existing: results.filter((r) => !r.created).length,
+    cancelledReceived: parsed.cancelledAppointmentIds.length,
+    cancelledDeleted: cancellations.filter((c) => c.action === "deleted").length,
     errors,
     results,
+    cancellations,
   });
 }

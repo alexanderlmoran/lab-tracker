@@ -8,6 +8,7 @@ import {
   listKnownEmailAddresses,
   listLabPortals,
   listLabsCatalog,
+  listScraperStatus,
   getPatientSeedOverview,
   getLabTurnaroundStats,
 } from "./actions";
@@ -20,6 +21,7 @@ import { AccountsPanel } from "./AccountsPanel";
 import { LabsCatalogPanel } from "./LabsCatalogPanel";
 import { EmailTemplatesPanel } from "./EmailTemplatesPanel";
 import { LabPortalsPanel } from "./LabPortalsPanel";
+import { ScrapersPanel } from "./ScrapersPanel";
 import { SettingsTabs } from "./SettingsTabs";
 import { parseSettingsTab } from "./tab";
 import { BulkRecoveryTable } from "../BulkRecoveryTable";
@@ -54,6 +56,7 @@ export default async function SettingsPage({
   const wantsArchived = isAdmin && tab === "archived";
   const wantsDeleted = isAdmin && tab === "deleted";
   const wantsPortals = isAdmin && tab === "portals";
+  const wantsScrapers = isAdmin && tab === "scrapers";
   const wantsPatients = isAdmin && tab === "patients";
   const wantsTurnarounds = isAdmin && tab === "turnarounds";
 
@@ -67,6 +70,7 @@ export default async function SettingsPage({
     archivedCases,
     deletedCases,
     portals,
+    scrapers,
     patientSeed,
     turnarounds,
   ] = await Promise.all([
@@ -84,6 +88,7 @@ export default async function SettingsPage({
       : Promise.resolve(null),
     wantsDeleted ? listLabCases({ view: "deleted" }) : Promise.resolve(null),
     wantsPortals ? listLabPortals() : Promise.resolve(null),
+    wantsScrapers ? listScraperStatus() : Promise.resolve(null),
     wantsPatients ? getPatientSeedOverview() : Promise.resolve(null),
     wantsTurnarounds ? getLabTurnaroundStats() : Promise.resolve(null),
   ]);
@@ -164,6 +169,15 @@ export default async function SettingsPage({
             description="Edit per-lab sign-in URLs. The lab key must match the lab_name used on cases — these power the portal buttons on the case detail card."
           >
             <LabPortalsPanel portals={portals} />
+          </Section>
+        ) : null}
+
+        {wantsScrapers && scrapers ? (
+          <Section
+            title="Scrapers"
+            description="Status of each lab portal scraper. Use the per-row commands to capture a new portal or recalibrate one whose session expired."
+          >
+            <ScrapersPanel rows={scrapers} />
           </Section>
         ) : null}
 

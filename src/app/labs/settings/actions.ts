@@ -1499,3 +1499,73 @@ export async function getLabTurnaroundStats(): Promise<
   rows.sort((a, b) => b.sampleCount - a.sampleCount);
   return { ok: true, data: rows };
 }
+
+// ── Scrapers panel ───────────────────────────────────────────────────
+
+export type ScraperStatusRow = {
+  key: string;
+  labName: string;
+  loginUrl: string;
+  notes: string | null;
+  /** True when worker/src/scrapers/<key>.ts exists. */
+  scraperConfigured: boolean;
+  /** Most recent lab_events row with actor like 'scraper:<key>%'. */
+  lastScrapeAt: string | null;
+  /** Total cases that have ever had a successful scrape attach via this portal. */
+  lifetimeAttachCount: number;
+  /** Pre-built bash command for capture / recapture. */
+  captureCommand: string;
+};
+
+export async function listScraperStatus(): Promise<ScraperStatusRow[]> {
+  await requireRole("admin");
+  const { existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { SCRAPER_REGISTRY, captureCommandFor } = await import(
+    "@/lib/scrapers/registry"
+  );
+  const db = getSupabaseAdmin();
+
+  // Filesystem check — server runs from project root, scrapers live in worker/src/scrapers
+  const workerScrapersDir = join(process.cwd(), "worker", "src", "scrapers");
+
+  // Bulk-fetch last scrape activity for every registry entry in one query.
+  // We use `like 'scraper:%'` then partition in code by actor prefix.
+  const { data: events } = await db
+    .from("lab_events")
+    .select("actor, created_at, case_id")
+    .like("actor", "scraper:%")
+    .order("created_at", { ascending: false })
+    .limit(1000);
+
+  type EventRow = { actor: string; created_at: string; case_id: string };
+  const byKey = new Map<string, { lastAt: string; count: number }>();
+  for (const ev of (events ?? []) as EventRow[]) {
+    // actor patterns: "scraper:access" or "scraper:access (test-mode auto-attach)"
+    const m = ev.actor.match(/^scraper:([a-z0-9_-]+)/i);
+    if (!m) continue;
+    const k = m[1].toLowerCase();
+    const slot = byKey.get(k);
+    if (!slot) {
+      byKey.set(k, { lastAt: ev.created_at, count: 1 });
+    } else {
+      slot.count += 1;
+      if (ev.created_at > slot.lastAt) slot.lastAt = ev.created_at;
+    }
+  }
+
+  return SCRAPER_REGISTRY.map((entry) => {
+    const scraperPath = join(workerScrapersDir, `${entry.key}.ts`);
+    const stats = byKey.get(entry.key);
+    return {
+      key: entry.key,
+      labName: entry.labName,
+      loginUrl: entry.loginUrl,
+      notes: entry.notes ?? null,
+      scraperConfigured: existsSync(scraperPath),
+      lastScrapeAt: stats?.lastAt ?? null,
+      lifetimeAttachCount: stats?.count ?? 0,
+      captureCommand: captureCommandFor(entry),
+    };
+  });
+}

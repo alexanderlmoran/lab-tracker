@@ -31,4 +31,10 @@ export type LabAppointment = {
   /** Free-text note from the Zenoti appt (e.g. "access - $62.00\ntest"). */
   note: string | null;
   therapistName: string | null;
+
+  /** True when Zenoti reports cancelOrNoShowStatus != 0 (cancellation or
+   * no-show). Only populated when fetch was called with includeCancelled.
+   * Sync uses this to soft-delete previously-synced tracker cases whose
+   * appointment was cancelled after the fact. */
+  cancelled: boolean;
 };

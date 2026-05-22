@@ -41,14 +41,18 @@ function todayLocal(): string {
 }
 
 async function pushToTracker(appts: LabAppointment[]): Promise<void> {
-  if (appts.length === 0) return;
+  const active = appts.filter((a) => !a.cancelled);
+  const cancelledAppointmentIds = appts
+    .filter((a) => a.cancelled)
+    .map((a) => a.zenotiAppointmentId);
+  if (active.length === 0 && cancelledAppointmentIds.length === 0) return;
   const res = await request(`${BASE}/api/worker/cases`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${SECRET}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ appointments: appts }),
+    body: JSON.stringify({ appointments: active, cancelledAppointmentIds }),
   });
   const text = await res.body.text();
   if (res.statusCode !== 200) {
@@ -58,10 +62,16 @@ async function pushToTracker(appts: LabAppointment[]): Promise<void> {
     received: number;
     created: number;
     existing: number;
+    cancelledReceived?: number;
+    cancelledDeleted?: number;
     errors: { zenotiAppointmentId: string; error: string }[];
   };
-  if (json.created > 0 || json.errors.length > 0) {
-    log(`pushed ${json.received} • +${json.created} new • ${json.existing} existing • ${json.errors.length} errors`);
+  if (json.created > 0 || (json.cancelledDeleted ?? 0) > 0 || json.errors.length > 0) {
+    log(
+      `pushed ${json.received} • +${json.created} new • ${json.existing} existing` +
+        ` • cancellations: ${json.cancelledReceived ?? 0} reported / ${json.cancelledDeleted ?? 0} deleted` +
+        ` • ${json.errors.length} errors`,
+    );
   }
 }
 
@@ -74,6 +84,7 @@ async function tick(): Promise<void> {
       const appts = await fetchZenotiLabAppointments({
         storagePath: STORAGE_PATH,
         date: d,
+        includeCancelled: true, // we need cancellations for auto-archive
       });
       all.push(...appts);
     }

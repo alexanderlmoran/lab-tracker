@@ -144,7 +144,8 @@ export async function fetchZenotiLabAppointments(
 
   const out: LabAppointment[] = [];
   for (const r of rows) {
-    if (!opts.includeCancelled && Number(r.cancelOrNoShowStatus ?? "0") !== 0) {
+    const isCancelled = Number(r.cancelOrNoShowStatus ?? "0") !== 0;
+    if (!opts.includeCancelled && isCancelled) {
       continue;
     }
     const serviceName = r.servicename ?? "";
@@ -167,6 +168,7 @@ export async function fetchZenotiLabAppointments(
       collectionDate: startAt ? startAt.slice(0, 10) : null,
       note: nonEmpty(r.note),
       therapistName: nonEmpty(r.therapistname),
+      cancelled: isCancelled,
     });
   }
   return out;
