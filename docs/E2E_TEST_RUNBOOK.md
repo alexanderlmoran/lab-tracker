@@ -6,48 +6,47 @@ The trigger rule (verified in this test): **any** Zenoti service whose name star
 
 ---
 
-## Happy path (after 2026-05-22 — credentials persisted)
+## Happy path (after 2026-05-22 evening — single-command demo)
 
-1. **One time at session start:** open three terminals.
-   - Terminal 1 — dev server:
-     ```bash
-     cd /Users/alexandermoran/Desktop/Everything/Coding_Projects/lab-tracker
-     npm run dev
-     ```
-   - Terminal 2 — PB upload drain loop (waits for approvals, uploads to PB):
-     ```bash
-     cd /Users/alexandermoran/Desktop/Everything/Coding_Projects/lab-tracker/worker
-     npx tsx scripts/pb-upload-worker.ts
-     ```
-     You should see:
-     ```
-     pb-upload-worker starting
-       tracker: http://localhost:3000
-       PB user: info@centnerhb.com
-       mode:    drain loop (polling every 5000ms; Ctrl+C to stop)
-     ```
-   - Terminal 3 — for one-off scripts (Zenoti sync, scraper attach).
-2. **In Zenoti**: book a lab appointment for the patient. Any service starting `Labs - …` works.
-3. **Pull it into the tracker** (Terminal 3):
-   ```bash
-   cd /Users/alexandermoran/Desktop/Everything/Coding_Projects/lab-tracker/worker
-   npx tsx scripts/zenoti-sync.ts
-   ```
-   Card appears in the **New** column.
-4. **In the tracker**: click the card → enter Tracking # + Accession # → Save.
-5. Click step **1 (Sample sent)** → click step **4 (Complete received)**.
-6. **When the lab result PDF is ready** (in real life, scraper runs and attaches; for testing, simulate via Terminal 3):
-   ```bash
-   CASE_ID=<from step 3> \
-   PDF_PATH=~/Desktop/leila/access_007138032.pdf \
-   ACCESSION=<your accession> \
-   SOURCE=scraper:access \
-     npx tsx scripts/simulate-scraper-attach.ts
-   ```
-7. **In the tracker**: card now shows the amber "PDF awaiting review" banner. Click **Review PDF** → verify against the left-pane reference → click **Approve & upload**.
-8. **Within ~5 seconds**: Terminal 2 logs the upload, the card moves to Complete, and PB has the labrequest titled `<lab> — Acc# <accession>` on the patient's chart.
+**One terminal, one command:**
 
-That's the loop. The only manual steps are: book in Zenoti, enter tracking/accession, click steps 1+4, click Approve. Everything else is automated.
+```bash
+cd /Users/alexandermoran/Desktop/Everything/Coding_Projects/lab-tracker
+npm run dev
+```
+
+That spawns four colour-prefixed processes in unified output:
+
+| Prefix | Job |
+|---|---|
+| `[next]` (cyan) | Next.js dev server on :3000 |
+| `[pb]` (magenta) | PB upload drain loop (5s cadence) |
+| `[zenoti]` (yellow) | Zenoti sync loop (60s cadence, includes cancellations) |
+| `[attach]` (green) | Auto-attach test PDF watcher (5s cadence, test-mode only) |
+
+Single Ctrl+C kills all four. `dev:next-only` is the escape hatch if you ever want just the web server.
+
+### Your demo flow (only these clicks)
+
+1. **Book a lab appointment in Zenoti.** Any service starting `Labs - …` triggers; pick `Labs - Access Custom` if you want the simplest demo since that's the lab with a real scraper today.
+2. **Within 60 seconds**, the `[zenoti]` line logs `pushed N • +1 new`. Refresh `/labs` → case in **New** column.
+3. **Click the card** → enter Tracking # + Accession # → Save.
+4. **Click step 1** (Sample sent). Card moves to Sample Sent.
+5. **Wait ~5 seconds.** The `[attach]` line logs `attached → case=… patient=…`. The PDF arrives, **step 4 auto-flips** (no click), the card lands in **Pending Upload** with the amber "PDF awaiting review" banner.
+6. **Click the amber banner → Review PDF.** Side-by-side modal opens: "Tracker says" left, PDF right. Verify Patient / DOB / Lab / Accession / Collection date match the PDF.
+7. **Click Approve & upload.** Card stays in Pending Upload while the queue is drained.
+8. **Within ~5 seconds**, the `[pb]` line logs `uploaded → pb_labrequest=… pb_patient=…`. Card moves to **Complete Uploaded**. Switch to PB tab → patient's chart has the new labrequest titled `<lab> — Acc# <accession>`.
+
+**Total human actions: 4 clicks** (Save, step 1, Review PDF, Approve). Cancelling the Zenoti appointment soft-deletes the case automatically on the next sync tick.
+
+### Verifying the new automation pieces
+
+After running the demo above:
+
+- **Auto step 4:** Activity log on the card shows `Step 4 completed` with actor `scraper:access (test-mode auto-attach)` — confirms the scraper, not a human, advanced it.
+- **Cancellation flow:** Cancel the Zenoti appointment. Within 60 seconds, the `[zenoti]` line logs `cancellations: 1 reported / 1 deleted`. The card disappears from the active board (sits in deleted view).
+- **Settings → Scrapers tab:** `/labs/settings?tab=scrapers`. Lists 11 portals. Access shows green "Configured · N attaches"; the rest show grey "Not configured". Each row expands to show the bash command for capturing it.
+- **Daily health badge:** After the cron runs at 5 AM UTC (or you hit `/api/cron/portal-health` manually with the `CRON_SECRET` Bearer), green ● Reachable badges appear next to each portal name.
 
 ---
 

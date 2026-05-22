@@ -1,7 +1,7 @@
 # Automation Strategy — Lab Tracker
 
-**Decision date:** 2026-05-21 (original) — **revised 2026-05-21 evening** after PB + Zenoti integrations shipped end-to-end.
-**Status:** active
+**Decision date:** 2026-05-21 (original) — **revised 2026-05-22 after end-to-end pipeline shipped and verified live** with two real labrequests on Leila Centner's PB chart.
+**Status:** active — pipeline operational; 1/11 portal scrapers configured (Access)
 
 ## The model: middleware, not lights-out
 
@@ -15,9 +15,11 @@ Lab tracker is the human-gated middleware between Zenoti, lab portals, and Pract
 - Lab portal polling → PDF download + attach to case (per-portal scraper cron)
 - After human Approve click → PB upload + step 5 auto-advance (PB uploader worker)
 
-**Human** (only two touch points):
+**Human** (only two touch points — verified live 2026-05-22):
 1. **On a New card:** enter tracking number + accession #, click step 1 to confirm sample sent.
 2. **On a Pending Upload card:** open modal, review PDF, click Approve (or Wrong PDF / Retry).
+
+Step 4 is no longer human — it auto-flips when the scraper attaches a PDF. Cancelling the Zenoti appointment soft-deletes the case automatically on the next sync tick.
 
 ## Why not full autopilot
 

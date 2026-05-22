@@ -1502,6 +1502,15 @@ export async function getLabTurnaroundStats(): Promise<
 
 // ── Scrapers panel ───────────────────────────────────────────────────
 
+export type ScraperHealth = {
+  lastCheckAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastStatusCode: number | null;
+  lastError: string | null;
+  consecutiveFailures: number;
+};
+
 export type ScraperStatusRow = {
   key: string;
   labName: string;
@@ -1515,6 +1524,9 @@ export type ScraperStatusRow = {
   lifetimeAttachCount: number;
   /** Pre-built bash command for capture / recapture. */
   captureCommand: string;
+  /** From lab_scraper_status — populated by the daily portal-health cron.
+   * Null when the cron has never run for this portal yet. */
+  health: ScraperHealth | null;
 };
 
 export async function listScraperStatus(): Promise<ScraperStatusRow[]> {
@@ -1554,6 +1566,33 @@ export async function listScraperStatus(): Promise<ScraperStatusRow[]> {
     }
   }
 
+  // Per-portal health from the daily probe.
+  const { data: healthRows } = await db
+    .from("lab_scraper_status")
+    .select(
+      "portal_key, last_check_at, last_success_at, last_failure_at, last_status_code, last_error, consecutive_failures",
+    );
+  type HealthRow = {
+    portal_key: string;
+    last_check_at: string | null;
+    last_success_at: string | null;
+    last_failure_at: string | null;
+    last_status_code: number | null;
+    last_error: string | null;
+    consecutive_failures: number;
+  };
+  const healthByKey = new Map<string, ScraperHealth>();
+  for (const h of (healthRows ?? []) as HealthRow[]) {
+    healthByKey.set(h.portal_key, {
+      lastCheckAt: h.last_check_at,
+      lastSuccessAt: h.last_success_at,
+      lastFailureAt: h.last_failure_at,
+      lastStatusCode: h.last_status_code,
+      lastError: h.last_error,
+      consecutiveFailures: h.consecutive_failures,
+    });
+  }
+
   return SCRAPER_REGISTRY.map((entry) => {
     const scraperPath = join(workerScrapersDir, `${entry.key}.ts`);
     const stats = byKey.get(entry.key);
@@ -1566,6 +1605,182 @@ export async function listScraperStatus(): Promise<ScraperStatusRow[]> {
       lastScrapeAt: stats?.lastAt ?? null,
       lifetimeAttachCount: stats?.count ?? 0,
       captureCommand: captureCommandFor(entry),
+      health: healthByKey.get(entry.key) ?? null,
     };
   });
+}
+
+// ── Capture wizard (Phase 2 — minimal MVP, no AI yet) ───────────────
+
+export type CaptureDirInfo = {
+  /** Capture timestamp folder name, e.g. "20260522-103507". */
+  timestamp: string;
+  /** Absolute filesystem path to the capture dir. */
+  absPath: string;
+  /** Repo-relative path used in worker scripts, e.g.
+   *  "captures/zenoti/20260522-103507/storage.json". */
+  storagePathHint: string;
+  hasStorageJson: boolean;
+  hasHar: boolean;
+  harBytes: number;
+  capturedAt: Date | null;
+};
+
+/** Lists all capture dirs under worker/captures/<key>/ — newest first. Used
+ *  by the Scrapers panel to surface unscaffolded captures the user has
+ *  recorded via the lab-portal-capture skill. */
+export async function listCaptureDirsForPortal(
+  key: string,
+): Promise<CaptureDirInfo[]> {
+  await requireRole("admin");
+  if (!/^[a-z0-9_-]+$/i.test(key)) throw new Error("invalid portal key");
+  const { existsSync, statSync, readdirSync } = await import("node:fs");
+  const { join } = await import("node:path");
+
+  const portalDir = join(process.cwd(), "worker", "captures", key);
+  if (!existsSync(portalDir)) return [];
+
+  const entries = readdirSync(portalDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name);
+
+  const result: CaptureDirInfo[] = [];
+  for (const name of entries) {
+    const abs = join(portalDir, name);
+    const storage = join(abs, "storage.json");
+    const har = join(abs, "session.har");
+    let harBytes = 0;
+    if (existsSync(har)) {
+      try {
+        harBytes = statSync(har).size;
+      } catch {
+        // ignore
+      }
+    }
+    let capturedAt: Date | null = null;
+    try {
+      capturedAt = statSync(abs).mtime;
+    } catch {
+      // ignore
+    }
+    result.push({
+      timestamp: name,
+      absPath: abs,
+      storagePathHint: `captures/${key}/${name}/storage.json`,
+      hasStorageJson: existsSync(storage),
+      hasHar: existsSync(har),
+      harBytes,
+      capturedAt,
+    });
+  }
+  // Newest first
+  result.sort((a, b) => {
+    const at = a.capturedAt?.getTime() ?? 0;
+    const bt = b.capturedAt?.getTime() ?? 0;
+    return bt - at;
+  });
+  return result;
+}
+
+/** Writes a scraper skeleton at worker/src/scrapers/<key>.ts based on the
+ *  selected capture. NOT a real working scraper — it scaffolds the file
+ *  shape (imports, class, run method) and leaves explicit TODO markers
+ *  pointing at the HAR for the user (or Claude in chat) to fill in the
+ *  portal-specific request logic. Returns the new file's relative path.
+ *
+ *  Idempotency: refuses to overwrite an existing scraper file. To re-
+ *  scaffold after deletion, delete the file first. */
+export async function scaffoldScraperFromTemplate(
+  key: string,
+  captureTimestamp: string,
+): Promise<ActionResult<{ relPath: string }>> {
+  await requireRole("admin");
+  if (!/^[a-z0-9_-]+$/i.test(key))
+    return { ok: false, error: "invalid portal key" };
+  if (!/^[0-9]{8}-[0-9]{6}$/.test(captureTimestamp))
+    return { ok: false, error: "invalid capture timestamp" };
+
+  const { existsSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { SCRAPER_REGISTRY } = await import("@/lib/scrapers/registry");
+
+  const entry = SCRAPER_REGISTRY.find((e) => e.key === key);
+  if (!entry) return { ok: false, error: `unknown portal: ${key}` };
+
+  const scraperPath = join(
+    process.cwd(),
+    "worker",
+    "src",
+    "scrapers",
+    `${key}.ts`,
+  );
+  if (existsSync(scraperPath)) {
+    return {
+      ok: false,
+      error: `worker/src/scrapers/${key}.ts already exists — delete it first to re-scaffold`,
+    };
+  }
+
+  const captureDir = join(
+    process.cwd(),
+    "worker",
+    "captures",
+    key,
+    captureTimestamp,
+  );
+  if (!existsSync(captureDir)) {
+    return { ok: false, error: `capture dir not found: ${captureDir}` };
+  }
+
+  const className = entry.labName.replace(/[^A-Za-z0-9]/g, "") + "Scraper";
+  const template = `// ${entry.labName} lab portal scraper — SCAFFOLD.
+//
+// Generated from capture: worker/captures/${key}/${captureTimestamp}/
+// Login URL: ${entry.loginUrl}
+//
+// HOW TO FINISH THIS FILE:
+// 1. Open the HAR (session.har) in the capture dir and identify the request
+//    sequence that downloads a result PDF (auth → search → download).
+// 2. Replicate that sequence in run() below using undici (HTTP) or, when the
+//    portal serves PDFs inline in an iframe, a Playwright context with
+//    ctx.route() interception — see worker/src/scrapers/access.ts as the
+//    canonical template for both patterns.
+// 3. Map each downloaded PDF to one of the openCases (by accession # if
+//    present in the URL/filename, else by patient name + DOB matching).
+// 4. Delete this comment block once the scraper is real.
+//
+// SAFE TO RUN BEFORE FILLING IN:
+//   import { ${className} } from "./scrapers/${key}.js";
+//   new ${className}().run(browser, [])   // returns no results, no errors
+// — the empty stub below won't crash the worker until you wire it up.
+
+import type { Browser } from "playwright";
+import type { OpenCase } from "../tracker-client.js";
+import type { LabScraper, ScrapeRun } from "./base.js";
+
+export class ${className} implements LabScraper {
+  readonly labName = "${entry.labName}";
+
+  async run(_browser: Browser, _openCases: OpenCase[]): Promise<ScrapeRun> {
+    // TODO: implement portal-specific scrape logic.
+    // Capture artifacts to consult:
+    //   - HAR:         worker/captures/${key}/${captureTimestamp}/session.har
+    //   - Storage:     worker/captures/${key}/${captureTimestamp}/storage.json
+    //   - Codegen JS:  worker/captures/${key}/${captureTimestamp}/recorded.js
+    return { found: [], errors: [] };
+  }
+}
+`;
+
+  try {
+    writeFileSync(scraperPath, template, { encoding: "utf-8" });
+  } catch (err) {
+    return {
+      ok: false,
+      error: `write failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  revalidatePath("/labs/settings");
+  return { ok: true, data: { relPath: `worker/src/scrapers/${key}.ts` } };
 }

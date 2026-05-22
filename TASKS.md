@@ -32,42 +32,53 @@ The full automated flow Alex articulated 2026-05-21. Everything below this secti
 1. Enter tracking number + accession # on a New card → click step 1 to confirm sent
 2. Approve PDF in the modal (or Wrong PDF / Retry as needed)
 
-**Everything else** — case creation, transit tracking, result polling, PDF attachment, PB upload — runs unattended.
+**Everything else** — case creation, transit tracking, result polling, PDF attachment, step 4 toggle, PB upload — runs unattended.
+
+## Status as of 2026-05-22 evening
+
+**End-to-end pipeline is LIVE.** Two real labrequests verified on Leila Centner's PB chart. `npm run dev` starts all four processes (Next + PB worker + Zenoti loop + auto-attach watcher) in one terminal.
+
+Single-command demo path:
+1. `npm run dev`
+2. Book lab appointment in Zenoti
+3. Within 60s, refresh tracker → case in **New** column
+4. Click card → enter Tracking + Accession # → Save → click step 1
+5. Within 5s, PDF auto-attaches → step 4 auto-flips → card lands in **Pending Upload** with amber banner
+6. Click Review PDF → Approve & upload
+7. Within 5s, PB upload completes → card moves to **Complete Uploaded**
+
+**Newly automated this session:**
+- Step 4 auto-flips when the scraper attaches a PDF (no manual click)
+- Cancelled Zenoti appointments → matching tracker case soft-deleted on next sync tick
+- Kanban reorder: New → Sample Sent → **Pending Upload** → Partial Uploaded → Complete Uploaded → ROF…
+- Settings → Scrapers tab lists all 11 portals with configured / not configured / never-run status + daily HTTP health badge (green / yellow / red) populated by /api/cron/portal-health
+- Capture wizard: per-portal expandable wizard scaffolds `worker/src/scrapers/<key>.ts` stub from a captured Playwright session, leaving TODO markers pointing at the HAR for completion
 
 ## Up next — wire it together
 
-### Zenoti → tracker case sync (front of pipeline)
-- **What:** Cron job that polls Zenoti's `setDate` endpoint daily, filters lab appointments, UPSERTs `lab_cases` rows.
-- **Pieces shipped 2026-05-21:** schema (migration applied), `worker/src/zenoti/{types,lab-mapping,fetch-browser}.ts`, `worker/scripts/test-zenoti-fetch.ts` (dry-run verified).
-- **Pieces remaining:**
-  - Tracker API: `POST /api/worker/cases` endpoint behind `WORKER_SHARED_SECRET`. Accepts `LabAppointment[]`, UPSERTs by `zenoti_appointment_id`. New cases land in "New" column (step 0).
-  - Patient detail enrichment: `GET /api/Guests/<id>?Type=0` for DOB (the setDate row has name/email/phone but not DOB). Optional second pass.
-  - Cron driver: Vercel cron or Fly worker timer hitting the sync handler. Poll today + 7 days forward, hourly.
-  - Storage of the captured `storage.json` cookies in a place the worker can read (env var or secrets manager). Refresh cycle when cookies expire (~24h) — until the official Zenoti API arrives next week.
-
-### Approve PDF → PB upload (back of pipeline)
-- **What:** Wire the Approve button in the modal to enqueue a job that calls `uploadPdfToPb()`.
-- **Pieces shipped 2026-05-21:** `worker/src/uploaders/practicebetter.ts` (verified end-to-end), `src/app/labs/pdf-actions.ts` (approve writes audit row), `src/app/labs/PdfReviewModal.tsx`.
-- **Pieces remaining:**
-  - Schema: `pb_upload_jobs` table (case_id, pdf_id, status, attempts, last_error, created_at, finished_at).
-  - Tracker server action `approvePdf()` already writes the audit row — extend to also insert a `pb_upload_jobs` row with status='queued'.
-  - Worker poller: every 30s, claim queued jobs, run uploader, update status. On success: flip `step5_complete_uploaded = true`. On failure: status='failed' + audit row `disapprove_upload_failed`.
-  - Surface failed jobs in the modal so Retry can re-enqueue.
-
-### Settings UI: portal capture management
-- **What:** A `/labs/settings/portals` page listing each lab portal + PB + Zenoti with:
-  - Last successful scrape / upload timestamp
-  - Cookie freshness (green / yellow / red)
-  - "Recapture" button that runs the capture skill (browser opens locally for the dev — or eventually a remote Browserbase-backed flow)
-  - Per-portal kill switch
-- **Why:** Cookies will expire; portals will redesign their UIs; we need a non-engineer-friendly path to refresh either.
-- **Approach for v1:** instructions-only page that surfaces the bash command + tracks last-known-good capture dir. Browserbase integration deferred.
-
-### Remaining lab portals
+### Remaining lab portals (6 left)
 - **What:** Capture + scaffold scrapers for: Vibrant, Cyrex, Spectracell, Genova, GlycanAge, DoctorsData.
-- **Process per portal:** `bash ~/.claude/skills/lab-portal-capture/capture.sh <name> <url>` → walk through downloading one PDF → paste artifacts path → Claude scaffolds `worker/src/scrapers/<name>.ts`.
-- **Estimate:** ~10 min combined per portal (5 user, 5 LLM). ~60 min for all six in one batch session.
+- **Process per portal:** Settings → Scrapers → expand portal row → run the shown bash command in terminal → click "Check for captures" → "Scaffold scraper" → open new file in editor and fill the TODO body using HAR / recorded.js as reference → restart `npm run dev`. The wizard scaffolds the stub; Claude in chat can finish the request logic if you paste the HAR snippets.
+- **Estimate:** ~15 min combined per portal (5 user capture, 10 LLM/manual scraper customization).
 - **First question per portal:** does the lab actually push via portal, or does it just email a PDF? Email-only labs go through the existing Gmail ingest, not a new scraper.
+
+### Capture wizard Phase 3 — AI-driven scaffolding
+- **What:** Replace the empty TODO body in the scaffolded scraper with Claude API analysis of the captured HAR. Click "Generate from HAR" → server slims HAR (drops response bodies, keeps request signatures) → Anthropic API call returns proposed scraper code → user reviews diff → Save.
+- **Why deferred:** HAR slimming is delicate (60+ MB files), and prompt engineering for "write a scraper from this HAR" needs iteration. Standalone session.
+- **Already in place:** @anthropic-ai/sdk in deps; SCRAPER_REGISTRY; access.ts canonical pattern; scaffold endpoint stable.
+
+### Remote-browser capture (Browserbase or similar)
+- **What:** Today's wizard requires the user to run Playwright locally. For staff who don't have the dev env, integrate a hosted browser service so "Click here to open browser" opens a remote session right in the page.
+- **Why deferred:** Paid service (~$50/mo for Browserbase). Not needed until non-engineers operate the system.
+
+### Patient DOB enrichment
+- **What:** After Zenoti sync creates a case, optionally call `GET apiamrs14.zenoti.com/api/Guests/<id>?Type=0` to fill `patient_dob`. The scraper's name+DOB fallback matching depends on this.
+- **Caveat:** Leila's record came back almost entirely null in our capture. Many Zenoti records may be sparse. Track which records have DOB vs not, and consider a Zenoti-side data-quality pass as a separate effort.
+
+### 400+ historical labs backfill audit (the killer feature)
+- **What:** For every closed case in the tracker, check via PB API whether the matching PDF is actually on the patient's chart. Report gaps. Optionally auto-upload missing ones.
+- **Approach:** Loop `select * from lab_cases where step5_complete_uploaded = true and archived_at is not null`, for each case call `GET /api/consultant/labrequests?clientRecordId=<id>` (need to verify this filter is supported — falls under Zenoti memory's "follow-up capture if needed"), diff, report.
+- **Why now-possible:** The PB uploader works. The same function that uploads NEW labs can verify OLD ones.
 
 ### Patient DOB enrichment
 - **What:** After Zenoti sync creates a case, optionally call `GET apiamrs14.zenoti.com/api/Guests/<id>?Type=0` to fill `patient_dob`. The scraper's name+DOB fallback matching depends on this.
@@ -107,6 +118,22 @@ The full automated flow Alex articulated 2026-05-21. Everything below this secti
      Cheapest, but flakier (carrier email formats change).
 
 ## Done
+
+### 2026-05-22 (full-day automation session) — pipeline live, settings UI shipped
+
+- **End-to-end pipeline VERIFIED LIVE.** Two real PB labrequests uploaded for Leila Centner via the click-to-PB flow (pb_labrequest `6a10870b3c74df94d6d51302` and `6a108b63f6668f4a3b8d57ce` with title `Access — Acc# 007143558`). Click-to-PB latency ~5 seconds end-to-end.
+- **One-command demo.** `npm run dev` now uses concurrently to spawn Next + PB worker + Zenoti loop + auto-attach watcher with prefixed coloured logs. Single Ctrl+C kills everything. `dev:next-only` preserved as solo dev-server escape hatch.
+- **Zenoti → tracker sync.** `POST /api/worker/cases` (idempotent UPSERT by `zenoti_appointment_id`, plus `cancelledAppointmentIds[]` for soft-deletion of cancelled appts). `worker/scripts/zenoti-sync-loop.ts` polls every 60s as a single Node process. All 49 Centner Zenoti services routed via canonical mapping + fallback.
+- **PB upload queue + drain worker.** Migration `20260522_pb_upload_jobs.sql` (queue with `(case_id, pdf_id)` uniqueness). `approvePdf()` upserts a queued job; `worker/scripts/pb-upload-worker.ts` claims atomically via `/api/worker/pb-upload/next`, runs PB uploader, reports outcome via `/api/worker/pb-upload/result`. Default poll 5s for snappy local; override via `PB_WORKER_INTERVAL_MS` for prod.
+- **PDF review modal — side-by-side reference.** Left sidebar shows "Tracker says" (Patient, DOB, Lab, Accession, Collection date) next to the embedded PDF iframe so staff can verify before approving. Amber banner in `CaseDetail` linked to the modal; gated on `pendingPdf` so it never flashes on cards without a pending review.
+- **Activity log merges audit rows.** `listLabEvents` now joins `lab_case_audit` (approve / wrong-pdf / upload-failed / retry / accession-edited) into the same chronological stream as `lab_events`. New synthetic kinds `audit_*` route through `ActivityLog`'s describe() switch.
+- **Auto-flip step 4 on PDF arrival.** `/api/worker/result-ready` flips `step4_complete_received=true` (or `step2_partial_received=true` if isPartial) when the scraper attaches a PDF. Writes a `step_toggled` event tagged with the scraper actor. No more manual "Complete received" click.
+- **Auto-archive cancelled Zenoti appts.** `LabAppointment.cancelled` flag populated from `cancelOrNoShowStatus`; sync sends `cancelledAppointmentIds[]`; route soft-deletes the matching case and writes a `case_deleted` event.
+- **Kanban reorder + rename.** New order: New → Sample Sent → **Pending Upload** → Partial Uploaded → Complete Uploaded → ROF…. Column lifecycle is now pure step-state: a card visits Pending Upload twice for labs that ship partial + complete results. Aligned with column-jump's existing step3/step5 mapping.
+- **Settings → Scrapers tab.** `/labs/settings?tab=scrapers` lists all 11 known portals (registry at `src/lib/scrapers/registry.ts`). Per-portal status (Configured / Not configured / Never run / lifetime attach count + last scrape time) and HTTP health badge (Reachable / Flaky / Down) from the new daily cron. Expandable rows show pre-built capture bash command with copy-to-clipboard.
+- **Daily portal health cron.** `/api/cron/portal-health` (Vercel cron `0 5 * * *` UTC) probes each portal's login URL in parallel and writes to `lab_scraper_status`. Consecutive-failure counter drives the red/yellow badges in the Scrapers panel.
+- **Capture wizard (Phase 2).** Per-portal expandable wizard scans `worker/captures/<key>/` for recent captures and offers a "Scaffold scraper" button that writes a stub `worker/src/scrapers/<key>.ts` with TODO markers pointing at the HAR. AI-driven HAR analysis (Phase 3) deferred.
+- **Security hardening.** `.gitignore` extended for `/Centner Labs/` (PHI PDFs), `/worker/captures/` (auth cookies + HAR with tokens), `Chrome_Passwords.csv`. `.env.local` PB credentials persisted with auto-loader at `worker/src/lib/load-env.ts`.
 
 ### 2026-05-21 (evening session) — major automation push
 
