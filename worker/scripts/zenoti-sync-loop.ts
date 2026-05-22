@@ -93,6 +93,13 @@ async function pushToTracker(
         ` • reconciled: ${json.reconciledDeleted ?? 0} hard-deletions` +
         ` • ${json.errors.length} errors`,
     );
+    // Surface up to 3 error messages so we don't have to guess what's wrong.
+    for (const e of json.errors.slice(0, 3)) {
+      log(`  ✗ ${e.zenotiAppointmentId}: ${e.error}`);
+    }
+    if (json.errors.length > 3) {
+      log(`  (… and ${json.errors.length - 3} more)`);
+    }
   }
 }
 
