@@ -20,12 +20,12 @@ const STORAGE_PATH = "captures/zenoti/20260522-103507/storage.json";
 const BASE = process.env.TRACKER_BASE_URL;
 const SECRET = process.env.WORKER_SHARED_SECRET;
 const INTERVAL_MS = Number(process.env.ZENOTI_SYNC_INTERVAL_MS ?? "60000");
-// Pull today + N days forward each tick so future bookings get caught
-// early AND so the per-day reconciliation pass can detect hard-deletions
-// for upcoming appointments. Default 30 days covers ~99% of lab bookings;
-// each day is one HTTP call to Zenoti so 30 calls/tick at 60s interval is
-// still well within polite-citizen territory.
-const DAYS_AHEAD = Number(process.env.ZENOTI_DAYS_AHEAD ?? "30");
+// Pull today + N days forward each tick. Default 1 day (today + tomorrow)
+// keeps the board tight on what staff is actively working — the lab team's
+// observed UX 2026-05-22 was that pulling 30 days flooded the kanban with
+// future bookings they hadn't realized were on the schedule. Bump
+// ZENOTI_DAYS_AHEAD if you want more lead time for prep / kits / labels.
+const DAYS_AHEAD = Number(process.env.ZENOTI_DAYS_AHEAD ?? "1");
 
 if (!BASE) throw new Error("TRACKER_BASE_URL is required");
 if (!SECRET) throw new Error("WORKER_SHARED_SECRET is required");
