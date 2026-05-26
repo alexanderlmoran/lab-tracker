@@ -20,6 +20,64 @@ import { getSupabaseAdmin } from "@/utils/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * PATCH /api/worker/debug/cases?id=<uuid>&action=archive|soft-delete|hard-delete
+ *
+ * Manual admin escape hatch — used when a case is stuck in a loop, has bad
+ * data, or just needs to be force-killed without going through the normal
+ * UI. Bearer-authed with WORKER_SHARED_SECRET. The "archive" action sets
+ * archived_at and is immune to the sync's restore-on-resync (which only
+ * un-deletes deleted_at, never un-archives), so it's the right choice when
+ * Zenoti is going to keep reporting an appointment we don't want to track.
+ */
+export async function PATCH(request: Request) {
+  const expected = process.env.WORKER_SHARED_SECRET;
+  if (!expected) {
+    return NextResponse.json({ ok: false, error: "secret not configured" }, { status: 500 });
+  }
+  if ((request.headers.get("authorization") ?? "") !== `Bearer ${expected}`) {
+    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+
+  const url = new URL(request.url);
+  const id = url.searchParams.get("id");
+  const action = url.searchParams.get("action");
+  if (!id || !/^[0-9a-f-]{36}$/i.test(id)) {
+    return NextResponse.json({ ok: false, error: "id (uuid) required" }, { status: 400 });
+  }
+  if (action !== "archive" && action !== "soft-delete" && action !== "hard-delete") {
+    return NextResponse.json(
+      { ok: false, error: "action must be archive | soft-delete | hard-delete" },
+      { status: 400 },
+    );
+  }
+
+  const db = getSupabaseAdmin();
+
+  if (action === "hard-delete") {
+    const { error } = await db.from("lab_cases").delete().eq("id", id);
+    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true, id, action: "hard-delete" });
+  }
+
+  const patch: Record<string, unknown> =
+    action === "archive"
+      ? { archived_at: new Date().toISOString() }
+      : { deleted_at: new Date().toISOString() };
+  const { error } = await db.from("lab_cases").update(patch).eq("id", id);
+  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+
+  // Emit an audit event so the activity log shows what happened.
+  await db.from("lab_events").insert({
+    case_id: id,
+    kind: action === "archive" ? "case_archived" : "case_deleted",
+    actor: "admin:debug-endpoint",
+    note: `Force-${action} via /api/worker/debug/cases PATCH`,
+  });
+
+  return NextResponse.json({ ok: true, id, action });
+}
+
 export async function GET(request: Request) {
   const expected = process.env.WORKER_SHARED_SECRET;
   if (!expected) {
