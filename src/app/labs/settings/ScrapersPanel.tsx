@@ -2,7 +2,9 @@
 
 import { useState, useTransition } from "react";
 import {
+  analyzeCaptureWithAi,
   listCaptureDirsForPortal,
+  saveScraperSource,
   scaffoldScraperFromTemplate,
   type CaptureDirInfo,
   type ScraperStatusRow,
@@ -123,6 +125,18 @@ function ScaffoldWizard({ row, onScaffolded }: { row: ScraperStatusRow; onScaffo
   const [isLoading, startLoading] = useTransition();
   const [success, setSuccess] = useState<string | null>(null);
 
+  // Phase 3 AI state
+  const [notes, setNotes] = useState("");
+  const [aiProposedSource, setAiProposedSource] = useState<string | null>(null);
+  const [aiUsage, setAiUsage] = useState<{
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadInputTokens: number;
+    cacheCreationInputTokens: number;
+    harSummary: { entryCount: number; keptCount: number };
+  } | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+
   function refresh() {
     setError(null);
     setSuccess(null);
@@ -160,6 +174,54 @@ function ScaffoldWizard({ row, onScaffolded }: { row: ScraperStatusRow; onScaffo
     });
   }
 
+  function analyzeWithAi(timestamp: string) {
+    setBusyKey(`ai:${timestamp}`);
+    setError(null);
+    setSuccess(null);
+    setAiProposedSource(null);
+    setAiUsage(null);
+    setAiBusy(true);
+    startLoading(async () => {
+      try {
+        const res = await analyzeCaptureWithAi(row.key, timestamp, notes);
+        if (!res.ok) {
+          setError(res.error ?? "AI analysis failed");
+        } else if (res.data) {
+          setAiProposedSource(res.data.source);
+          setAiUsage({ ...res.data.usage, harSummary: res.data.harSummary });
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "AI analysis failed");
+      } finally {
+        setBusyKey(null);
+        setAiBusy(false);
+      }
+    });
+  }
+
+  function saveProposed() {
+    if (!aiProposedSource) return;
+    setBusyKey("save");
+    setError(null);
+    startLoading(async () => {
+      try {
+        const res = await saveScraperSource(row.key, aiProposedSource);
+        if (!res.ok) {
+          setError(res.error ?? "Save failed");
+        } else {
+          setSuccess(`Wrote ${res.data?.relPath}. Restart npm run dev so the worker picks up the new scraper.`);
+          setAiProposedSource(null);
+          setAiUsage(null);
+          onScaffolded();
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Save failed");
+      } finally {
+        setBusyKey(null);
+      }
+    });
+  }
+
   return (
     <div className="space-y-2 border-t border-dashed border-zinc-200 pt-3">
       <div className="flex items-center justify-between gap-2">
@@ -183,33 +245,111 @@ function ScaffoldWizard({ row, onScaffolded }: { row: ScraperStatusRow; onScaffo
         </p>
       ) : null}
       {captures && captures.length > 0 ? (
-        <ul className="space-y-1">
-          {captures.map((c) => (
-            <li
-              key={c.timestamp}
-              className="flex items-center gap-2 rounded border border-zinc-200 bg-white px-2 py-1.5"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="font-mono text-[11px] text-zinc-800">{c.timestamp}</div>
-                <div className="text-[10.5px] text-zinc-500">
-                  storage.json {c.hasStorageJson ? "✓" : "✗"} · HAR{" "}
-                  {c.hasHar ? `${fmtBytes(c.harBytes)} ✓` : "✗"}
-                  {c.capturedAt
-                    ? ` · ${c.capturedAt.toISOString().slice(0, 16).replace("T", " ")}`
-                    : ""}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => scaffold(c.timestamp)}
-                disabled={busyKey !== null || !c.hasStorageJson}
-                className="shrink-0 rounded-md bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+        <>
+          <div>
+            <label className="text-[10.5px] font-semibold uppercase tracking-wide text-zinc-500">
+              Operator notes (optional)
+            </label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Anything Claude should know about the recorded session. E.g. 'PDF arrives at /api/reports/download?id=…', 'search-by-name needs a 250ms debounce', 'partial vs complete is at /labs/<id>/status'."
+              rows={3}
+              className="mt-1 w-full rounded border border-zinc-300 px-2 py-1 text-[11.5px]"
+              disabled={busyKey !== null}
+            />
+          </div>
+          <ul className="space-y-1">
+            {captures.map((c) => (
+              <li
+                key={c.timestamp}
+                className="flex items-center gap-2 rounded border border-zinc-200 bg-white px-2 py-1.5"
               >
-                {busyKey === c.timestamp ? "Scaffolding…" : "Scaffold scraper"}
-              </button>
-            </li>
-          ))}
-        </ul>
+                <div className="min-w-0 flex-1">
+                  <div className="font-mono text-[11px] text-zinc-800">{c.timestamp}</div>
+                  <div className="text-[10.5px] text-zinc-500">
+                    storage.json {c.hasStorageJson ? "✓" : "✗"} · HAR{" "}
+                    {c.hasHar ? `${fmtBytes(c.harBytes)} ✓` : "✗"}
+                    {c.capturedAt
+                      ? ` · ${c.capturedAt.toISOString().slice(0, 16).replace("T", " ")}`
+                      : ""}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => analyzeWithAi(c.timestamp)}
+                  disabled={busyKey !== null || !c.hasHar}
+                  className="shrink-0 rounded-md bg-violet-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+                  title="Analyze HAR with Claude to write a real scraper (uses API credits)"
+                >
+                  {busyKey === `ai:${c.timestamp}` ? "Analyzing…" : "Analyze with AI"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => scaffold(c.timestamp)}
+                  disabled={busyKey !== null || !c.hasStorageJson}
+                  className="shrink-0 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+                  title="Scaffold a stub TODO file without calling AI"
+                >
+                  {busyKey === c.timestamp ? "Scaffolding…" : "Stub only"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+
+      {aiProposedSource ? (
+        <div className="space-y-2 rounded-md border border-violet-200 bg-violet-50/40 p-2">
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-semibold text-violet-900">
+              Claude proposed worker/src/scrapers/{row.key}.ts
+            </p>
+            {aiUsage ? (
+              <p className="text-[10px] text-violet-700">
+                {aiUsage.harSummary.keptCount}/{aiUsage.harSummary.entryCount} HAR entries used
+                {" · "}
+                in {aiUsage.inputTokens}t / out {aiUsage.outputTokens}t
+                {aiUsage.cacheReadInputTokens > 0
+                  ? ` · cache hit ${aiUsage.cacheReadInputTokens}t`
+                  : ""}
+              </p>
+            ) : null}
+          </div>
+          <pre className="max-h-[400px] overflow-auto rounded border border-zinc-300 bg-white p-2 font-mono text-[10.5px] leading-relaxed text-zinc-900">
+            {aiProposedSource}
+          </pre>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={saveProposed}
+              disabled={busyKey !== null}
+              className="rounded-md bg-emerald-600 px-3 py-1 text-[11px] font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+            >
+              {busyKey === "save" ? "Saving…" : "Save scraper"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAiProposedSource(null);
+                setAiUsage(null);
+              }}
+              disabled={busyKey !== null}
+              className="rounded-md border border-zinc-300 bg-white px-3 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+            >
+              Discard
+            </button>
+            <p className="text-[10.5px] text-zinc-600">
+              Review carefully — copy/paste into your editor for tweaks before saving if needed.
+            </p>
+          </div>
+        </div>
+      ) : null}
+
+      {aiBusy ? (
+        <p className="text-[11px] text-violet-700">
+          Sending slimmed HAR to Claude (sonnet-4-6). Typically 8-20 seconds per portal.
+        </p>
       ) : null}
     </div>
   );

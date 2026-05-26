@@ -7,6 +7,16 @@
 
 Lab tracker is the human-gated middleware between Zenoti, lab portals, and PracticeBetter. Automation handles the boring 95% (case creation, transit tracking, scraping, downloading, matching, uploading). A human approves the one step where a wrong answer is catastrophic: **"this PDF goes on this chart."**
 
+## The "Smart Auto Lab Tracker" arc (2026-05-26 onward)
+
+The middleware pipeline is shipped. The next arc shifts from "automate the steps" to "automate the *thinking*" — AI plugged in at three layers, each one strictly building on the previous:
+
+1. **Smart capture wizard** — Settings → Scrapers → click record → walk through a real portal session with notes → AI analyzes the HAR + notes and writes the scraper. Drift detection flags when a portal redesigns; recapture produces a v2 diff. This is the foundation; the other two layers can't work without scrapers for each portal.
+2. **Historical backfill brain** — For the ~424 cases stuck at Sample Sent, cross-reference each against the matching portal + PB and auto-advance to the right step. Requires Layer 1.
+3. **AI search** — Natural-language input box in the tracker; Anthropic tool-use routes queries across Zenoti / portals / PB / tracker. Sits on top of Layers 1+2.
+
+The middleware principle (human approves PB uploads, no exceptions) stays — even with AI in the loop, the moment a PDF lands on a patient's chart still requires a human click. See TASKS.md "Smart Auto Lab Tracker — strategic vision" for the staged plan.
+
 ## What automates vs what stays human
 
 **Automated** (no human input):

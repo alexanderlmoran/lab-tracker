@@ -54,6 +54,49 @@ Single-command demo path:
 - Settings → Scrapers tab lists all 11 portals with configured / not configured / never-run status + daily HTTP health badge (green / yellow / red) populated by /api/cron/portal-health
 - Capture wizard: per-portal expandable wizard scaffolds `worker/src/scrapers/<key>.ts` stub from a captured Playwright session, leaving TODO markers pointing at the HAR for completion
 
+## Smart Auto Lab Tracker — strategic vision (decided 2026-05-26)
+
+The next phase isn't more pipeline plumbing — it's making the lab tracker *think*. Three intertwined AI-driven layers, sequenced because each depends on the previous:
+
+### Layer 1 — Smart capture wizard (AI-generated scrapers)
+
+Today's Phase 2 wizard scaffolds an empty stub from a captured Playwright session. Layer 1 makes it actually write the scraper:
+
+- Settings → Scrapers row → "Analyze with AI" button (after capture exists)
+- Server reads the HAR + storage.json, slims the HAR (drops response bodies, keeps request signatures + headers + bodies + first-1KB-of-each-response)
+- Optional notes field on the wizard: free-text context staff types during/after the recording ("the PDF arrives at /api/reports/download?id=…")
+- Claude API gets the slimmed HAR + notes + canonical access.ts template; returns proposed TypeScript scraper
+- Diff view against the stub; "Save scraper" writes worker/src/scrapers/&lt;key&gt;.ts
+- Drift detection: each successful scrape stamps a hash of the request shape; daily health probe compares to baseline and flags "portal X drifted, recalibrate"
+- Recapture creates v2 capture dir; wizard offers diff between v1 and v2 to update the scraper rather than start fresh
+
+### Layer 2 — Historical backfill brain (the killer feature)
+
+Currently ~424 lab_cases sit at step 1 (Sample Sent) with results probably already on the patient's portal and possibly already on PB. The backfill brain reconciles:
+
+- For each pending case: invoke the matching scraper's "search by patient name + DOB" or "search by accession" function
+- Cross-reference against `GET /api/consultant/labrequests?clientRecordId=<id>` on PB
+- Auto-advance to the right step based on what's already on PB (step 5 if PB has the doc, step 4 if portal has the PDF but PB doesn't, etc.)
+- Bulk-action UI: show a backfill report, let staff approve in batches
+- This requires Layer 1 (scrapers must exist for the relevant portals)
+
+### Layer 3 — AI-powered search
+
+Natural-language search across Zenoti / portals / PB / tracker. "Show me Leila's pending Vibrant labs" → unified answer.
+
+- Anthropic API tool-use with structured tools per data source
+- Single input box in the tracker
+- Claude routes to the right tools, composes the answer
+
+### Sequencing
+
+1. Layer 1 first (foundation for everything else)
+2. Real scrapers for the 6 missing portals via the new wizard (Vibrant, Cyrex, Spectracell, Genova, GlycanAge, DoctorsData)
+3. Layer 2 (backfill brain) — feasible once portals are queryable
+4. Layer 3 (search) — sits on top of Layer 1 + 2
+
+Auto-email triggers (deferred since 2026-05-22) remain on the queue but parked until the smart-tracker work above ships.
+
 ## Up next — wire it together
 
 ### Remaining lab portals (6 left)

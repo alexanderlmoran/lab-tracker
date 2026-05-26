@@ -1784,3 +1784,148 @@ export class ${className} implements LabScraper {
   revalidatePath("/labs/settings");
   return { ok: true, data: { relPath: `worker/src/scrapers/${key}.ts` } };
 }
+
+// ── Capture wizard Phase 3 — AI-driven HAR analysis ────────────────
+
+export type AnalyzeCaptureResult = ActionResult<{
+  /** TypeScript module source proposed by Claude. */
+  source: string;
+  /** Slim HAR summary stats (for the UI to show "70 of 412 entries used"). */
+  harSummary: { entryCount: number; keptCount: number };
+  /** Claude token usage for this analysis. */
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadInputTokens: number;
+    cacheCreationInputTokens: number;
+  };
+}>;
+
+/** Reads a capture's HAR + storage.json, slims them, and asks Claude
+ *  to write a real scraper. Returns the proposed source for human
+ *  review before saveScraperSource() commits it to disk. */
+export async function analyzeCaptureWithAi(
+  key: string,
+  captureTimestamp: string,
+  operatorNotes: string,
+): Promise<AnalyzeCaptureResult> {
+  await requireRole("admin");
+  if (!/^[a-z0-9_-]+$/i.test(key))
+    return { ok: false, error: "invalid portal key" };
+  if (!/^[0-9]{8}-[0-9]{6}$/.test(captureTimestamp))
+    return { ok: false, error: "invalid capture timestamp" };
+
+  const { readFileSync, existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { SCRAPER_REGISTRY } = await import("@/lib/scrapers/registry");
+  const { slimHar } = await import("@/lib/scrapers/har-slim");
+  const { generateScraperWithClaude } = await import(
+    "@/lib/scrapers/generate-with-claude"
+  );
+
+  const entry = SCRAPER_REGISTRY.find((e) => e.key === key);
+  if (!entry) return { ok: false, error: `unknown portal: ${key}` };
+
+  const cwd = process.cwd();
+  const captureDir = join(cwd, "worker", "captures", key, captureTimestamp);
+  const harPath = join(captureDir, "session.har");
+  if (!existsSync(harPath)) {
+    return { ok: false, error: `no session.har at ${harPath}` };
+  }
+
+  // Reference materials — Claude needs to see the canonical patterns.
+  const accessPath = join(cwd, "worker", "src", "scrapers", "access.ts");
+  const basePath = join(cwd, "worker", "src", "scrapers", "base.ts");
+  const trackerClientPath = join(cwd, "worker", "src", "tracker-client.ts");
+  for (const p of [accessPath, basePath, trackerClientPath]) {
+    if (!existsSync(p)) return { ok: false, error: `reference missing: ${p}` };
+  }
+
+  let rawHar: string;
+  let slim;
+  try {
+    rawHar = readFileSync(harPath, "utf-8");
+    slim = slimHar(rawHar);
+  } catch (err) {
+    return {
+      ok: false,
+      error: `HAR parse failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  const accessSource = readFileSync(accessPath, "utf-8");
+  const baseSource = readFileSync(basePath, "utf-8");
+  const trackerClientSource = readFileSync(trackerClientPath, "utf-8");
+
+  let result;
+  try {
+    result = await generateScraperWithClaude({
+      portalKey: key,
+      portalLabName: entry.labName,
+      portalLoginUrl: entry.loginUrl,
+      operatorNotes,
+      slimHar: slim,
+      accessReferenceSource: accessSource,
+      baseReferenceSource: baseSource,
+      trackerClientSource,
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Claude API failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  return {
+    ok: true,
+    data: {
+      source: result.source,
+      harSummary: { entryCount: slim.entryCount, keptCount: slim.keptCount },
+      usage: result.usage,
+    },
+  };
+}
+
+/** Writes an AI-generated (or hand-edited) scraper source to
+ *  worker/src/scrapers/<key>.ts. Refuses to overwrite an existing file —
+ *  delete it manually first to re-scaffold. */
+export async function saveScraperSource(
+  key: string,
+  source: string,
+): Promise<ActionResult<{ relPath: string }>> {
+  await requireRole("admin");
+  if (!/^[a-z0-9_-]+$/i.test(key))
+    return { ok: false, error: "invalid portal key" };
+  if (source.length < 100 || source.length > 50000) {
+    return { ok: false, error: "source size out of bounds (100-50000 chars)" };
+  }
+
+  const { existsSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+
+  const scraperPath = join(
+    process.cwd(),
+    "worker",
+    "src",
+    "scrapers",
+    `${key}.ts`,
+  );
+  if (existsSync(scraperPath)) {
+    return {
+      ok: false,
+      error: `worker/src/scrapers/${key}.ts already exists — delete it first to overwrite`,
+    };
+  }
+
+  try {
+    writeFileSync(scraperPath, source, { encoding: "utf-8" });
+  } catch (err) {
+    return {
+      ok: false,
+      error: `write failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  revalidatePath("/labs/settings");
+  return { ok: true, data: { relPath: `worker/src/scrapers/${key}.ts` } };
+}
