@@ -263,36 +263,40 @@ function ScaffoldWizard({ row, onScaffolded }: { row: ScraperStatusRow; onScaffo
             {captures.map((c) => (
               <li
                 key={c.timestamp}
-                className="flex items-center gap-2 rounded border border-zinc-200 bg-white px-2 py-1.5"
+                className="flex flex-col gap-2 rounded border border-zinc-200 bg-white px-3 py-2"
               >
-                <div className="min-w-0 flex-1">
-                  <div className="font-mono text-[11px] text-zinc-800">{c.timestamp}</div>
-                  <div className="text-[10.5px] text-zinc-500">
-                    storage.json {c.hasStorageJson ? "✓" : "✗"} · HAR{" "}
-                    {c.hasHar ? `${fmtBytes(c.harBytes)} ✓` : "✗"}
-                    {c.capturedAt
-                      ? ` · ${c.capturedAt.toISOString().slice(0, 16).replace("T", " ")}`
-                      : ""}
+                <div className="flex items-center gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-mono text-[11px] text-zinc-800">{c.timestamp}</div>
+                    <div className="text-[10.5px] text-zinc-500">
+                      storage.json {c.hasStorageJson ? "✓" : "✗"} · HAR{" "}
+                      {c.hasHar ? `${fmtBytes(c.harBytes)} ✓` : "✗"}
+                      {c.capturedAt
+                        ? ` · ${c.capturedAt.toISOString().slice(0, 16).replace("T", " ")}`
+                        : ""}
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => analyzeWithAi(c.timestamp)}
+                    disabled={busyKey !== null || !c.hasHar}
+                    className="shrink-0 rounded-md bg-violet-600 px-4 py-1.5 text-[12px] font-medium text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
+                    title="Analyze HAR with Claude to write a real scraper (uses API credits, ~10-25s)"
+                  >
+                    {busyKey === `ai:${c.timestamp}` ? "Analyzing…" : "→ Analyze with AI"}
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => analyzeWithAi(c.timestamp)}
-                  disabled={busyKey !== null || !c.hasHar}
-                  className="shrink-0 rounded-md bg-violet-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-violet-700 disabled:opacity-50"
-                  title="Analyze HAR with Claude to write a real scraper (uses API credits)"
-                >
-                  {busyKey === `ai:${c.timestamp}` ? "Analyzing…" : "Analyze with AI"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => scaffold(c.timestamp)}
-                  disabled={busyKey !== null || !c.hasStorageJson}
-                  className="shrink-0 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
-                  title="Scaffold a stub TODO file without calling AI"
-                >
-                  {busyKey === c.timestamp ? "Scaffolding…" : "Stub only"}
-                </button>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => scaffold(c.timestamp)}
+                    disabled={busyKey !== null || !c.hasStorageJson}
+                    className="text-[10.5px] text-zinc-500 underline-offset-2 hover:text-zinc-800 hover:underline disabled:opacity-50"
+                    title="Advanced: write an empty TODO stub without calling AI. Use only when AI is unavailable or you want to write the scraper entirely by hand."
+                  >
+                    {busyKey === c.timestamp ? "writing stub…" : "advanced: write empty stub instead"}
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
@@ -316,7 +320,10 @@ function ScaffoldWizard({ row, onScaffolded }: { row: ScraperStatusRow; onScaffo
               </p>
             ) : null}
           </div>
-          <pre className="max-h-[400px] overflow-auto rounded border border-zinc-300 bg-white p-2 font-mono text-[10.5px] leading-relaxed text-zinc-900">
+          <pre
+            className="max-h-[400px] overflow-auto rounded border border-zinc-300 bg-white p-2 font-mono text-[10.5px] leading-relaxed"
+            style={{ color: "#18181b" }}
+          >
             {aiProposedSource}
           </pre>
           <div className="flex items-center gap-2">
@@ -419,8 +426,14 @@ function ScraperRow({ row, onChange }: { row: ScraperStatusRow; onChange: () => 
               {row.loginUrl}
             </a>
           </p>
-          {!row.scraperConfigured ? (
-            <ScaffoldWizard row={row} onScaffolded={onChange} />
+          <ScaffoldWizard row={row} onScaffolded={onChange} />
+          {row.scraperConfigured ? (
+            <p className="text-[10.5px] text-zinc-500">
+              Tip: a scraper file already exists at{" "}
+              <span className="font-mono">worker/src/scrapers/{row.key}.ts</span>
+              . To re-analyze with AI, delete that file first
+              (the save action refuses to overwrite).
+            </p>
           ) : null}
         </div>
       ) : null}

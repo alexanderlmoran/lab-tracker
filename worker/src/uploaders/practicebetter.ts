@@ -370,3 +370,65 @@ export async function uploadPdfToPb(input: UploadInput): Promise<UploadResult> {
 
   return { labRequestId, patientId: patient.id };
 }
+
+// ── List labrequests for a patient (backfill brain) ─────────────────
+//
+// PB endpoint observed in capture HAR:
+//   GET /api/consultant/labrequests?records=<patientId>&limit=100&sort=orderdate_desc&status=draft,published
+//
+// Returns array of labrequest objects. Used by the backfill brain to
+// determine "is this tracker case already on the patient's PB chart?"
+// before silently advancing step5.
+
+export type PbLabRequest = {
+  id: string;
+  /** Display name shown on the patient's chart, e.g. "Access — Acc# 007143558". */
+  name: string;
+  /** Date the lab was ordered (ISO). */
+  dateOrdered: string;
+  /** PB patient (record) id. */
+  records: string;
+  /** Free-text status / lifecycle hint from PB. */
+  status?: string;
+  /** Set when the labrequest was created; useful for "ordered before X" filtering. */
+  created?: string;
+  /** Other fields PB returns — kept loose so we don't break on schema drift. */
+  [extra: string]: unknown;
+};
+
+export async function listPatientLabRequests(
+  session: PbSession,
+  patientId: string,
+  opts: { limit?: number; status?: string } = {},
+): Promise<PbLabRequest[]> {
+  const limit = opts.limit ?? 100;
+  const status = opts.status ?? "draft,published";
+  const url =
+    `${PB_BASE}/api/consultant/labrequests` +
+    `?limit=${limit}` +
+    `&records=${encodeURIComponent(patientId)}` +
+    `&sort=orderdate_desc` +
+    `&status=${encodeURIComponent(status)}`;
+
+  const res = await request(url, {
+    method: "GET",
+    headers: pbApiHeaders(session),
+  });
+  if (res.statusCode !== 200) {
+    const text = await res.body.text();
+    throw new Error(
+      `PB list labrequests failed ${res.statusCode}: ${text.slice(0, 300)}`,
+    );
+  }
+  const json = (await res.body.json()) as
+    | { data?: PbLabRequest[] }
+    | PbLabRequest[]
+    | { labrequests?: PbLabRequest[] };
+
+  // PB has used 3 envelope shapes across versions — be defensive.
+  if (Array.isArray(json)) return json;
+  if ("data" in json && Array.isArray(json.data)) return json.data;
+  if ("labrequests" in json && Array.isArray(json.labrequests))
+    return json.labrequests;
+  return [];
+}

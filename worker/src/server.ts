@@ -3,10 +3,12 @@ import { chromium } from "playwright";
 import { fetchOpenCases, postResultReady } from "./tracker-client.js";
 import { withLock } from "./lib/lock.js";
 import { accessScraper } from "./scrapers/access.js";
+import { vibrantScraper } from "./scrapers/vibrant.js";
 import type { LabScraper } from "./scrapers/base.js";
 
 const SCRAPERS: Record<string, LabScraper> = {
   access: accessScraper,
+  vibrant: vibrantScraper,
 };
 
 const SECRET = process.env.WORKER_SHARED_SECRET;

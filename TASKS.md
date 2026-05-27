@@ -62,23 +62,25 @@ The next phase isn't more pipeline plumbing — it's making the lab tracker *thi
 
 Today's Phase 2 wizard scaffolds an empty stub from a captured Playwright session. Layer 1 makes it actually write the scraper:
 
-- Settings → Scrapers row → "Analyze with AI" button (after capture exists)
-- Server reads the HAR + storage.json, slims the HAR (drops response bodies, keeps request signatures + headers + bodies + first-1KB-of-each-response)
-- Optional notes field on the wizard: free-text context staff types during/after the recording ("the PDF arrives at /api/reports/download?id=…")
-- Claude API gets the slimmed HAR + notes + canonical access.ts template; returns proposed TypeScript scraper
-- Diff view against the stub; "Save scraper" writes worker/src/scrapers/&lt;key&gt;.ts
-- Drift detection: each successful scrape stamps a hash of the request shape; daily health probe compares to baseline and flags "portal X drifted, recalibrate"
-- Recapture creates v2 capture dir; wizard offers diff between v1 and v2 to update the scraper rather than start fresh
+- ✅ Settings → Scrapers row → "Analyze with AI" button (after capture exists) — shipped 2026-05-26 (commit cca0a36)
+- ✅ Server reads the HAR, slims it (drops response bodies, keeps request signatures + headers + bodies + first-800-chars-of-each-response, caps at 80 entries) — shipped 2026-05-26
+- ✅ Optional notes field on the wizard: free-text context staff types during/after the recording — shipped 2026-05-26
+- ✅ Claude sonnet-4-6 gets the slimmed HAR + notes + canonical access.ts template; returns proposed TypeScript scraper — shipped 2026-05-26
+- ✅ Diff view; "Save scraper" writes worker/src/scrapers/&lt;key&gt;.ts — shipped 2026-05-26
+- ⏳ **In-app capture (no terminal)** — Settings → Scrapers row → "Record portal session" button → server triggers Playwright codegen in user's local worker → web UI shows progress → cookies + HAR captured without the user touching a bash command. Requires bidirectional comms between tracker and worker (tiny Fastify or WebSocket on the worker side). About 2-3 hours of work. Alex's stated preference 2026-05-26.
+- ⏳ Drift detection: each successful scrape stamps a hash of the request shape; daily health probe compares to baseline and flags "portal X drifted, recalibrate"
+- ⏳ Recapture creates v2 capture dir; wizard offers diff between v1 and v2 to update the scraper rather than start fresh
 
 ### Layer 2 — Historical backfill brain (the killer feature)
 
 Currently ~424 lab_cases sit at step 1 (Sample Sent) with results probably already on the patient's portal and possibly already on PB. The backfill brain reconciles:
 
-- For each pending case: invoke the matching scraper's "search by patient name + DOB" or "search by accession" function
-- Cross-reference against `GET /api/consultant/labrequests?clientRecordId=<id>` on PB
-- Auto-advance to the right step based on what's already on PB (step 5 if PB has the doc, step 4 if portal has the PDF but PB doesn't, etc.)
-- Bulk-action UI: show a backfill report, let staff approve in batches
-- This requires Layer 1 (scrapers must exist for the relevant portals)
+- ✅ PB endpoint discovered: `GET /api/consultant/labrequests?records=<patientId>` returns a patient's labrequests. `listPatientLabRequests()` added to worker/src/uploaders/practicebetter.ts.
+- ✅ Engine: `worker/src/backfill/engine.ts` — pure-function classifier. Four buckets: already-on-pb / scrape-needed / needs-review / leave. Confidence ladder (accession exact match → high; same lab name within ±7 days → high; ±21 days → medium; else low). 30-day grace window so legitimately-pending recent cases aren't touched.
+- ✅ Preview script: `worker/scripts/backfill-leila-preview.ts` — Leila-only, no mutations. Prints classification per case grouped by bucket.
+- ⏳ Execute script (after Alex blesses the preview): `worker/scripts/backfill-leila-execute.ts`. Will run direct DB UPDATE on `already-on-pb` cases with confidence=high. **Critical: bypasses `setStepCompleted` entirely so `maybeFireNadiaAllReceived` / `maybeFireAllisonRof` / patient emails NEVER fire during backfill.** Writes step_toggled events with actor=admin:backfill for audit.
+- ⏳ After Leila works: per-lab scale-out (b) then full reconciliation (a) per Alex 2026-05-26 decision tree.
+- ⏳ UI: Settings → Backfill tab with filter inputs + preview button + execute approval. Phase 2.
 
 ### Layer 3 — AI-powered search
 
