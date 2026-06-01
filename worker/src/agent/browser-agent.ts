@@ -38,7 +38,7 @@ export type RunBrowserAgentOpts = {
 };
 
 const DEFAULT_MODEL = "claude-sonnet-4-6";
-const DEFAULT_MAX_STEPS = 30;
+const DEFAULT_MAX_STEPS = 40;
 
 const SYSTEM = `You are a browser automation agent whose job is to retrieve ONE lab-result PDF from a medical lab portal.
 
@@ -49,7 +49,8 @@ Rules:
 - Work step by step toward the goal: log in → go to results/reports → find the row matching the patient name / accession in the goal → open or download its PDF.
 - The PDF is captured automatically the instant the portal serves it. When "PDF CAPTURED" shows yes, call finish.
 - If you get stuck (login fails, no matching result, a CAPTCHA, a dead end), call give_up with a specific reason. Never loop aimlessly.
-- Click elements by their listed index. Use goto only for URLs you are confident about.`;
+- Navigate by CLICKING the visible links/menu items in the element list (e.g. "Results", "Reports", "My Orders", "Patients"). Do NOT guess or invent URLs — typing a URL you haven't seen on the page almost never works and wastes steps. Use goto ONLY for the starting page or a link/URL actually shown on the current page.
+- After exploring the visible navigation, if the patient or result genuinely isn't there, call give_up — do not start trying random URLs.`;
 
 const tools: Anthropic.Tool[] = [
   {
@@ -94,6 +95,8 @@ const tools: Anthropic.Tool[] = [
     name: "give_up",
     description: "Cannot complete the task. End with a specific reason.",
     input_schema: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] },
+    // Cache the whole tool block (it's identical on every step of the loop).
+    cache_control: { type: "ephemeral" },
   },
 ];
 
@@ -168,6 +171,29 @@ async function snapshot(page: Page, pdfBytes: number): Promise<{ text: string; h
   return { text, handles };
 }
 
+/** Wait just long enough for the page to settle after an action — replaces a
+ *  flat 800ms with "as fast as the page allows": resolve as soon as the DOM is
+ *  ready (or immediately if no navigation happened), plus a short paint settle. */
+async function settle(page: Page): Promise<void> {
+  await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(200);
+}
+
+/** Type into an element, tolerating non-standard fields (styled divs, masked
+ *  inputs): try .fill(), and on failure focus it and type via the keyboard. */
+async function typeInto(page: Page, h: ElementHandle, value: string): Promise<void> {
+  try {
+    await h.fill(value, { timeout: 8000 });
+    return;
+  } catch {
+    // Not a plain input — focus it and type. Clear first via select-all+delete.
+    await h.click({ timeout: 8000 });
+    await page.keyboard.press("ControlOrMeta+A").catch(() => {});
+    await page.keyboard.press("Delete").catch(() => {});
+    await page.keyboard.type(value, { delay: 20 });
+  }
+}
+
 export async function runBrowserAgent(opts: RunBrowserAgentOpts): Promise<AgentOutcome> {
   const { page, goal, credentials, pdfBytes } = opts;
   const maxSteps = opts.maxSteps ?? DEFAULT_MAX_STEPS;
@@ -186,7 +212,7 @@ export async function runBrowserAgent(opts: RunBrowserAgentOpts): Promise<AgentO
     const resp = await client.messages.create({
       model,
       max_tokens: 1024,
-      system: SYSTEM,
+      system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
       tools,
       tool_choice: { type: "any" },
       messages,
@@ -218,7 +244,7 @@ export async function runBrowserAgent(opts: RunBrowserAgentOpts): Promise<AgentO
             break;
           }
           await h.click({ timeout: 10000 });
-          await page.waitForTimeout(800);
+          await settle(page);
           result = "clicked";
           break;
         }
@@ -228,7 +254,7 @@ export async function runBrowserAgent(opts: RunBrowserAgentOpts): Promise<AgentO
             result = "no element at that index";
             break;
           }
-          await h.fill(String(input.text), { timeout: 10000 });
+          await typeInto(page, h, String(input.text));
           result = "filled";
           break;
         }
@@ -239,13 +265,13 @@ export async function runBrowserAgent(opts: RunBrowserAgentOpts): Promise<AgentO
             break;
           }
           const val = input.which === "password" ? credentials.password : credentials.username;
-          await h.fill(val, { timeout: 10000 });
+          await typeInto(page, h, val);
           result = `filled ${String(input.which)} (value hidden)`;
           break;
         }
         case "press":
           await page.keyboard.press(String(input.key));
-          await page.waitForTimeout(800);
+          await settle(page);
           result = "pressed";
           break;
         default:
