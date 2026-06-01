@@ -625,9 +625,19 @@ export function CaseDetail({
           <Field
             label="Lab"
             children={
-              <span className="flex flex-wrap items-center gap-2">
-                <span>{row.lab_panel ? `${row.lab_name} · ${row.lab_panel}` : row.lab_name}</span>
-                <LabPortalLinks labName={row.lab_name} />
+              <span className="flex flex-col gap-0.5">
+                <span className="flex flex-wrap items-center gap-2">
+                  <span>{row.lab_panel ? `${row.lab_name} · ${row.lab_panel}` : row.lab_name}</span>
+                  <LabPortalLinks labName={row.lab_name} />
+                </span>
+                <span className="text-[11px] text-zinc-500">
+                  Acc#{" "}
+                  {row.lab_external_ref ? (
+                    <span className="font-medium text-zinc-900">{row.lab_external_ref}</span>
+                  ) : (
+                    <span className="text-zinc-400">—</span>
+                  )}
+                </span>
               </span>
             }
           />
