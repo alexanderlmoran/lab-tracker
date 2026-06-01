@@ -4,11 +4,13 @@ import { fetchOpenCases, postResultReady } from "./tracker-client.js";
 import { withLock } from "./lib/lock.js";
 import { accessScraper } from "./scrapers/access.js";
 import { vibrantScraper } from "./scrapers/vibrant.js";
+import { cyrexScraper } from "./scrapers/cyrex.js";
 import type { LabScraper } from "./scrapers/base.js";
 
 const SCRAPERS: Record<string, LabScraper> = {
   access: accessScraper,
   vibrant: vibrantScraper,
+  cyrex: cyrexScraper,
 };
 
 const SECRET = process.env.WORKER_SHARED_SECRET;
