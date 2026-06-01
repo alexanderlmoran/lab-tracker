@@ -275,7 +275,9 @@ function FocusedView({
             </div>
             <div className="overflow-y-auto px-6 py-5">
               <CaseDetail
-                row={activeCase}
+                // Fresh row by id so an in-dialog edit reflects immediately
+                // (router.refresh updates `cases`); activeCase is just the pointer.
+                row={cases.find((c) => c.id === activeCase.id) ?? activeCase}
                 initialOpenAttempts={counts?.[activeCase.id]?.openAttempts ?? 0}
               />
             </div>

@@ -303,7 +303,10 @@ export function LabKanbanBoard({
             </div>
             <div className="overflow-y-auto px-6 py-5">
               <CaseDetail
-                row={activeRow}
+                // Render from the freshest row by id (router.refresh updates
+                // `rows`); activeRow is only the "which card is open" pointer,
+                // so without this an in-dialog edit wouldn't show until reopen.
+                row={rows.find((r) => r.id === activeRow.id) ?? activeRow}
                 initialOpenAttempts={counts?.[activeRow.id]?.openAttempts ?? 0}
               />
             </div>

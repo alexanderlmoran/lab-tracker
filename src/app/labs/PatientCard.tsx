@@ -324,7 +324,9 @@ export function PatientCard({
             </div>
             <div className="overflow-y-auto px-6 py-5">
               <CaseDetail
-                row={activeRow}
+                // Fresh row by id so an in-dialog edit reflects immediately
+                // (router.refresh updates group.cases); activeRow is the pointer.
+                row={group.cases.find((c) => c.id === activeRow.id) ?? activeRow}
                 initialOpenAttempts={counts?.[activeRow.id]?.openAttempts ?? 0}
               />
             </div>
