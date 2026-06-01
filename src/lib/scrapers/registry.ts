@@ -39,7 +39,7 @@ export const SCRAPER_REGISTRY: ScraperRegistryEntry[] = [
   {
     key: "cyrex",
     labName: "Cyrex",
-    loginUrl: "https://portal.cyrexlabs.com/",
+    loginUrl: "https://www.cyrexlabs.com/Home/tabid/40/Default.aspx",
   },
   {
     key: "spectracell",
