@@ -138,6 +138,10 @@ const LabRowSchema = z.object({
   labPanel: z.string().trim().max(100).nullable().optional(),
   trackingNumber: z.string().trim().max(100).nullable().optional(),
   labExternalRef: z.string().trim().max(64).nullable().optional(),
+  // Per-row opt-out from the required accession # (in-house services with no
+  // lab-portal accession). Enforced below: a row must have an accession or
+  // this flag set.
+  noAccession: z.boolean().default(false),
   pickupConfirmation: z.string().trim().max(100).nullable().optional(),
   collectionDate: z
     .string()
@@ -208,6 +212,17 @@ export async function createLabCases(
   const labs = z.array(LabRowSchema).min(1).max(20).safeParse(parsedJson);
   if (!labs.success) {
     return { ok: false, error: labs.error.issues[0]?.message ?? "Invalid labs" };
+  }
+
+  // Accession # is required per lab unless the row opted out (in-house / N/A).
+  const missingAccession = labs.data.find(
+    (lab) => !lab.noAccession && !(lab.labExternalRef && lab.labExternalRef.length),
+  );
+  if (missingAccession) {
+    return {
+      ok: false,
+      error: `Accession # is required for “${missingAccession.labName}”. Enter it, or tick “No accession #”.`,
+    };
   }
 
   const rows = labs.data.map((lab) => ({

@@ -23,8 +23,13 @@ type LabRowState = {
   collectionDate: string;
   trackingNumber: string;
   /** Lab portal accession # — populated by scraper auto-match if blank,
-   * or manually entered here to short-circuit the matching cascade. */
+   * or manually entered here to short-circuit the matching cascade.
+   * Required at create time unless `noAccession` is ticked. */
   labExternalRef: string;
+  /** Per-row opt-out from the required accession #, for in-house services
+   * (Peptides, Practice Blood Draw, etc.) that have no lab-portal accession.
+   * When true the accession input is disabled and submits as null. */
+  noAccession: boolean;
   pickupConfirmation: string;
   partialExpected: boolean;
 };
@@ -35,6 +40,7 @@ export type LabRowPayload = {
   collectionDate: string | null;
   trackingNumber: string | null;
   labExternalRef: string | null;
+  noAccession: boolean;
   pickupConfirmation: string | null;
   partialExpected: boolean;
 };
@@ -46,6 +52,7 @@ function emptyRow(): LabRowState {
     collectionDate: "",
     trackingNumber: "",
     labExternalRef: "",
+    noAccession: false,
     pickupConfirmation: "",
     partialExpected: false,
   };
@@ -76,7 +83,9 @@ function rowToPayload(row: LabRowState): LabRowPayload {
     labPanel,
     collectionDate: row.collectionDate || null,
     trackingNumber: row.trackingNumber.trim() || null,
-    labExternalRef: row.labExternalRef.trim() || null,
+    // N/A rows submit no accession regardless of any stray typed value.
+    labExternalRef: row.noAccession ? null : row.labExternalRef.trim() || null,
+    noAccession: row.noAccession,
     pickupConfirmation: row.pickupConfirmation.trim() || null,
     partialExpected: row.partialExpected,
   };
@@ -306,17 +315,38 @@ export function NewCaseFormFields() {
                 </div>
 
                 <div>
-                  <label className={labelClass}>Accession #</label>
+                  <label className={labelClass}>
+                    Accession #
+                    {!row.noAccession ? (
+                      <span className="text-red-600"> *</span>
+                    ) : null}
+                  </label>
                   <input
                     type="text"
-                    value={row.labExternalRef}
+                    value={row.noAccession ? "" : row.labExternalRef}
                     onChange={(e) =>
                       updateRow(i, { labExternalRef: e.target.value })
                     }
                     maxLength={64}
                     placeholder="e.g. 007143558"
-                    className={`${inputClass} mt-1`}
+                    // Block submit on real lab rows that have neither an
+                    // accession nor the N/A opt-out. Empty rows (no lab name)
+                    // are dropped server-side, so don't force them.
+                    required={row.display.trim().length > 0 && !row.noAccession}
+                    disabled={row.noAccession}
+                    className={`${inputClass} mt-1 disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-400`}
                   />
+                  <label className="mt-1.5 flex items-center gap-1.5 text-[10px] text-zinc-500">
+                    <input
+                      type="checkbox"
+                      checked={row.noAccession}
+                      onChange={(e) =>
+                        updateRow(i, { noAccession: e.target.checked })
+                      }
+                      className="h-3 w-3 rounded border-zinc-300"
+                    />
+                    No accession # (in-house / N/A)
+                  </label>
                 </div>
 
                 <div>
