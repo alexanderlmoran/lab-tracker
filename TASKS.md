@@ -76,11 +76,28 @@ Today's Phase 2 wizard scaffolds an empty stub from a captured Playwright sessio
 Currently ~424 lab_cases sit at step 1 (Sample Sent) with results probably already on the patient's portal and possibly already on PB. The backfill brain reconciles:
 
 - ✅ PB endpoint discovered: `GET /api/consultant/labrequests?records=<patientId>` returns a patient's labrequests. `listPatientLabRequests()` added to worker/src/uploaders/practicebetter.ts.
-- ✅ Engine: `worker/src/backfill/engine.ts` — pure-function classifier. Four buckets: already-on-pb / scrape-needed / needs-review / leave. Confidence ladder (accession exact match → high; same lab name within ±7 days → high; ±21 days → medium; else low). 30-day grace window so legitimately-pending recent cases aren't touched.
-- ✅ Preview script: `worker/scripts/backfill-leila-preview.ts` — Leila-only, no mutations. Prints classification per case grouped by bucket.
-- ⏳ Execute script (after Alex blesses the preview): `worker/scripts/backfill-leila-execute.ts`. Will run direct DB UPDATE on `already-on-pb` cases with confidence=high. **Critical: bypasses `setStepCompleted` entirely so `maybeFireNadiaAllReceived` / `maybeFireAllisonRof` / patient emails NEVER fire during backfill.** Writes step_toggled events with actor=admin:backfill for audit.
-- ⏳ After Leila works: per-lab scale-out (b) then full reconciliation (a) per Alex 2026-05-26 decision tree.
+- ✅ PB API quirk discovered (2026-05-26): `records=` filter is broken consultant-wide; must `listAllConsultantLabRequests({ limit: 2000 })` and filter by `clientRecord.id` locally.
+- ✅ Engine v2 (`worker/src/backfill/engine.ts`): 4-bucket classifier with confidence ladder. Date window widened 45→90d (2026-05-27) for specialty labs. `panelHint` field added — fallback name match against the CSV `contents` string when `lab_name` is generic ("Custom", "Other"). Hint-only matches cap at medium confidence.
+- ✅ Preview/run scripts (all preview-by-default, `--apply` to commit, `--patient=all` for full org):
+  - `worker/scripts/backfill-collection-dates-from-csv.ts` — joins `Lab Shipping - Main.csv` by tracking_number, fills missing `collection_date`. Write-once: only updates rows where `collection_date IS NULL`.
+  - `worker/scripts/dedupe-tracker-cases.ts` — archives true-duplicate rows (same patient + lab + tracking# + collection_date). Keeps earliest-created; Zenoti-linked row wins.
+  - `worker/scripts/backfill-advance-highs.ts` — silent step5 flip on `already-on-pb + confidence=high` cases. Bypasses email triggers (Nadia / Allison / patient) via direct DB update — logs `step_toggled` event with actor=`admin:backfill-brain`.
+  - `worker/scripts/backfill-leila-preview.ts` — classification report only, no mutations. Now wired to CSV contents for panelHint.
+- ✅ Debug PATCH route (`src/app/api/worker/debug/cases/route.ts`) gained two new actions used by the scripts: `set-collection-date` (write-once, refuses if already set) and `advance-step5` (silent, bypasses email cascade).
+- ✅ Leila end-to-end run 2026-05-27: 18 collection_dates backfilled from CSV → 7 duplicate rows archived → 5 high-confidence step5 advances applied. 23 stuck cases remain (15 medium/low on PB awaiting eyeball, 5 recent in grace window, 7 needs-review including confirmed-not-on-PB ReliGen and Viome rows).
+- ✅ Engine gap closed (2026-05-31): word-token matching. The matcher now also matches on a shared content word (≥4 chars, stopword-filtered) so "Custom vaginal microbiome" surfaces PB "Microbiome Labs (BIOMEFX)" — at **low** confidence only (never auto-advances). First unit-test suite added: `worker/src/backfill/engine.test.ts` (15 cases; `cd worker && npm test`).
+- ⚠️ Recipient-Name hint parked (2026-05-31): the runbook assumed CSV `Recipient Name` carries the lab destination when `Carrier="Other"`. The actual `Lab Shipping - Main.csv` contradicts this — that column holds people's names (shipper/intermediary), not labs. Feeding it as a panelHint would manufacture false matches. Don't wire in without real lab-named rows.
+- ✅ Bug fixed (2026-05-31): the `set-collection-date` debug action logged a `case_backfilled` event kind that isn't in the `lab_event_kind` enum, so the audit insert failed silently (error was unchecked). Switched to the valid `case_edited` kind; both backfill PATCH actions now `console.warn` on any audit-insert failure instead of swallowing it. Header docstring updated (endpoint is no longer "always read-only").
+- ⏳ Next step Alex committed to: spot-check the 5 advanced cases in the kanban, then run `--patient=all` for the dedupe + collection_date backfill across the full ~424 stuck rows. Advance step still per-patient.
 - ⏳ UI: Settings → Backfill tab with filter inputs + preview button + execute approval. Phase 2.
+- ⏳ Per-lab scale-out followed by full reconciliation per Alex 2026-05-26 decision tree.
+
+### Backfill brain — operating notes (2026-05-27)
+
+- The "8 duplicate tracking#s in Leila" discovery uncovered a broader pattern: the bulk-import ran twice, producing exact pair-dups created ~60s apart on 2026-05-08. Likely affects every patient bulk-imported in that batch. Run `dedupe-tracker-cases.ts --patient=all` once to clear org-wide.
+- Tracking numbers in `lab_cases.tracking_number` are not unique-across-time: Alex sometimes logs the kit-out shipment number (not the sample-return), and FedEx recycles. Always pair tracking# with patient + carrier + date for any cross-row reasoning. See memory `project-lab-tracker-tracking-numbers`.
+- Auto-fire criterion that's working in practice: `already-on-pb` AND `confidence=high` AND PB labrequest name embeds a date (e.g. "Access 03.26.26"). Date-in-name is the strongest signal we have for an unambiguous correspondence.
+- Non-true-dup case to handle separately: same tracking# but different `(lab_name, collection_date)` — usually a Zenoti-sync row alongside a bulk-import row (Leila's Access 487953992901 = Access 5/22 vs Access Custom 5/21). Needs a "Zenoti reconcile" pass; current dedupe correctly leaves these alone.
 
 ### Layer 3 — AI-powered search
 

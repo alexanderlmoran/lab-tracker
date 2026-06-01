@@ -21,12 +21,15 @@
 // "already-on-pb" cases with confidence=high. Email/Nadia/Allison
 // triggers are bypassed entirely (direct DB UPDATE, not setStepCompleted).
 
+import { readFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { request } from "undici";
 import { loadEnvLocal } from "../src/lib/load-env.js";
 import {
   pbLogin,
   findPbPatient,
-  listPatientLabRequests,
+  listAllConsultantLabRequests,
 } from "../src/uploaders/practicebetter.js";
 import {
   classifyCase,
@@ -35,6 +38,58 @@ import {
 } from "../src/backfill/engine.js";
 
 loadEnvLocal();
+
+// ── Shipping CSV lookup (for panel-hint matching) ──────────────────────────
+//
+// Tracker rows store generic lab_name ("Custom", "Other"); the shipping CSV
+// has the actual panel name ("vaginal microbiome", "telomere", etc.) which
+// often appears in the PB labrequest title. We index by tracking_number and
+// hand the contents string to the engine as panelHint.
+
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let field = "";
+  let row: string[] = [];
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+    else if (c !== "\r") field += c;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+function normTracking(s: string): string {
+  return s.trim().toUpperCase().replace(/\s+/g, "");
+}
+
+function loadContentsByTracking(): Map<string, string> {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const repoRoot = resolve(here, "..", "..");
+  const path = resolve(repoRoot, "Lab Shipping - Main.csv");
+  const all = parseCsv(readFileSync(path, "utf-8"));
+  if (all.length === 0) return new Map();
+  const header = all[0].map((h) => h.trim().toLowerCase());
+  const trackingIdx = header.findIndex((h) => h.replace(/\s+/g, "").startsWith("tracking#"));
+  const contentsIdx = header.indexOf("contents");
+  const out = new Map<string, string>();
+  for (let i = 1; i < all.length; i++) {
+    const r = all[i];
+    if (!r) continue;
+    const t = (r[trackingIdx] ?? "").trim();
+    const c = (r[contentsIdx] ?? "").trim();
+    if (!t) continue;
+    // First win — if a tracking# appears twice we don't care about later rows.
+    if (!out.has(normTracking(t)) && c) out.set(normTracking(t), c);
+  }
+  return out;
+}
 
 const TRACKER_BASE = process.env.TRACKER_BASE_URL ?? "http://localhost:3000";
 const WORKER_SECRET = process.env.WORKER_SHARED_SECRET;
@@ -56,6 +111,8 @@ type TrackerCase = {
   lab_name: string;
   collection_date: string | null;
   lab_external_ref: string | null;
+  tracking_number: string | null;
+  zenoti_appointment_id: string | null;
   step1_sample_sent: boolean;
   step2_partial_received: boolean;
   step3_partial_uploaded: boolean;
@@ -84,7 +141,10 @@ async function fetchLeilaCases(): Promise<TrackerCase[]> {
   );
 }
 
-function toBackfillCase(c: TrackerCase): BackfillCase {
+function toBackfillCase(c: TrackerCase, contentsByTracking: Map<string, string>): BackfillCase {
+  const hint = c.tracking_number
+    ? contentsByTracking.get(normTracking(c.tracking_number)) ?? null
+    : null;
   return {
     caseId: c.id,
     patientName: c.patient_name,
@@ -92,7 +152,9 @@ function toBackfillCase(c: TrackerCase): BackfillCase {
     labName: c.lab_name,
     collectionDate: c.collection_date,
     createdAt: c.created_at,
+    zenotiAppointmentId: c.zenoti_appointment_id,
     labExternalRef: c.lab_external_ref,
+    panelHint: hint,
     step1: c.step1_sample_sent,
     step2: c.step2_partial_received,
     step3: c.step3_partial_uploaded,
@@ -119,11 +181,22 @@ async function main() {
     `  ✓ pb_patient_id=${patient.id} firstName="${patient.firstName}" lastName="${patient.lastName}" dob=${patient.dayOfBirth}`,
   );
 
-  log("→ Pulling PB labrequests…");
-  const pbReqs = await listPatientLabRequests(session, patient.id, {
-    limit: 200,
+  log("→ Pulling ALL consultant labrequests (records= filter is broken; 2026-05-26)…");
+  const allLabRequests = await listAllConsultantLabRequests(session, {
+    limit: 2000,
   });
-  log(`  ✓ ${pbReqs.length} labrequest(s) on her PB chart`);
+  const pbReqs = allLabRequests.filter(
+    (lr) => lr.clientRecord?.id === patient.id,
+  );
+  log(
+    `  ✓ ${allLabRequests.length} labrequest(s) consultant-wide; ${pbReqs.length} matched to Leila by clientRecord.id`,
+  );
+  if (pbReqs.length > 0) {
+    for (const lr of pbReqs.slice(0, 5)) {
+      log(`    • ${lr.id} "${lr.name}" ordered=${(lr.dateOrdered ?? "").slice(0, 10)}`);
+    }
+    if (pbReqs.length > 5) log(`    … and ${pbReqs.length - 5} more`);
+  }
 
   log("→ Pulling Leila's tracker cases (step1=true, step5=false, active)…");
   const trackerCases = await fetchLeilaCases();
@@ -135,6 +208,10 @@ async function main() {
     return;
   }
 
+  log("→ Loading shipping CSV for panel-hint matching…");
+  const contentsByTracking = loadContentsByTracking();
+  log(`  ✓ ${contentsByTracking.size} tracking#→contents pairs loaded`);
+
   log("");
   log("─".repeat(70));
   log("CLASSIFICATION");
@@ -142,7 +219,7 @@ async function main() {
 
   const decisions: BackfillDecision[] = [];
   for (const tc of trackerCases) {
-    const decision = classifyCase(toBackfillCase(tc), pbReqs);
+    const decision = classifyCase(toBackfillCase(tc, contentsByTracking), pbReqs);
     decisions.push(decision);
   }
 
@@ -160,8 +237,11 @@ async function main() {
     log(`▶ ${bucket}  (${list.length} cases)`);
     for (const d of list) {
       const tc = trackerCases.find((c) => c.id === d.caseId)!;
+      const hint = tc.tracking_number
+        ? contentsByTracking.get(normTracking(tc.tracking_number)) ?? null
+        : null;
       log(
-        `  • case=${d.caseId.slice(0, 8)} lab="${tc.lab_name}" collected=${tc.collection_date ?? "—"} acc=${tc.lab_external_ref ?? "—"}`,
+        `  • case=${d.caseId.slice(0, 8)} lab="${tc.lab_name}" collected=${tc.collection_date ?? "—"} acc=${tc.lab_external_ref ?? "—"}${hint ? ` hint="${hint}"` : ""}`,
       );
       log(`    ${d.reason}`);
       if (d.pbLabRequest) {

@@ -386,8 +386,15 @@ export type PbLabRequest = {
   name: string;
   /** Date the lab was ordered (ISO). */
   dateOrdered: string;
-  /** PB patient (record) id. */
-  records: string;
+  /** PB embeds the patient record as a nested object. The `records` query
+   * param doesn't actually filter by this — paradoxically, the only way
+   * to match labrequests to patients is to pull consultant-wide and
+   * filter by clientRecord.id locally. Discovered 2026-05-26 during
+   * Leila backfill (1669 labrequests existed; records= filter returned 0). */
+  clientRecord?: {
+    id: string;
+    profile?: { firstName?: string; lastName?: string; emailAddress?: string };
+  };
   /** Free-text status / lifecycle hint from PB. */
   status?: string;
   /** Set when the labrequest was created; useful for "ordered before X" filtering. */
@@ -399,16 +406,23 @@ export type PbLabRequest = {
 export async function listPatientLabRequests(
   session: PbSession,
   patientId: string,
-  opts: { limit?: number; status?: string } = {},
+  opts: { limit?: number; status?: string | null } = {},
 ): Promise<PbLabRequest[]> {
-  const limit = opts.limit ?? 100;
-  const status = opts.status ?? "draft,published";
-  const url =
+  const limit = opts.limit ?? 200;
+  // Default: omit the status filter entirely so we see ALL labrequests
+  // regardless of lifecycle stage (draft / published / completed / sent
+  // / etc.). The backfill brain needs to see finalized labrequests, which
+  // a narrow status=draft,published filter excludes — discovered preview-
+  // running against Leila Centner 2026-05-26. Pass an explicit value to
+  // scope; pass null to omit (the default).
+  const status = opts.status === undefined ? null : opts.status;
+
+  let url =
     `${PB_BASE}/api/consultant/labrequests` +
     `?limit=${limit}` +
     `&records=${encodeURIComponent(patientId)}` +
-    `&sort=orderdate_desc` +
-    `&status=${encodeURIComponent(status)}`;
+    `&sort=orderdate_desc`;
+  if (status) url += `&status=${encodeURIComponent(status)}`;
 
   const res = await request(url, {
     method: "GET",
@@ -431,4 +445,47 @@ export async function listPatientLabRequests(
   if ("labrequests" in json && Array.isArray(json.labrequests))
     return json.labrequests;
   return [];
+}
+
+/** Pulls every labrequest the consultant has access to in a single call.
+ *  PB's records=<id> filter doesn't actually scope by patient (discovered
+ *  2026-05-26 — see PbLabRequest.clientRecord comment). The reliable way
+ *  to find labs for a specific patient is to pull everything once and
+ *  filter by clientRecord.id in memory.
+ *
+ *  PB's endpoint supports limit up to at least 5000; 2000 returns the
+ *  full 1669-row Centner roster in one call. Increase opts.limit if the
+ *  count grows past ~5000 — at that point switch to a paginated approach. */
+export async function listAllConsultantLabRequests(
+  session: PbSession,
+  opts: { limit?: number; sort?: string } = {},
+): Promise<PbLabRequest[]> {
+  const limit = opts.limit ?? 2000;
+  const sort = opts.sort ?? "orderdate_desc";
+  const url =
+    `${PB_BASE}/api/consultant/labrequests` +
+    `?limit=${limit}&sort=${encodeURIComponent(sort)}`;
+  const res = await request(url, {
+    method: "GET",
+    headers: pbApiHeaders(session),
+  });
+  if (res.statusCode !== 200) {
+    const text = await res.body.text();
+    throw new Error(
+      `PB list consultant labrequests failed ${res.statusCode}: ${text.slice(0, 300)}`,
+    );
+  }
+  const json = (await res.body.json()) as
+    | { items?: PbLabRequest[]; count?: number; hasMore?: boolean }
+    | PbLabRequest[];
+  const items = Array.isArray(json) ? json : json.items ?? [];
+  // Sanity-check: warn if the API still claims hasMore so we don't
+  // silently miss data when the roster grows past our limit.
+  if (!Array.isArray(json) && json.hasMore) {
+    console.warn(
+      `[PB] listAllConsultantLabRequests: hasMore=true at limit=${limit}, ` +
+        `count=${json.count} — bump limit or implement pagination.`,
+    );
+  }
+  return items;
 }

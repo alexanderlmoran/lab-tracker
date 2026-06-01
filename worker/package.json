@@ -10,6 +10,7 @@
     "zenoti:once": "tsx scripts/zenoti-sync.ts",
     "zenoti:loop": "while true; do tsx scripts/zenoti-sync.ts; sleep 60; done",
     "pb:worker": "tsx scripts/pb-upload-worker.ts",
+    "test": "tsx --test \"src/**/*.test.ts\"",
     "test:auto-attach": "tsx scripts/auto-attach-test-pdf.ts"
   },
   "dependencies": {
