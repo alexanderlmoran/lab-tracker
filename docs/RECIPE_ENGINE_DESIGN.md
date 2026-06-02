@@ -59,9 +59,15 @@ worker pipeline stay identical.
 2. **Phase 2 — Browser engine** (Access, Cyrex, SpectraCell). Add browser transport +
    browser-form auth + dom-grid/dom-inbox discovery + download-event/network-intercept pdf.
    These need per-portal selectors + quirk flags (pw-reveal, slow-waits, activate-row).
-3. **Phase 3 — Settings → Scrapers UI** (Next.js). CRUD recipes (DB-backed), a "Test"
-   button that runs a recipe against one known case and shows the PDF + matched row, and a
-   capture-assist that pre-fills a recipe draft from a HAR. Recipes move from code to DB.
+3. **Phase 3 — Settings → Scrapers UI** (Next.js). Status:
+   - ✅ **Recipe-engine view** (`RecipeEnginePanel` on the Scrapers tab): shows which
+     portals run as recipes vs hand-written + the strategy stack each uses. The app can't
+     import `worker/src/recipes/` (tsconfig excludes worker/), so it reads a display mirror
+     `src/lib/scrapers/recipe-summary.ts` — keep it in sync with catalog.ts.
+   - ⏳ Remaining: move recipes from `catalog.ts` to the DB (so the UI can CRUD them and the
+     worker reads them at runtime); a "Test" button that runs a recipe against one known
+     case and shows the PDF + matched row; a capture-assist that pre-fills a recipe draft
+     from a HAR (evolve the existing source-generating capture-assist to emit a recipe).
 
 ## Non-goals / honest limits
 

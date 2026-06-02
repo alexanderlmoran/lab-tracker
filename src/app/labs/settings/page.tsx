@@ -22,6 +22,7 @@ import { LabsCatalogPanel } from "./LabsCatalogPanel";
 import { EmailTemplatesPanel } from "./EmailTemplatesPanel";
 import { LabPortalsPanel } from "./LabPortalsPanel";
 import { ScrapersPanel } from "./ScrapersPanel";
+import { RecipeEnginePanel } from "./RecipeEnginePanel";
 import { SettingsTabs } from "./SettingsTabs";
 import { parseSettingsTab } from "./tab";
 import { BulkRecoveryTable } from "../BulkRecoveryTable";
@@ -173,12 +174,20 @@ export default async function SettingsPage({
         ) : null}
 
         {wantsScrapers && scrapers ? (
-          <Section
-            title="Scrapers"
-            description="Status of each lab portal scraper. Use the per-row commands to capture a new portal or recalibrate one whose session expired."
-          >
-            <ScrapersPanel rows={scrapers} />
-          </Section>
+          <>
+            <Section
+              title="Recipe engine"
+              description="Config-driven scrapers: which portals run as data-driven recipes vs hand-written, and the strategy stack each uses."
+            >
+              <RecipeEnginePanel />
+            </Section>
+            <Section
+              title="Scrapers"
+              description="Status of each lab portal scraper. Use the per-row commands to capture a new portal or recalibrate one whose session expired."
+            >
+              <ScrapersPanel rows={scrapers} />
+            </Section>
+          </>
         ) : null}
 
         {wantsPatients && patientSeed ? (
