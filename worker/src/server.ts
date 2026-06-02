@@ -5,6 +5,7 @@ import { withLock } from "./lib/lock.js";
 import { vibrantScraper } from "./scrapers/vibrant.js";
 import { makeRecipeScraper } from "./recipes/runner.js";
 import { loadRecipes } from "./recipes/load.js";
+import { RECIPES } from "./recipes/catalog.js";
 import type { LabScraper } from "./scrapers/base.js";
 
 // Hand-written scrapers that aren't recipes. Vibrant only — a multi-step per-case
@@ -87,6 +88,96 @@ app.post<{ Params: { lab: string } }>("/run/:lab", async (req, reply) => {
   }
   return reply.send({ ok: true, ...result });
 });
+
+// Phase 3 (3/3b): the app→worker channel for the Settings "Test" button. Resolves
+// a recipe through loadRecipes() (so DB overrides are reflected), reports where it
+// came from + whether it builds, and — with ?dryRun=1 — actually runs it against
+// open cases WITHOUT posting anything to the tracker. Same Bearer auth as /run.
+app.post<{ Params: { lab: string }; Querystring: { dryRun?: string } }>(
+  "/test/:lab",
+  async (req, reply) => {
+    if ((req.headers.authorization ?? "") !== `Bearer ${SECRET}`) {
+      return reply.code(401).send({ ok: false, error: "unauthorized" });
+    }
+    const labKey = req.params.lab.toLowerCase();
+
+    // Hand-written scrapers (Vibrant) aren't recipes — nothing to resolve/build.
+    if (HANDWRITTEN[labKey]) {
+      return reply.send({
+        ok: true,
+        key: labKey,
+        labName: HANDWRITTEN[labKey].labName,
+        source: "hand-written",
+        transport: "n/a",
+        builds: true,
+      });
+    }
+
+    const recipe = (await loadRecipes()).find((r) => r.key === labKey);
+    if (!recipe) {
+      return reply.code(404).send({ ok: false, error: `unknown lab: ${labKey}` });
+    }
+    // loadRecipes returns catalog objects by reference when not overridden, so a
+    // reference mismatch means a DB row replaced the built-in for this key.
+    const builtin = RECIPES.find((r) => r.key === labKey);
+    const source = !builtin ? "db-only" : recipe === builtin ? "built-in" : "db-override";
+
+    let builds = true;
+    let buildError: string | undefined;
+    try {
+      makeRecipeScraper(recipe);
+    } catch (err) {
+      builds = false;
+      buildError = err instanceof Error ? err.message : String(err);
+    }
+
+    const base = {
+      ok: builds,
+      key: recipe.key,
+      labName: recipe.labName,
+      source,
+      transport: recipe.transport,
+      strategies: {
+        auth: recipe.auth.strategy,
+        discovery: recipe.discovery.strategy,
+        pdf: recipe.pdf.strategy,
+      },
+      builds,
+      ...(buildError ? { buildError } : {}),
+    };
+
+    if (req.query?.dryRun !== "1" || !builds) return reply.send(base);
+
+    // Dry run: execute the scraper against open cases but DO NOT post results.
+    const scraper = makeRecipeScraper(recipe);
+    const dry = await withLock(`scrape:${labKey}`, async () => {
+      const cases = await fetchOpenCases(scraper.labName);
+      if (cases.length === 0) return { checked: 0, found: [], errors: [] };
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const run = await scraper.run(browser, cases);
+        return {
+          checked: cases.length,
+          found: run.found.map((f) => ({
+            caseId: f.caseId,
+            labExternalRef: f.labExternalRef,
+            pdfFilename: f.pdfFilename,
+            pdfBytes: f.pdfBase64 ? Buffer.from(f.pdfBase64, "base64").length : 0,
+            resultIssuedAt: f.resultIssuedAt,
+          })),
+          errors: run.errors,
+        };
+      } finally {
+        await browser.close();
+      }
+    });
+
+    if (dry && "skipped" in dry) {
+      return reply.send({ ...base, dryRun: { skipped: true, reason: "already running" } });
+    }
+    return reply.send({ ...base, dryRun: dry });
+  },
+);
 
 const port = Number(process.env.PORT ?? 8080);
 app.listen({ port, host: "0.0.0.0" }).catch((err) => {

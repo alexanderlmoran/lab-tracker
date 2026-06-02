@@ -699,6 +699,67 @@ export async function deleteScraperRecipe(input: { id: string }): Promise<Action
   return { ok: true };
 }
 
+// Recipe engine, Phase 3 (3/3b): the app→worker channel. The worker exposes
+// POST /test/:lab; this proxies it (admin-gated) so Settings can verify a recipe
+// resolves/builds and — with dryRun — runs it against open cases without posting.
+// The worker only runs locally today, so WORKER_BASE_URL defaults to localhost
+// and an unreachable worker degrades to a clear error rather than throwing.
+export type RecipeTestResult = {
+  ok: boolean;
+  key: string;
+  labName: string;
+  source: "built-in" | "db-override" | "db-only" | "hand-written";
+  transport: string;
+  strategies?: { auth: string; discovery: string; pdf: string };
+  builds: boolean;
+  buildError?: string;
+  dryRun?:
+    | { skipped: true; reason: string }
+    | {
+        checked: number;
+        found: Array<{
+          caseId: string;
+          labExternalRef: string | null;
+          pdfFilename: string | null;
+          pdfBytes: number;
+          resultIssuedAt: string | null;
+        }>;
+        errors: Array<{ caseId: string; message: string }>;
+      };
+};
+
+export async function testScraperRecipe(input: {
+  key: string;
+  dryRun?: boolean;
+}): Promise<ActionResult<RecipeTestResult>> {
+  await requireRole("admin");
+  const key = input.key.trim().toLowerCase();
+  if (!key) return { ok: false, error: "key is required" };
+  const secret = process.env.WORKER_SHARED_SECRET;
+  if (!secret) return { ok: false, error: "WORKER_SHARED_SECRET not configured" };
+  const base = (process.env.WORKER_BASE_URL?.trim() || "http://localhost:8080").replace(/\/+$/, "");
+  const url = `${base}/test/${encodeURIComponent(key)}${input.dryRun ? "?dryRun=1" : ""}`;
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${secret}` },
+      cache: "no-store",
+      // Dry runs hit a live portal and can be slow; resolve-only is instant.
+      signal: AbortSignal.timeout(input.dryRun ? 180_000 : 15_000),
+    });
+    const json = (await res.json().catch(() => null)) as RecipeTestResult | { error?: string } | null;
+    if (!res.ok) {
+      const msg = json && "error" in json && json.error ? json.error : `worker returned ${res.status}`;
+      return { ok: false, error: `worker: ${msg}` };
+    }
+    return { ok: true, data: json as RecipeTestResult };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `worker unreachable at ${base} — is it running? (${msg})` };
+  }
+}
+
 /** First-run helper: copies the code constant into the DB so admins have
  * something to edit. Skips lab_key+url pairs already present so it's safe
  * to re-run. */
