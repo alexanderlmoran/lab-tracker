@@ -10,6 +10,7 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { chromium } from "playwright";
 import { getRecipe } from "../src/recipes/catalog.js";
 import { makeRecipeScraper } from "../src/recipes/runner.js";
 import type { OpenCase } from "../src/tracker-client.js";
@@ -39,9 +40,11 @@ async function main() {
     expectedResultAtMax: null,
   };
 
-  log(`recipe=${recipe.key} (${recipe.auth.strategy} / ${recipe.discovery.strategy} / ${recipe.pdf.strategy}) match=${process.env.USE_REF ? "ref" : "name"}`);
+  log(`recipe=${recipe.key} [${recipe.transport}] (${recipe.auth.strategy} / ${recipe.discovery.strategy} / ${recipe.pdf.strategy}) match=${process.env.USE_REF ? "ref" : "name"}`);
   const scraper = makeRecipeScraper(recipe);
-  const run = await scraper.run(undefined as never, [c]);
+  const browser = recipe.transport === "browser" ? await chromium.launch({ headless: process.env.HEADLESS !== "0" }) : (undefined as never);
+  const run = await scraper.run(browser, [c]);
+  if (browser) await browser.close();
   log(`found=${run.found.length} errors=${run.errors.length}`);
   for (const e of run.errors) log(`  ERROR ${e.caseId}: ${e.message}`);
   if (run.found.length === 0) {

@@ -4,7 +4,6 @@ import { fetchOpenCases, postResultReady } from "./tracker-client.js";
 import { withLock } from "./lib/lock.js";
 import { accessScraper } from "./scrapers/access.js";
 import { vibrantScraper } from "./scrapers/vibrant.js";
-import { cyrexScraper } from "./scrapers/cyrex.js";
 import { spectracellScraper } from "./scrapers/spectracell.js";
 import { makeRecipeScraper } from "./recipes/runner.js";
 import { getRecipe } from "./recipes/catalog.js";
@@ -18,10 +17,10 @@ const recipe = (key: string): LabScraper => {
 };
 
 const SCRAPERS: Record<string, LabScraper> = {
-  // Hand-written: browser portals + multi-step Vibrant API.
+  // Hand-written: Access (network-intercept PDF) + SpectraCell (activate-row) +
+  // multi-step Vibrant API — Phase 2 conversions in progress.
   access: accessScraper,
   vibrant: vibrantScraper,
-  cyrex: cyrexScraper,
   spectracell: spectracellScraper,
   // Recipe-backed (config engine) — all live-verified byte-equivalent to the
   // hand-written versions. Genova needs a periodically-refreshed session
@@ -29,6 +28,7 @@ const SCRAPERS: Record<string, LabScraper> = {
   glycanage: recipe("glycanage"),
   doctorsdata: recipe("doctorsdata"),
   genova: recipe("genova"),
+  cyrex: recipe("cyrex"), // browser-transport recipe
 };
 
 const SECRET = process.env.WORKER_SHARED_SECRET;

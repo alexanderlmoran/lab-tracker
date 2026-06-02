@@ -9,6 +9,8 @@ const GA_REPORTING = "https://glycanage-reporting-prod-2aeayxbfla-ew.a.run.app";
 const GA_ORIGIN = { origin: "https://partners.glycanage.com", referer: "https://partners.glycanage.com/" };
 const DD_BASE = "https://www.doctorsdata.com";
 const GDX_BASE = "https://www.gdx.net";
+const CYREX_ROWS = "div[id$='_grdOrders'] tr.rgRow, div[id$='_grdOrders'] tr.rgAltRow";
+const CYREX_RESULT_LINK = "a[id$='_lnkResult'], a:has-text('Results')";
 
 export const RECIPES: LabRecipe[] = [
   {
@@ -124,6 +126,48 @@ export const RECIPES: LabRecipe[] = [
     },
     match: { refLooksLike: "^V\\d" },
     ready: { equals: ["Released"] },
+  },
+  {
+    key: "cyrex",
+    labName: "Cyrex",
+    transport: "browser",
+    auth: {
+      strategy: "browser-form",
+      config: {
+        loginUrl: "https://www.cyrexlabs.com/Home/tabid/40/Default.aspx",
+        userSel: "input[id$='_txtUsername']",
+        pwRevealSel: "input[id$='_txtPasswordView']", // DNN two-field show-password reveal
+        pwSel: "input[id$='_txtPassword']",
+        userEnv: "CYREX_USERNAME",
+        passEnv: "CYREX_PASSWORD",
+        submit: { name: "login|sign in" },
+        successSel: "a:has-text('My Orders')",
+        postLogin: [{ role: "link", name: "My Orders" }],
+        readySel: "input[id$='_txtRequisitionId']",
+      },
+    },
+    discovery: {
+      strategy: "dom-search",
+      perCase: true, // Cyrex requires a search (requisition # or last name) per case
+      config: {
+        search: {
+          refField: "input[id$='_txtRequisitionId']",
+          nameField: "input[id$='_txtLastName']",
+          button: { name: "Search" },
+          refLooksLike: "^T\\d",
+        },
+        postUrlIncludes: "/MyOrders/",
+        rowsSel: CYREX_ROWS,
+        resultLinkSel: CYREX_RESULT_LINK,
+        colMap: { ref: 6, lastName: 1, firstName: 2, dob: 7, status: 10 },
+      },
+    },
+    pdf: {
+      strategy: "browser-download",
+      config: { rowsSel: CYREX_ROWS, resultLinkSel: CYREX_RESULT_LINK },
+    },
+    match: { refLooksLike: "^T\\d" },
+    ready: { equals: ["OnLine"] },
   },
 ];
 

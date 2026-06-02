@@ -36,15 +36,34 @@ export type HttpPdfStrategy = (
   row: DiscoveredRow,
 ) => Promise<Buffer>;
 
+// --- Phase 2: browser transport. Strategies operate on a Playwright Page. ---
+// (Page typed as unknown here to keep this file playwright-free; strategies cast.)
+export type BrowserAuthStrategy = (page: unknown, config: Record<string, unknown>) => Promise<void>;
+// dom-inbox ignores searchTerm (reads all rows once); dom-search uses it (per case).
+export type BrowserDiscoveryStrategy = (
+  page: unknown,
+  config: Record<string, unknown>,
+  searchTerm: string | null,
+) => Promise<DiscoveredRow[]>;
+export type BrowserPdfStrategy = (
+  page: unknown,
+  config: Record<string, unknown>,
+  row: DiscoveredRow,
+) => Promise<Buffer>;
+
 export type LabRecipe = {
   /** SCRAPERS registry key (e.g. "glycanage"). */
   key: string;
   /** Must equal lab_cases.lab_name for this portal (e.g. "GlycanAge"). */
   labName: string;
-  /** Phase 1 = "http". "browser" is Phase 2. */
-  transport: "http";
+  transport: "http" | "browser";
   auth: { strategy: string; config: Record<string, unknown> };
-  discovery: { strategy: string; config: Record<string, unknown> };
+  discovery: {
+    strategy: string;
+    config: Record<string, unknown>;
+    /** Browser only: call discovery once per case with that case's search term. */
+    perCase?: boolean;
+  };
   pdf: { strategy: string; config: Record<string, unknown> };
   /** Match: ref-first (if the case has labExternalRef) then name (+ dob if present). */
   match?: {
