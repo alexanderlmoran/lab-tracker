@@ -4,31 +4,26 @@ import { fetchOpenCases, postResultReady } from "./tracker-client.js";
 import { withLock } from "./lib/lock.js";
 import { vibrantScraper } from "./scrapers/vibrant.js";
 import { makeRecipeScraper } from "./recipes/runner.js";
-import { getRecipe } from "./recipes/catalog.js";
+import { loadRecipes } from "./recipes/load.js";
 import type { LabScraper } from "./scrapers/base.js";
 
-// Recipe-backed scraper from the config engine (see worker/src/recipes/).
-const recipe = (key: string): LabScraper => {
-  const r = getRecipe(key);
-  if (!r) throw new Error(`no recipe for ${key}`);
-  return makeRecipeScraper(r);
+// Hand-written scrapers that aren't recipes. Vibrant only — a multi-step per-case
+// API (login -> findPatient -> getReportStatus -> pdf-engine URL) that doesn't fit
+// the auth->list->fetch recipe model.
+const HANDWRITTEN: Record<string, LabScraper> = {
+  vibrant: vibrantScraper,
 };
 
-const SCRAPERS: Record<string, LabScraper> = {
-  // Hand-written: Vibrant only — a multi-step per-case API (login -> findPatient
-  // -> getReportStatus -> pdf-engine URL) that doesn't fit the auth->list->fetch
-  // recipe model. Everything else runs via the config engine.
-  vibrant: vibrantScraper,
-  // Recipe-backed (config engine) — all live-verified byte-equivalent to the
-  // hand-written versions. Genova needs a periodically-refreshed session
-  // (GENOVA_SESSION_PATH) since its login is reCAPTCHA-gated.
-  glycanage: recipe("glycanage"),
-  doctorsdata: recipe("doctorsdata"),
-  genova: recipe("genova"),
-  cyrex: recipe("cyrex"), // browser-transport recipe
-  spectracell: recipe("spectracell"), // browser-transport recipe
-  access: recipe("access"), // browser-transport recipe (network-intercept PDF)
-};
+// Resolve the active scraper set: hand-written + recipe-backed (built-in catalog
+// merged with DB overrides, cached by loadRecipes). All recipe portals are
+// live-verified byte-equivalent to their old hand-written versions; Genova needs
+// a periodically-refreshed session (GENOVA_SESSION_PATH; reCAPTCHA login).
+async function resolveScrapers(): Promise<Record<string, LabScraper>> {
+  const recipes = await loadRecipes();
+  const map: Record<string, LabScraper> = { ...HANDWRITTEN };
+  for (const r of recipes) map[r.key] = makeRecipeScraper(r);
+  return map;
+}
 
 const SECRET = process.env.WORKER_SHARED_SECRET;
 if (!SECRET) throw new Error("WORKER_SHARED_SECRET is required");
@@ -44,7 +39,8 @@ app.post<{ Params: { lab: string } }>("/run/:lab", async (req, reply) => {
   }
 
   const labKey = req.params.lab.toLowerCase();
-  const scraper = SCRAPERS[labKey];
+  const scrapers = await resolveScrapers();
+  const scraper = scrapers[labKey];
   if (!scraper) {
     return reply.code(404).send({ ok: false, error: `unknown lab: ${labKey}` });
   }
