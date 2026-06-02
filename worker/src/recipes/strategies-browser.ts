@@ -146,9 +146,15 @@ const browserDownloadPdf: BrowserPdfStrategy = async (pageU, cfg, row) => {
   }
 
   const downloadPromise = page.waitForEvent("download", { timeout: 90_000 });
-  const trigger = cfg.triggerSel
-    ? page.locator(cfg.triggerSel as string).first() // page-level button (e.g. "Print Selected")
-    : tr.locator(cfg.resultLinkSel as string).first(); // in-row link (e.g. Cyrex "Results")
+  let trigger: Locator;
+  if (cfg.triggerRole) {
+    const t = cfg.triggerRole as { role: "button" | "link"; name: string };
+    trigger = page.getByRole(t.role, { name: t.name, exact: true }).first(); // page-level (e.g. "Print Selected")
+  } else if (cfg.triggerSel) {
+    trigger = page.locator(cfg.triggerSel as string).first();
+  } else {
+    trigger = tr.locator(cfg.resultLinkSel as string).first(); // in-row link (e.g. Cyrex "Results")
+  }
   await trigger.click();
 
   const download = await downloadPromise;

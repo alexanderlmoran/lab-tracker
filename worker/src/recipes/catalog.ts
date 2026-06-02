@@ -169,6 +169,47 @@ export const RECIPES: LabRecipe[] = [
     match: { refLooksLike: "^T\\d" },
     ready: { equals: ["OnLine"] },
   },
+  {
+    key: "spectracell",
+    labName: "Spectracell",
+    transport: "browser",
+    auth: {
+      strategy: "browser-form",
+      config: {
+        loginUrl: "https://spec-portal.com/",
+        userSel: "#tUser",
+        pwSel: "#tPasswd",
+        userEnv: "SPECTRACELL_USERNAME",
+        passEnv: "SPECTRACELL_PASSWORD",
+        submit: { name: "sign in" },
+        successSel: "a.orderContextMenuElement",
+        readySel: "a.orderContextMenuElement",
+      },
+    },
+    discovery: {
+      strategy: "dom-inbox", // Orchard "Copia" inbox; patient name + status are text columns
+      config: {
+        rowsSel: "tr:has(a.orderContextMenuElement)",
+        dedupeByRef: true, // frozen + scroll panes duplicate each row
+        settleMs: 1500,
+        // Inbox columns: 0 Severity, 1 Priority, 2 Order ID, 3 Patient, 4 Choice,
+        // 5 Results Received, 6 Order Date, 7 Provider, 8 Recipient, 9 Status.
+        colMap: { ref: 2, name: 3, status: 9 },
+      },
+    },
+    pdf: {
+      strategy: "browser-download",
+      config: {
+        rowsSel: "tr:has(a.orderContextMenuElement)",
+        // Activate the row (click patient-name cell) then tick its checkbox, then
+        // "Print Selected" opens the report which auto-downloads (slow ~5-20s).
+        preClick: ["@row td:nth-child(4)", "@row input[id^='inboxSelected_']"],
+        triggerRole: { role: "button", name: "Print Selected" },
+      },
+    },
+    match: { refLooksLike: "^\\d+-\\d" },
+    ready: { equals: ["Complete"] },
+  },
 ];
 
 export function getRecipe(key: string): LabRecipe | undefined {
