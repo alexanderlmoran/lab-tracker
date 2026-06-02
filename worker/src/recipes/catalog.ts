@@ -8,6 +8,7 @@ const GA_PARTNER = "https://glycanage-partner-prod-2aeayxbfla-ew.a.run.app";
 const GA_REPORTING = "https://glycanage-reporting-prod-2aeayxbfla-ew.a.run.app";
 const GA_ORIGIN = { origin: "https://partners.glycanage.com", referer: "https://partners.glycanage.com/" };
 const DD_BASE = "https://www.doctorsdata.com";
+const GDX_BASE = "https://www.gdx.net";
 
 export const RECIPES: LabRecipe[] = [
   {
@@ -86,6 +87,43 @@ export const RECIPES: LabRecipe[] = [
     },
     match: { refLooksLike: "^\\d{6}-" },
     ready: { equals: ["Completed"] },
+  },
+  {
+    key: "genova",
+    labName: "Genova",
+    transport: "http",
+    // reCAPTCHA+MFA login is not automatable — reuse a human-captured session.
+    auth: {
+      strategy: "session-cookies",
+      config: { sessionPathEnv: "GENOVA_SESSION_PATH", domainMatch: "(^|\\.)gdx\\.net$" },
+    },
+    discovery: {
+      strategy: "csrf-json",
+      config: {
+        tokenUrl: `${GDX_BASE}/mygdx`,
+        tokenRegex: 'name="_csrf"\\s+content="([^"]+)"',
+        headerName: "X-CSRF-TOKEN",
+        url: `${GDX_BASE}/mygdx/json/all-activities`,
+        startKey: "startDate",
+        endKey: "endDate",
+        lookbackDays: 120,
+        bodyExtra: { query: null },
+        map: {
+          ref: "order.orderNo",
+          nameLast: "patientLastName",
+          nameFirst: "patientFirstName",
+          dob: "patientDateOfBirth",
+          status: "status",
+          resultIssuedAt: "dateReleased",
+        },
+      },
+    },
+    pdf: {
+      strategy: "http-get",
+      config: { urlTemplate: `${GDX_BASE}/mygdx/webreporting/report?orderNo={ref}`, headers: { referer: `${GDX_BASE}/mygdx` } },
+    },
+    match: { refLooksLike: "^V\\d" },
+    ready: { equals: ["Released"] },
   },
 ];
 

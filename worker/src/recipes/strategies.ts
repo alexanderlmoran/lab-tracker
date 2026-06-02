@@ -184,9 +184,17 @@ const datatablesDiscovery: HttpDiscoveryStrategy = async (cfg, auth) => {
 };
 
 function mapRow(raw: unknown, map: Record<string, string>): DiscoveredRow {
+  // Name can be a single field (map.name) or composed from split fields
+  // (map.nameLast + map.nameFirst → "Last, First").
+  let name = str(dig(raw, map.name));
+  if (!name && (map.nameLast || map.nameFirst)) {
+    const last = str(dig(raw, map.nameLast)) ?? "";
+    const first = str(dig(raw, map.nameFirst)) ?? "";
+    name = `${last}, ${first}`.trim();
+  }
   return {
     ref: str(dig(raw, map.ref)),
-    name: str(dig(raw, map.name)),
+    name,
     dob: str(dig(raw, map.dob)),
     status: str(dig(raw, map.status)),
     pdfRef: str(dig(raw, map.pdfRef)),
@@ -194,6 +202,39 @@ function mapRow(raw: unknown, map: Record<string, string>): DiscoveredRow {
     raw,
   };
 }
+
+// JSON list behind a server-rendered CSRF token (e.g. Genova/Spring): GET a page,
+// regex the token out, POST a date-ranged JSON body with the token header. cfg:
+// {tokenUrl, tokenRegex, headerName, url, startKey, endKey, lookbackDays, bodyExtra?,
+//  dataPath?, map}.
+const csrfJsonDiscovery: HttpDiscoveryStrategy = async (cfg, auth) => {
+  const tp = await request(cfg.tokenUrl as string, { method: "GET", headers: authHeaders(auth, { accept: "text/html" }) });
+  const html = await tp.body.text();
+  const tok = html.match(new RegExp(cfg.tokenRegex as string, "i"))?.[1];
+  if (!tok) throw new Error(`csrf-json: token not found at ${cfg.tokenUrl} (session expired?)`);
+
+  const days = Number(cfg.lookbackDays ?? 120);
+  const end = new Date();
+  const start = new Date(end.getTime() - days * 864e5);
+  const body = JSON.stringify({
+    ...((cfg.bodyExtra as Record<string, unknown>) ?? {}),
+    [cfg.startKey as string]: start.toISOString(),
+    [cfg.endKey as string]: end.toISOString(),
+  });
+  const res = await request(cfg.url as string, {
+    method: "POST",
+    headers: authHeaders(auth, {
+      "content-type": "application/json",
+      "x-requested-with": "XMLHttpRequest",
+      [cfg.headerName as string]: tok,
+    }),
+    body,
+  });
+  if (res.statusCode !== 200) throw new Error(`csrf-json ${res.statusCode}: ${(await res.body.text()).slice(0, 160)}`);
+  const json = await res.body.json();
+  const arr = (cfg.dataPath ? dig(json, cfg.dataPath as string) : json) as unknown[];
+  return (Array.isArray(arr) ? arr : []).map((raw) => mapRow(raw, cfg.map as Record<string, string>));
+};
 
 // ---------------------------------------------------------------- pdf
 
@@ -250,6 +291,7 @@ export const AUTH_STRATEGIES: Record<string, HttpAuthStrategy> = {
 export const DISCOVERY_STRATEGIES: Record<string, HttpDiscoveryStrategy> = {
   "rest-json": restJsonDiscovery,
   datatables: datatablesDiscovery,
+  "csrf-json": csrfJsonDiscovery,
 };
 
 export const PDF_STRATEGIES: Record<string, HttpPdfStrategy> = {

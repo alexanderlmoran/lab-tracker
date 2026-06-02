@@ -7,18 +7,27 @@ import { vibrantScraper } from "./scrapers/vibrant.js";
 import { cyrexScraper } from "./scrapers/cyrex.js";
 import { spectracellScraper } from "./scrapers/spectracell.js";
 import { genovaScraper } from "./scrapers/genova.js";
-import { glycanageScraper } from "./scrapers/glycanage.js";
-import { doctorsdataScraper } from "./scrapers/doctorsdata.js";
+import { makeRecipeScraper } from "./recipes/runner.js";
+import { getRecipe } from "./recipes/catalog.js";
 import type { LabScraper } from "./scrapers/base.js";
 
+// Recipe-backed scraper from the config engine (see worker/src/recipes/).
+const recipe = (key: string): LabScraper => {
+  const r = getRecipe(key);
+  if (!r) throw new Error(`no recipe for ${key}`);
+  return makeRecipeScraper(r);
+};
+
 const SCRAPERS: Record<string, LabScraper> = {
+  // Hand-written scrapers (browser portals + multi-step Vibrant + session-blocked Genova).
   access: accessScraper,
   vibrant: vibrantScraper,
   cyrex: cyrexScraper,
   spectracell: spectracellScraper,
-  genova: genovaScraper,
-  glycanage: glycanageScraper,
-  doctorsdata: doctorsdataScraper,
+  genova: genovaScraper, // recipe built; cut over once a fresh session lets us verify it
+  // Recipe-backed (config engine) — verified byte-equivalent to the hand-written versions.
+  glycanage: recipe("glycanage"),
+  doctorsdata: recipe("doctorsdata"),
 };
 
 const SECRET = process.env.WORKER_SHARED_SECRET;
