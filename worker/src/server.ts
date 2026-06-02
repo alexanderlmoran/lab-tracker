@@ -6,7 +6,6 @@ import { accessScraper } from "./scrapers/access.js";
 import { vibrantScraper } from "./scrapers/vibrant.js";
 import { cyrexScraper } from "./scrapers/cyrex.js";
 import { spectracellScraper } from "./scrapers/spectracell.js";
-import { genovaScraper } from "./scrapers/genova.js";
 import { makeRecipeScraper } from "./recipes/runner.js";
 import { getRecipe } from "./recipes/catalog.js";
 import type { LabScraper } from "./scrapers/base.js";
@@ -19,15 +18,17 @@ const recipe = (key: string): LabScraper => {
 };
 
 const SCRAPERS: Record<string, LabScraper> = {
-  // Hand-written scrapers (browser portals + multi-step Vibrant + session-blocked Genova).
+  // Hand-written: browser portals + multi-step Vibrant API.
   access: accessScraper,
   vibrant: vibrantScraper,
   cyrex: cyrexScraper,
   spectracell: spectracellScraper,
-  genova: genovaScraper, // recipe built; cut over once a fresh session lets us verify it
-  // Recipe-backed (config engine) — verified byte-equivalent to the hand-written versions.
+  // Recipe-backed (config engine) — all live-verified byte-equivalent to the
+  // hand-written versions. Genova needs a periodically-refreshed session
+  // (GENOVA_SESSION_PATH) since its login is reCAPTCHA-gated.
   glycanage: recipe("glycanage"),
   doctorsdata: recipe("doctorsdata"),
+  genova: recipe("genova"),
 };
 
 const SECRET = process.env.WORKER_SHARED_SECRET;
