@@ -210,6 +210,49 @@ export const RECIPES: LabRecipe[] = [
     match: { refLooksLike: "^\\d+-\\d" },
     ready: { equals: ["Complete"] },
   },
+  {
+    key: "access",
+    labName: "Access",
+    transport: "browser",
+    auth: {
+      strategy: "browser-form",
+      config: {
+        loginUrl: "https://access.labsvc.net/labgen/",
+        gotoWaitUntil: "networkidle",
+        dismissDialogs: true, // labgen raises an onbeforeunload dialog
+        userSel: 'input[placeholder="User ID"]',
+        pwSel: 'input[placeholder="Password"]',
+        userEnv: "ACCESS_USERNAME",
+        passEnv: "ACCESS_PASSWORD",
+        submit: { sel: "a.x-btn:has(.icon-login)" }, // ExtJS icon button
+        successSel: "#maininbox",
+        postLogin: [{ sel: "#maininbox" }], // open the inbox tile
+        readySel: "table.x-grid-item[data-recordid]",
+      },
+    },
+    discovery: {
+      strategy: "dom-inbox",
+      config: {
+        rowsSel: "table.x-grid-item[data-recordid]",
+        cellsSel: "tr > td", // ExtJS nests cells under a tr inside the row table
+        settleMs: 800,
+        // Cols (0-idx td): 1 name "LAST, FIRST", 2 dob, 3 accession, … 8 status.
+        colMap: { name: 1, dob: 2, ref: 3, status: 8 },
+      },
+    },
+    pdf: {
+      strategy: "browser-network-intercept",
+      config: {
+        interceptUrlIncludes: "+repdown",
+        rowsSel: "table.x-grid-item[data-recordid]",
+        refCellSel: "td:nth-child(4)", // accession cell
+        checkboxSel: ".x-grid-row-checker",
+        printButtonSel: 'a.x-btn:has-text("Print Selected reports")',
+      },
+    },
+    match: { refLooksLike: "^\\d{5}" },
+    ready: { equals: ["complete"] },
+  },
 ];
 
 export function getRecipe(key: string): LabRecipe | undefined {

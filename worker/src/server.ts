@@ -2,7 +2,6 @@ import Fastify from "fastify";
 import { chromium } from "playwright";
 import { fetchOpenCases, postResultReady } from "./tracker-client.js";
 import { withLock } from "./lib/lock.js";
-import { accessScraper } from "./scrapers/access.js";
 import { vibrantScraper } from "./scrapers/vibrant.js";
 import { makeRecipeScraper } from "./recipes/runner.js";
 import { getRecipe } from "./recipes/catalog.js";
@@ -16,9 +15,9 @@ const recipe = (key: string): LabScraper => {
 };
 
 const SCRAPERS: Record<string, LabScraper> = {
-  // Hand-written: Access (network-intercept PDF — last Phase-2 conversion) +
-  // multi-step Vibrant API.
-  access: accessScraper,
+  // Hand-written: Vibrant only — a multi-step per-case API (login -> findPatient
+  // -> getReportStatus -> pdf-engine URL) that doesn't fit the auth->list->fetch
+  // recipe model. Everything else runs via the config engine.
   vibrant: vibrantScraper,
   // Recipe-backed (config engine) — all live-verified byte-equivalent to the
   // hand-written versions. Genova needs a periodically-refreshed session
@@ -28,6 +27,7 @@ const SCRAPERS: Record<string, LabScraper> = {
   genova: recipe("genova"),
   cyrex: recipe("cyrex"), // browser-transport recipe
   spectracell: recipe("spectracell"), // browser-transport recipe
+  access: recipe("access"), // browser-transport recipe (network-intercept PDF)
 };
 
 const SECRET = process.env.WORKER_SHARED_SECRET;

@@ -2,7 +2,7 @@
 // Playwright Page. Config-driven ports of the verified browser scrapers; quirks
 // (password-reveal, per-case search, slow waits) are config flags.
 
-import type { Page, Locator } from "playwright";
+import type { Page, Locator, BrowserContext } from "playwright";
 import type {
   BrowserAuthStrategy,
   BrowserDiscoveryStrategy,
@@ -23,7 +23,12 @@ function env(name: string): string {
 // readySel?}. pwRevealSel handles the DNN two-field "show password" reveal (Cyrex).
 const browserFormAuth: BrowserAuthStrategy = async (pageU, cfg) => {
   const page = pageU as Page;
-  await page.goto(cfg.loginUrl as string, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  // Some portals (Access/ExtJS) raise an onbeforeunload dialog — auto-accept it.
+  if (cfg.dismissDialogs) page.on("dialog", (d) => d.accept().catch(() => {}));
+  await page.goto(cfg.loginUrl as string, {
+    waitUntil: ((cfg.gotoWaitUntil as "networkidle") ?? "domcontentloaded"),
+    timeout: 60_000,
+  });
   await page.fill(cfg.userSel as string, env(cfg.userEnv as string));
   if (cfg.pwRevealSel) {
     const rev = page.locator(cfg.pwRevealSel as string);
@@ -42,6 +47,8 @@ const browserFormAuth: BrowserAuthStrategy = async (pageU, cfg) => {
   for (const step of (cfg.postLogin as Array<Record<string, string>>) ?? []) {
     if (step.goto) {
       await page.goto(step.goto, { waitUntil: "domcontentloaded" });
+    } else if (step.sel) {
+      await page.locator(step.sel).first().click().catch(() => {});
     } else if (step.name) {
       const link = page.getByRole((step.role as "link") ?? "link", { name: step.name }).first();
       await Promise.all([page.waitForLoadState("domcontentloaded"), link.click()]).catch(() => {});
@@ -52,9 +59,10 @@ const browserFormAuth: BrowserAuthStrategy = async (pageU, cfg) => {
 
 // ---------------------------------------------------------------- discovery
 
-// Read every cell text of a row's <td>s, then map by column index.
-async function readRowCells(tr: Locator): Promise<string[]> {
-  const tds = tr.locator(":scope > td");
+// Read every cell text of a row, then map by column index. cellsSel defaults to
+// direct <td> children; ExtJS grids (Access) nest cells under "tr > td".
+async function readRowCells(tr: Locator, cellsSel: string): Promise<string[]> {
+  const tds = tr.locator(cellsSel);
   const n = await tds.count();
   const out: string[] = [];
   for (let i = 0; i < n; i++) out.push(((await tds.nth(i).textContent()) ?? "").replace(/\s+/g, " ").trim());
@@ -113,10 +121,11 @@ async function readGridRows(page: Page, cfg: Record<string, unknown>): Promise<D
   const rows = await page.locator(cfg.rowsSel as string).all();
   const colMap = cfg.colMap as Record<string, number>;
   const resultLinkSel = cfg.resultLinkSel as string | undefined;
+  const cellsSel = (cfg.cellsSel as string) ?? ":scope > td";
   const seen = new Set<string>();
   const out: DiscoveredRow[] = [];
   for (const tr of rows) {
-    const cells = await readRowCells(tr);
+    const cells = await readRowCells(tr, cellsSel);
     const hasResult = resultLinkSel ? (await tr.locator(resultLinkSel).count()) > 0 : true;
     const row = mapBrowserRow(cells, colMap, hasResult);
     if (cfg.dedupeByRef && row.ref) {
@@ -166,6 +175,58 @@ const browserDownloadPdf: BrowserPdfStrategy = async (pageU, cfg, row) => {
   return buf;
 };
 
+// Network-intercept capture (Access ExtJS / Chrome PDF-viewer trap): select the
+// row's checkbox, click the print button, and grab the application/pdf bytes off
+// the wire (the built-in PDF viewer would otherwise rewrite response.body()).
+// cfg: {interceptUrlIncludes, rowsSel, refCellSel, checkboxSel, printButtonSel}.
+const intercepted = new WeakSet<BrowserContext>();
+let pendingPdf: { resolve: (b: Buffer) => void; reject: (e: Error) => void } | null = null;
+
+const browserNetworkInterceptPdf: BrowserPdfStrategy = async (pageU, cfg, row) => {
+  const page = pageU as Page;
+  const ctx = page.context();
+  if (!intercepted.has(ctx)) {
+    intercepted.add(ctx);
+    await ctx.route(
+      (u) => u.toString().includes(cfg.interceptUrlIncludes as string),
+      async (route, req) => {
+        if (req.method() !== "POST") return route.continue();
+        try {
+          const resp = await route.fetch();
+          const body = await resp.body();
+          if ((resp.headers()["content-type"] ?? "").includes("application/pdf") && pendingPdf) {
+            pendingPdf.resolve(Buffer.from(body));
+            pendingPdf = null;
+          }
+          await route.fulfill({ response: resp, body });
+        } catch (e) {
+          if (pendingPdf) { pendingPdf.reject(e as Error); pendingPdf = null; }
+          await route.abort().catch(() => {});
+        }
+      },
+    );
+  }
+
+  const tr = page
+    .locator(cfg.rowsSel as string, { has: page.locator(cfg.refCellSel as string, { hasText: row.ref ?? "" }) })
+    .first();
+  if ((await tr.count()) === 0) throw new Error(`network-intercept: no row for ${row.ref}`);
+
+  await tr.locator(cfg.checkboxSel as string).click();
+  const capture = new Promise<Buffer>((resolve, reject) => {
+    pendingPdf = { resolve, reject };
+    setTimeout(() => { if (pendingPdf) { pendingPdf = null; reject(new Error(`network-intercept: timeout for ${row.ref}`)); } }, 60_000);
+  });
+  const popupPromise = ctx.waitForEvent("page", { timeout: 60_000 }).catch(() => null);
+  await page.locator(cfg.printButtonSel as string).first().click();
+  const popup = await popupPromise;
+  const buf = await capture;
+  if (popup) await popup.close().catch(() => {});
+  await tr.locator(cfg.checkboxSel as string).click().catch(() => {}); // deselect for next case
+  if (buf.subarray(0, 5).toString("latin1") !== "%PDF-") throw new Error(`network-intercept: not a PDF for ${row.ref}`);
+  return buf;
+};
+
 // ---------------------------------------------------------------- registries
 
 export const BROWSER_AUTH_STRATEGIES: Record<string, BrowserAuthStrategy> = {
@@ -177,4 +238,5 @@ export const BROWSER_DISCOVERY_STRATEGIES: Record<string, BrowserDiscoveryStrate
 };
 export const BROWSER_PDF_STRATEGIES: Record<string, BrowserPdfStrategy> = {
   "browser-download": browserDownloadPdf,
+  "browser-network-intercept": browserNetworkInterceptPdf,
 };
