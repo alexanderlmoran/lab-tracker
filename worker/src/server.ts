@@ -8,6 +8,7 @@ import { cyrexScraper } from "./scrapers/cyrex.js";
 import { spectracellScraper } from "./scrapers/spectracell.js";
 import { genovaScraper } from "./scrapers/genova.js";
 import { glycanageScraper } from "./scrapers/glycanage.js";
+import { doctorsdataScraper } from "./scrapers/doctorsdata.js";
 import type { LabScraper } from "./scrapers/base.js";
 
 const SCRAPERS: Record<string, LabScraper> = {
@@ -17,6 +18,7 @@ const SCRAPERS: Record<string, LabScraper> = {
   spectracell: spectracellScraper,
   genova: genovaScraper,
   glycanage: glycanageScraper,
+  doctorsdata: doctorsdataScraper,
 };
 
 const SECRET = process.env.WORKER_SHARED_SECRET;
