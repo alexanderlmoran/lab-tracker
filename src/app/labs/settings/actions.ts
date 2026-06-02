@@ -596,6 +596,109 @@ export async function deleteLabPortal(input: {
   return { ok: true };
 }
 
+// ─────────────────────────── scraper recipes (recipe engine, Phase 3) ──────────
+// DB overrides/additions for the worker's built-in recipe catalog. A row here
+// wins over the built-in of the same `key`; the worker merges + caches them
+// (worker/src/recipes/load.ts) and falls back to catalog-only if this table is
+// empty/absent. Body is stored split across the auth/discovery/pdf/*_cfg columns.
+
+export type ScraperRecipeRow = {
+  id: string;
+  key: string;
+  lab_name: string;
+  transport: string;
+  auth: unknown;
+  discovery: unknown;
+  pdf: unknown;
+  match_cfg: unknown;
+  ready_cfg: unknown;
+  enabled: boolean;
+  updated_at: string | null;
+};
+
+export async function listScraperRecipes(): Promise<ScraperRecipeRow[]> {
+  await requireRole("admin");
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("scraper_recipes")
+    .select("id, key, lab_name, transport, auth, discovery, pdf, match_cfg, ready_cfg, enabled, updated_at")
+    .order("key");
+  // Table may not exist yet (migration unapplied) — degrade to empty so the
+  // panel renders "no overrides" rather than erroring.
+  if (error) return [];
+  return (data ?? []) as ScraperRecipeRow[];
+}
+
+// Manual validation (not zod) so arbitrary nested strategy config passes through
+// untouched. Body JSON = { auth, discovery, pdf, match?, ready? }.
+function hasStrategy(o: unknown, name: string): string | null {
+  if (!o || typeof o !== "object") return `${name} must be an object`;
+  const s = (o as { strategy?: unknown }).strategy;
+  return typeof s === "string" && s.length > 0 ? null : `${name}.strategy is required`;
+}
+
+export async function upsertScraperRecipe(
+  formData: FormData,
+): Promise<ActionResult<{ id: string }>> {
+  await requireRole("admin");
+  const id = (formData.get("id") as string | null) || undefined;
+  const key = String(formData.get("key") ?? "").trim();
+  const lab_name = String(formData.get("lab_name") ?? "").trim();
+  const transport = String(formData.get("transport") ?? "http").trim();
+  const enabled = formData.get("enabled") === "on" || formData.get("enabled") === "true";
+  if (!key || !lab_name) return { ok: false, error: "key and lab_name are required" };
+  if (transport !== "http" && transport !== "browser") {
+    return { ok: false, error: "transport must be 'http' or 'browser'" };
+  }
+
+  let body: { auth?: unknown; discovery?: unknown; pdf?: unknown; match?: unknown; ready?: unknown };
+  try {
+    body = JSON.parse(String(formData.get("body") ?? ""));
+  } catch {
+    return { ok: false, error: "Recipe body is not valid JSON" };
+  }
+  const bad = hasStrategy(body.auth, "auth") ?? hasStrategy(body.discovery, "discovery") ?? hasStrategy(body.pdf, "pdf");
+  if (bad) return { ok: false, error: bad };
+
+  const row = {
+    key,
+    lab_name,
+    transport,
+    enabled,
+    auth: body.auth,
+    discovery: body.discovery,
+    pdf: body.pdf,
+    match_cfg: body.match ?? null,
+    ready_cfg: body.ready ?? null,
+  };
+  const db = getSupabaseAdmin();
+  if (id) {
+    const { error } = await db.from("scraper_recipes").update(row).eq("id", id);
+    if (error) return { ok: false, error: error.message };
+    revalidatePath("/labs/settings");
+    return { ok: true, data: { id } };
+  }
+  const { data, error } = await db
+    .from("scraper_recipes")
+    .insert(row)
+    .select("id")
+    .single();
+  if (error || !data) {
+    return { ok: false, error: error?.message ?? "Insert failed — is the scraper_recipes migration applied?" };
+  }
+  revalidatePath("/labs/settings");
+  return { ok: true, data: { id: data.id as string } };
+}
+
+export async function deleteScraperRecipe(input: { id: string }): Promise<ActionResult> {
+  await requireRole("admin");
+  const db = getSupabaseAdmin();
+  const { error } = await db.from("scraper_recipes").delete().eq("id", input.id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/labs/settings");
+  return { ok: true };
+}
+
 /** First-run helper: copies the code constant into the DB so admins have
  * something to edit. Skips lab_key+url pairs already present so it's safe
  * to re-run. */

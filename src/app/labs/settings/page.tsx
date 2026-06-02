@@ -9,6 +9,7 @@ import {
   listLabPortals,
   listLabsCatalog,
   listScraperStatus,
+  listScraperRecipes,
   getPatientSeedOverview,
   getLabTurnaroundStats,
 } from "./actions";
@@ -23,6 +24,7 @@ import { EmailTemplatesPanel } from "./EmailTemplatesPanel";
 import { LabPortalsPanel } from "./LabPortalsPanel";
 import { ScrapersPanel } from "./ScrapersPanel";
 import { RecipeEnginePanel } from "./RecipeEnginePanel";
+import { RecipesPanel } from "./RecipesPanel";
 import { SettingsTabs } from "./SettingsTabs";
 import { parseSettingsTab } from "./tab";
 import { BulkRecoveryTable } from "../BulkRecoveryTable";
@@ -72,6 +74,7 @@ export default async function SettingsPage({
     deletedCases,
     portals,
     scrapers,
+    recipeOverrides,
     patientSeed,
     turnarounds,
   ] = await Promise.all([
@@ -90,6 +93,7 @@ export default async function SettingsPage({
     wantsDeleted ? listLabCases({ view: "deleted" }) : Promise.resolve(null),
     wantsPortals ? listLabPortals() : Promise.resolve(null),
     wantsScrapers ? listScraperStatus() : Promise.resolve(null),
+    wantsScrapers ? listScraperRecipes() : Promise.resolve(null),
     wantsPatients ? getPatientSeedOverview() : Promise.resolve(null),
     wantsTurnarounds ? getLabTurnaroundStats() : Promise.resolve(null),
   ]);
@@ -180,6 +184,12 @@ export default async function SettingsPage({
               description="Config-driven scrapers: which portals run as data-driven recipes vs hand-written, and the strategy stack each uses."
             >
               <RecipeEnginePanel />
+            </Section>
+            <Section
+              title="Recipe overrides"
+              description="Edit recipes in the DB — a row overrides the worker's built-in recipe of the same key. Requires the scraper_recipes migration applied + worker redeploy to take effect."
+            >
+              <RecipesPanel rows={recipeOverrides ?? []} />
             </Section>
             <Section
               title="Scrapers"
