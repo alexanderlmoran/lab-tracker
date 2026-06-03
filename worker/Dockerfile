@@ -1,4 +1,6 @@
-FROM mcr.microsoft.com/playwright:v1.49.1-jammy
+FROM mcr.microsoft.com/playwright:v1.60.0-jammy
+# Base image version MUST match the playwright npm version (package.json pins it
+# exactly). Bump one, bump both — a mismatch = "Executable doesn't exist".
 
 WORKDIR /app
 
