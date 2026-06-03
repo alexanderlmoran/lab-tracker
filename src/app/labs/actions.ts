@@ -263,6 +263,107 @@ export async function createLabCases(
   };
 }
 
+// Patient lab-manager: edit tracking #, accession (lab_external_ref), and
+// collection date across SEVERAL of one patient's cases in a single save.
+// Only the fields the operator actually changed are written (per-case diff,
+// same as updateLabCase), each logged so the activity log shows the edit.
+// Pure data writes — no step changes, no emails (the grid uses the existing
+// bulkSetStepCompleted for "mark all sample sent").
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const BulkFieldUpdateInput = z.object({
+  updates: z
+    .array(
+      z.object({
+        caseId: z.string().uuid(),
+        trackingNumber: z.string().trim().max(100).nullable().optional(),
+        accession: z.string().trim().max(64).nullable().optional(),
+        collectionDate: z.string().trim().max(10).nullable().optional(),
+      }),
+    )
+    .min(1)
+    .max(50),
+});
+
+export async function bulkUpdatePatientCases(input: {
+  updates: Array<{
+    caseId: string;
+    trackingNumber?: string | null;
+    accession?: string | null;
+    collectionDate?: string | null;
+  }>;
+}): Promise<ActionResult<{ updated: number }>> {
+  const user = await requireSignedIn();
+  const parsed = BulkFieldUpdateInput.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
+  // `undefined` = field not touched (leave as-is); null/"" = cleared → null.
+  const norm = (v: string | null | undefined): string | null | undefined =>
+    v === undefined ? undefined : v == null || v.trim().length === 0 ? null : v.trim();
+
+  for (const u of parsed.data.updates) {
+    const d = norm(u.collectionDate);
+    if (d != null && !ISO_DATE.test(d)) {
+      return { ok: false, error: "Collection date must be YYYY-MM-DD." };
+    }
+  }
+
+  const db = getSupabaseAdmin();
+  const ids = parsed.data.updates.map((u) => u.caseId);
+  const { data: currentRows, error: fetchErr } = await db
+    .from("lab_cases")
+    .select("id, tracking_number, lab_external_ref, collection_date")
+    .in("id", ids);
+  if (fetchErr) return { ok: false, error: fetchErr.message };
+  const byId = new Map(
+    ((currentRows ?? []) as Array<{
+      id: string;
+      tracking_number: string | null;
+      lab_external_ref: string | null;
+      collection_date: string | null;
+    }>).map((r) => [r.id, r]),
+  );
+
+  let updated = 0;
+  const events: Array<Record<string, unknown>> = [];
+  for (const u of parsed.data.updates) {
+    const cur = byId.get(u.caseId);
+    if (!cur) continue;
+    const patch: Record<string, unknown> = {};
+    const changes: Record<string, { from: unknown; to: unknown }> = {};
+    const t = norm(u.trackingNumber);
+    if (t !== undefined && t !== cur.tracking_number) {
+      patch.tracking_number = t;
+      changes.tracking_number = { from: cur.tracking_number, to: t };
+    }
+    const a = norm(u.accession);
+    if (a !== undefined && a !== cur.lab_external_ref) {
+      patch.lab_external_ref = a;
+      changes.lab_external_ref = { from: cur.lab_external_ref, to: a };
+    }
+    const d = norm(u.collectionDate);
+    if (d !== undefined && d !== cur.collection_date) {
+      patch.collection_date = d;
+      changes.collection_date = { from: cur.collection_date, to: d };
+    }
+    if (Object.keys(patch).length === 0) continue;
+    const { error } = await db.from("lab_cases").update(patch).eq("id", u.caseId);
+    if (error) return { ok: false, error: error.message };
+    updated++;
+    events.push({
+      case_id: u.caseId,
+      kind: "case_edited",
+      actor: user.email ?? "admin",
+      meta: { changes, source: "lab_manager" },
+    });
+  }
+  if (events.length) await db.from("lab_events").insert(events);
+
+  revalidatePath("/labs");
+  return { ok: true, data: { updated } };
+}
+
 export async function updateLabCase(
   caseId: string,
   formData: FormData,

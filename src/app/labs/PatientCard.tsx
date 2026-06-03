@@ -13,6 +13,7 @@ import {
 } from "@/lib/columns";
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { CaseDetail } from "./CaseDetail";
+import { ManageLabsButton } from "./PatientLabManager";
 import { formatPersonName, formatShortDate } from "@/lib/format";
 import {
   ZERO_COUNTS,
@@ -262,19 +263,24 @@ export function PatientCard({
   return (
     <>
       <div className="rounded-md border border-zinc-200 bg-white p-1.5 shadow-sm transition-shadow hover:shadow">
-        <Link
-          href={`/labs/patients/${encodeURIComponent(group.patientEmail)}`}
-          className="-mx-0.5 -mt-0.5 mb-1 block rounded px-1 py-0.5 transition-colors hover:bg-zinc-50"
-        >
-          <div className="flex items-baseline justify-between gap-2">
+        <div className="-mx-0.5 -mt-0.5 mb-1 flex items-baseline gap-1.5">
+          <Link
+            href={`/labs/patients/${encodeURIComponent(group.patientEmail)}`}
+            className="flex min-w-0 flex-1 items-baseline justify-between gap-2 rounded px-1 py-0.5 transition-colors hover:bg-zinc-50"
+          >
             <h4 className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-tight text-zinc-900">
               {formatPersonName(group.patientName)}
             </h4>
             <span className="shrink-0 text-[10px] tabular-nums text-zinc-500">
               {group.cases.length} lab{group.cases.length === 1 ? "" : "s"}
             </span>
-          </div>
-        </Link>
+          </Link>
+          <ManageLabsButton
+            patientName={group.patientName}
+            patientEmail={group.patientEmail}
+            cases={group.cases}
+          />
+        </div>
 
         <div className="flex flex-col gap-0.5">
           {group.cases.map((c) => (
