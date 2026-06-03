@@ -229,13 +229,13 @@ export const vibrantScraper: LabScraper = {
         let patientEntry: FindPatientEntry | null = null;
 
         if (accessionId) {
+          // Accession given → match ONLY by that accession. Do NOT fall back to
+          // name: findPatientByName + Order[0] would attach the patient's OTHER
+          // lab when this accession's report isn't ready yet (patient-safety).
+          // Skip and retry next cycle.
           patientEntry = await findPatientByAccession(token, accessionId);
-        }
-
-        // TODO: fallback by patient name if no labExternalRef; operator notes say
-        // search_patient_type="patient_name" works but was not HAR-captured for
-        // clinic-portal flow. Uncomment and verify before enabling in production.
-        if (!patientEntry && c.patientName) {
+        } else if (c.patientName) {
+          // No accession on the case → match by patient name (+ dob).
           const candidates = await findPatientByName(token, c.patientName);
           const dobNorm = normalizeDob(c.patientDob);
           patientEntry =
