@@ -13,6 +13,7 @@ import { probeCaseResult } from "./probe-actions";
 // only writes the fields the operator actually changed (matches updateLabCase).
 type RowEdit = {
   caseId: string;
+  who: string;
   labLabel: string;
   tracking: string;
   accession: string;
@@ -39,11 +40,27 @@ type NewLab = {
 };
 
 const s = (v: string | null | undefined) => v ?? "";
+const normName = (v: string) => v.toLowerCase().replace(/\s+/g, " ").trim();
+
+// Readable per-row label. Multi-panel tests (Vibrant Zoomer) come in as
+// separate Zenoti services with no lab_panel, so fall back to the service
+// name (stripped of the "Labs - " prefix and a redundant leading lab_name).
+function labelFor(c: LabCase): string {
+  let panel = s(c.lab_panel);
+  if (!panel && c.zenoti_service_name) {
+    const z = c.zenoti_service_name.replace(/^labs\s*-\s*/i, "").trim();
+    panel = z.toLowerCase().startsWith(c.lab_name.toLowerCase())
+      ? z.slice(c.lab_name.length).replace(/^[\s·•\-]+/, "").trim()
+      : z;
+  }
+  return panel ? `${c.lab_name} · ${panel}` : c.lab_name;
+}
 
 function toRowEdit(c: LabCase): RowEdit {
   return {
     caseId: c.id,
-    labLabel: c.lab_panel ? `${c.lab_name} · ${c.lab_panel}` : c.lab_name,
+    who: c.patient_name,
+    labLabel: labelFor(c),
     tracking: s(c.tracking_number),
     accession: s(c.lab_external_ref),
     collection: s(c.collection_date),
@@ -85,9 +102,19 @@ export function ManageLabsButton({
   const [bulkAccession, setBulkAccession] = useState("");
   const [bulkCollection, setBulkCollection] = useState("");
   const [markSent, setMarkSent] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [saving, startSave] = useTransition();
   const newKey = useRef(1);
+
+  // A patient card groups by email, so a family on one shared email (e.g. kids
+  // under a parent's address) lands here as several distinct names. When that
+  // happens, show a "Who" column + row checkboxes so apply-to-all can be scoped
+  // to one person (their accession differs from a sibling's).
+  const multiName = useMemo(
+    () => new Set(rows.map((r) => normName(r.who))).size > 1,
+    [rows],
+  );
 
   // Seed editable state from the patient's cases each time the dialog opens, so
   // a re-open after a save reflects the refreshed rows (no stale edits linger).
@@ -98,6 +125,7 @@ export function ManageLabsButton({
     setBulkAccession("");
     setBulkCollection("");
     setMarkSent(false);
+    setSelected(new Set());
     setError(null);
     setOpen(true);
     queueMicrotask(() => dialogRef.current?.showModal());
@@ -118,24 +146,51 @@ export function ManageLabsButton({
     setRows((rs) => rs.map((r) => (r.caseId === caseId ? { ...r, ...patch } : r)));
   }
 
+  function toggleSel(caseId: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(caseId)) next.delete(caseId);
+      else next.add(caseId);
+      return next;
+    });
+  }
+  // Click a person's name → select (or clear) all of their rows in one go.
+  function selectPerson(who: string) {
+    const ids = rows.filter((r) => normName(r.who) === normName(who)).map((r) => r.caseId);
+    setSelected((prev) => {
+      const allOn = ids.every((id) => prev.has(id));
+      const next = new Set(prev);
+      for (const id of ids) {
+        if (allOn) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+  }
+
   function applyToAll() {
     const t = bulkTracking.trim();
     const a = bulkAccession.trim();
     const c = bulkCollection.trim();
+    // Scope to the checked rows when any are selected (the family case —
+    // stamp avva's accession on avva's panels, not her sibling's); otherwise
+    // apply to every row. New labs only get stamped when nothing is scoped.
+    const scoped = selected.size > 0;
+    const hit = (r: RowEdit) => !scoped || selected.has(r.caseId);
     if (t) {
-      setRows((rs) => rs.map((r) => ({ ...r, tracking: t })));
-      setNewLabs((ns) => ns.map((n) => ({ ...n, tracking: t })));
+      setRows((rs) => rs.map((r) => (hit(r) ? { ...r, tracking: t } : r)));
+      if (!scoped) setNewLabs((ns) => ns.map((n) => ({ ...n, tracking: t })));
     }
     if (a) {
-      // Accession is normally unique per lab — only stamp it across rows when
+      // Accession is normally unique per lab — stamp it across rows only when
       // they're sub-panels of one physical test (e.g. Vibrant Zoomer's
       // Nutrient/Foundational/Gut share one kit + accession).
-      setRows((rs) => rs.map((r) => ({ ...r, accession: a })));
-      setNewLabs((ns) => ns.map((n) => ({ ...n, accession: a, noAccession: false })));
+      setRows((rs) => rs.map((r) => (hit(r) ? { ...r, accession: a } : r)));
+      if (!scoped) setNewLabs((ns) => ns.map((n) => ({ ...n, accession: a, noAccession: false })));
     }
     if (c) {
-      setRows((rs) => rs.map((r) => ({ ...r, collection: c })));
-      setNewLabs((ns) => ns.map((n) => ({ ...n, collection: c })));
+      setRows((rs) => rs.map((r) => (hit(r) ? { ...r, collection: c } : r)));
+      if (!scoped) setNewLabs((ns) => ns.map((n) => ({ ...n, collection: c })));
     }
   }
 
@@ -198,8 +253,13 @@ export function ManageLabsButton({
   );
   const pendingNewLabs = useMemo(() => newLabs.filter((n) => n.labName.trim().length > 0), [newLabs]);
   const sentTargets = useMemo(
-    () => (markSent ? rows.filter((r) => !r.step1Done).map((r) => r.caseId) : []),
-    [markSent, rows],
+    () =>
+      markSent
+        ? rows
+            .filter((r) => !r.step1Done && (selected.size === 0 || selected.has(r.caseId)))
+            .map((r) => r.caseId)
+        : [],
+    [markSent, rows, selected],
   );
   const dirty = fieldUpdates.length > 0 || pendingNewLabs.length > 0 || sentTargets.length > 0;
 
@@ -308,7 +368,9 @@ export function ManageLabsButton({
             <div className="overflow-y-auto px-5 py-4">
               {/* Apply-to-all (shipped together / same draw day) */}
               <div className="mb-3 flex flex-wrap items-end gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
-                <span className="text-[11px] font-medium text-zinc-600">Apply to all:</span>
+                <span className="text-[11px] font-medium text-zinc-600">
+                  {selected.size > 0 ? `Apply to ${selected.size} selected:` : "Apply to all:"}
+                </span>
                 <label className="flex flex-col gap-0.5">
                   <span className="text-[10px] text-zinc-500">Collected</span>
                   <input
@@ -352,6 +414,8 @@ export function ManageLabsButton({
                 <table className="w-full border-collapse text-left">
                   <thead>
                     <tr className="bg-zinc-50 text-[10px] uppercase tracking-wide text-zinc-500">
+                      {multiName ? <th className="px-2 py-1.5 font-medium" /> : null}
+                      {multiName ? <th className="px-2 py-1.5 font-medium">Who</th> : null}
                       <th className="px-2 py-1.5 font-medium">Lab</th>
                       <th className="px-2 py-1.5 font-medium">Collected</th>
                       <th className="px-2 py-1.5 font-medium">Tracking #</th>
@@ -361,7 +425,34 @@ export function ManageLabsButton({
                   </thead>
                   <tbody>
                     {rows.map((r) => (
-                      <tr key={r.caseId} className="border-t border-zinc-100 align-top">
+                      <tr
+                        key={r.caseId}
+                        className={`border-t border-zinc-100 align-top ${
+                          selected.has(r.caseId) ? "bg-indigo-50/50" : ""
+                        }`}
+                      >
+                        {multiName ? (
+                          <td className="px-2 py-1.5">
+                            <input
+                              type="checkbox"
+                              checked={selected.has(r.caseId)}
+                              onChange={() => toggleSel(r.caseId)}
+                              aria-label={`Select ${r.who} — ${r.labLabel}`}
+                            />
+                          </td>
+                        ) : null}
+                        {multiName ? (
+                          <td className="px-2 py-1.5">
+                            <button
+                              type="button"
+                              onClick={() => selectPerson(r.who)}
+                              title="Select all of this person's labs"
+                              className="text-[12px] font-medium text-indigo-700 hover:underline"
+                            >
+                              {r.who}
+                            </button>
+                          </td>
+                        ) : null}
                         <td className="px-2 py-1.5 text-[12px] text-zinc-800">{r.labLabel}</td>
                         <td className="px-2 py-1.5">
                           <input
@@ -478,13 +569,20 @@ export function ManageLabsButton({
                 </div>
               ) : null}
 
-              <button
-                type="button"
-                onClick={addNewLab}
-                className="mt-3 rounded-md border border-dashed border-zinc-300 bg-white px-3 py-1.5 text-[12px] font-medium text-zinc-600 hover:border-zinc-400 hover:bg-zinc-50"
-              >
-                + Add lab
-              </button>
+              {multiName ? (
+                <p className="mt-3 text-[11px] text-zinc-500">
+                  Several people share this email — add a lab for a specific person from the New
+                  case form so it lands on the right chart.
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  onClick={addNewLab}
+                  className="mt-3 rounded-md border border-dashed border-zinc-300 bg-white px-3 py-1.5 text-[12px] font-medium text-zinc-600 hover:border-zinc-400 hover:bg-zinc-50"
+                >
+                  + Add lab
+                </button>
+              )}
 
               <label className="mt-3 flex items-center gap-2 text-[12px] text-zinc-700">
                 <input
@@ -492,7 +590,8 @@ export function ManageLabsButton({
                   checked={markSent}
                   onChange={(e) => setMarkSent(e.target.checked)}
                 />
-                Also mark all as <span className="font-medium">Sample sent</span> (no emails)
+                Also mark {selected.size > 0 ? "selected" : "all"} as{" "}
+                <span className="font-medium">Sample sent</span> (no emails)
               </label>
 
               {error ? (

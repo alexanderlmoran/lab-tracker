@@ -70,6 +70,9 @@ export type LabCase = {
   expected_result_at_min: string | null;
   expected_result_at_max: string | null;
   bulk_import_id: string | null;
+  zenoti_appointment_id: string | null;
+  zenoti_guest_id: string | null;
+  zenoti_service_name: string | null;
   tracking_carrier: string | null;
   tracking_status: TrackingStatus | null;
   tracking_status_detail: string | null;
