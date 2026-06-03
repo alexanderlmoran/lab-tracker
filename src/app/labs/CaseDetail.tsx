@@ -35,6 +35,7 @@ import {
 } from "./draw-actions";
 import { useRouter } from "next/navigation";
 import { getLabDestination, trackingDestinationWarning } from "@/lib/labs/catalog";
+import { labelForCase } from "@/lib/labs/label";
 
 function DeleteCaseButton({ caseId }: { caseId: string }) {
   const [pending, start] = useTransition();
@@ -634,7 +635,7 @@ export function CaseDetail({
             children={
               <span className="flex flex-col gap-0.5">
                 <span className="flex flex-wrap items-center gap-2">
-                  <span>{row.lab_panel ? `${row.lab_name} · ${row.lab_panel}` : row.lab_name}</span>
+                  <span>{labelForCase(row)}</span>
                   <LabPortalLinks labName={row.lab_name} />
                 </span>
                 <span className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">

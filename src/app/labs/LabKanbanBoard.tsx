@@ -13,6 +13,7 @@ import {
   getColumnFor,
 } from "@/lib/columns";
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
+import { labelForCase } from "@/lib/labs/label";
 import { CaseDetail } from "./CaseDetail";
 import { formatPersonName, formatShortDate } from "@/lib/format";
 import {
@@ -67,9 +68,7 @@ function LabCard({
     trackingStatus: row.tracking_status,
     trackingLocation: row.tracking_location,
   });
-  const labLabel = row.lab_panel
-    ? `${row.lab_name} · ${row.lab_panel}`
-    : row.lab_name;
+  const labLabel = labelForCase(row);
   const trackingMeta = row.tracking_status
     ? TRACKING_BADGE[row.tracking_status]
     : null;
@@ -286,8 +285,7 @@ export function LabKanbanBoard({
                   {formatPersonName(activeRow.patient_name)}
                 </h2>
                 <p className="text-xs text-zinc-500">
-                  {activeRow.lab_name}
-                  {activeRow.lab_panel ? ` · ${activeRow.lab_panel}` : ""}
+                  {labelForCase(activeRow)}
                   {" · "}
                   {COLUMN_LABEL[getColumnFor(activeRow)]}
                 </p>

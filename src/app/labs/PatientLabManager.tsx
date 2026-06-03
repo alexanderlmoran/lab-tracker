@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { LabCase } from "@/lib/types";
 import { COLUMN_LABEL, getColumnFor } from "@/lib/columns";
 import { probeKeyForLab } from "@/lib/scrapers/normalize-lab";
+import { labelForCase } from "@/lib/labs/label";
 import { LabCombobox } from "./LabCombobox";
 import {
   bulkSetStepCompleted,
@@ -47,25 +48,11 @@ type NewLab = {
 const s = (v: string | null | undefined) => v ?? "";
 const normName = (v: string) => v.toLowerCase().replace(/\s+/g, " ").trim();
 
-// Readable per-row label. Multi-panel tests (Vibrant Zoomer) come in as
-// separate Zenoti services with no lab_panel, so fall back to the service
-// name (stripped of the "Labs - " prefix and a redundant leading lab_name).
-function labelFor(c: LabCase): string {
-  let panel = s(c.lab_panel);
-  if (!panel && c.zenoti_service_name) {
-    const z = c.zenoti_service_name.replace(/^labs\s*-\s*/i, "").trim();
-    panel = z.toLowerCase().startsWith(c.lab_name.toLowerCase())
-      ? z.slice(c.lab_name.length).replace(/^[\s·•\-]+/, "").trim()
-      : z;
-  }
-  return panel ? `${c.lab_name} · ${panel}` : c.lab_name;
-}
-
 function toRowEdit(c: LabCase): RowEdit {
   return {
     caseId: c.id,
     who: c.patient_name,
-    labLabel: labelFor(c),
+    labLabel: labelForCase(c),
     tracking: s(c.tracking_number),
     accession: s(c.lab_external_ref),
     collection: s(c.collection_date),

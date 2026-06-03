@@ -12,6 +12,7 @@ import {
   type PatientGroup,
 } from "@/lib/columns";
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
+import { labelForCase } from "@/lib/labs/label";
 import { CaseDetail } from "./CaseDetail";
 import { ManageLabsButton } from "./PatientLabManager";
 import { formatPersonName, formatShortDate } from "@/lib/format";
@@ -97,9 +98,7 @@ function LabRow({
   counts: CardCounts;
 }) {
   const staleness = getCaseStaleness(row);
-  const labLabel = row.lab_panel
-    ? `${row.lab_name} · ${row.lab_panel}`
-    : row.lab_name;
+  const labLabel = labelForCase(row);
   const expected = formatExpectedRange(
     row.expected_result_at_min,
     row.expected_result_at_max,
@@ -313,8 +312,7 @@ export function PatientCard({
                   {formatPersonName(activeRow.patient_name)}
                 </h2>
                 <p className="text-xs text-zinc-500">
-                  {activeRow.lab_name}
-                  {activeRow.lab_panel ? ` · ${activeRow.lab_panel}` : ""}
+                  {labelForCase(activeRow)}
                   {" · "}
                   {COLUMN_LABEL[getColumnFor(activeRow)]}
                 </p>
