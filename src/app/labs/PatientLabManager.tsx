@@ -82,6 +82,7 @@ export function ManageLabsButton({
   const [rows, setRows] = useState<RowEdit[]>([]);
   const [newLabs, setNewLabs] = useState<NewLab[]>([]);
   const [bulkTracking, setBulkTracking] = useState("");
+  const [bulkAccession, setBulkAccession] = useState("");
   const [bulkCollection, setBulkCollection] = useState("");
   const [markSent, setMarkSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -94,6 +95,7 @@ export function ManageLabsButton({
     setRows(cases.map(toRowEdit));
     setNewLabs([]);
     setBulkTracking("");
+    setBulkAccession("");
     setBulkCollection("");
     setMarkSent(false);
     setError(null);
@@ -118,10 +120,18 @@ export function ManageLabsButton({
 
   function applyToAll() {
     const t = bulkTracking.trim();
+    const a = bulkAccession.trim();
     const c = bulkCollection.trim();
     if (t) {
       setRows((rs) => rs.map((r) => ({ ...r, tracking: t })));
       setNewLabs((ns) => ns.map((n) => ({ ...n, tracking: t })));
+    }
+    if (a) {
+      // Accession is normally unique per lab — only stamp it across rows when
+      // they're sub-panels of one physical test (e.g. Vibrant Zoomer's
+      // Nutrient/Foundational/Gut share one kit + accession).
+      setRows((rs) => rs.map((r) => ({ ...r, accession: a })));
+      setNewLabs((ns) => ns.map((n) => ({ ...n, accession: a, noAccession: false })));
     }
     if (c) {
       setRows((rs) => rs.map((r) => ({ ...r, collection: c })));
@@ -315,7 +325,17 @@ export function ManageLabsButton({
                     value={bulkTracking}
                     onChange={(e) => setBulkTracking(e.target.value)}
                     placeholder="one # for the whole shipment"
-                    className={`${inputCls} w-52`}
+                    className={`${inputCls} w-48`}
+                  />
+                </label>
+                <label className="flex flex-col gap-0.5">
+                  <span className="text-[10px] text-zinc-500">Acc# (same test)</span>
+                  <input
+                    type="text"
+                    value={bulkAccession}
+                    onChange={(e) => setBulkAccession(e.target.value)}
+                    placeholder="shared accession"
+                    className={`${inputCls} w-40 font-mono`}
                   />
                 </label>
                 <button
