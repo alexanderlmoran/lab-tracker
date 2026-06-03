@@ -62,6 +62,10 @@ export type UploadInput = {
   isClientFacing?: boolean;
   /** Whether PB sends the patient a notification email on creation. Default true. */
   notify?: boolean;
+  /** Safety guardrail. If set, the upload ABORTS (before any write) unless the
+   * resolved PB patient id equals this. Used by the Settings post-test so it can
+   * only ever land on the nominated test patient — never anyone else. */
+  expectedPatientId?: string;
 };
 
 export type UploadResult = {
@@ -346,6 +350,13 @@ export async function uploadPdfToPb(input: UploadInput): Promise<UploadResult> {
   );
   if (!patient) {
     throw new Error(`PB patient not found: ${input.patientName}`);
+  }
+  if (input.expectedPatientId && patient.id !== input.expectedPatientId) {
+    throw new Error(
+      `post-test guardrail: resolved PB patient ${patient.id} ` +
+        `(${patient.firstName} ${patient.lastName}) != expected ${input.expectedPatientId} — ` +
+        `aborting before any write`,
+    );
   }
 
   const pdfBytes = await readFile(input.pdfPath);

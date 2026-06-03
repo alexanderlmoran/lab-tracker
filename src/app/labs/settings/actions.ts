@@ -728,6 +728,48 @@ export type RecipeTestResult = {
       };
 };
 
+// Post-test: full pipeline (scrape → save PDF → PB upload) for the nominated
+// test patient only. The worker enforces the guardrail; this just proxies it.
+export type PostTestResult = {
+  ok: boolean;
+  lab?: string;
+  testPatient?: string;
+  labRequestId?: string;
+  patientId?: string;
+  pdfSaved?: string;
+  scraped?: { ref: string | null; bytes: number; filename: string | null };
+  error?: string;
+  errors?: Array<{ caseId: string; message: string }>;
+};
+
+export async function postTestScraperRecipe(input: {
+  key: string;
+}): Promise<ActionResult<PostTestResult>> {
+  await requireRole("admin");
+  const key = input.key.trim().toLowerCase();
+  if (!key) return { ok: false, error: "key is required" };
+  const secret = process.env.WORKER_SHARED_SECRET;
+  if (!secret) return { ok: false, error: "WORKER_SHARED_SECRET not configured" };
+  const base = (process.env.WORKER_BASE_URL?.trim() || "http://localhost:8080").replace(/\/+$/, "");
+  try {
+    const res = await fetch(`${base}/post-test/${encodeURIComponent(key)}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${secret}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(180_000), // scrape + PB upload can be slow
+    });
+    const json = (await res.json().catch(() => null)) as PostTestResult | { error?: string } | null;
+    if (!res.ok) {
+      const msg = json && "error" in json && json.error ? json.error : `worker returned ${res.status}`;
+      return { ok: false, error: `worker: ${msg}` };
+    }
+    return { ok: true, data: json as PostTestResult };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `worker unreachable at ${base} — is it running? (${msg})` };
+  }
+}
+
 export async function testScraperRecipe(input: {
   key: string;
   dryRun?: boolean;

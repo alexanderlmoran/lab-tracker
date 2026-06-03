@@ -1,4 +1,5 @@
 import { RECIPE_SUMMARY, recipeEngineCoverage } from "@/lib/scrapers/recipe-summary";
+import { PostTestButton } from "./PostTestButton";
 
 // Read-only view of the config-driven scraper "recipe engine": which portals run
 // as data-driven recipes (vs hand-written) and the strategy stack each uses.
@@ -27,6 +28,7 @@ export function RecipeEnginePanel() {
               <th className="py-2 pr-3 font-semibold">Auth</th>
               <th className="py-2 pr-3 font-semibold">Discovery</th>
               <th className="py-2 pr-3 font-semibold">PDF</th>
+              <th className="py-2 pr-3 font-semibold">Post test</th>
             </tr>
           </thead>
           <tbody>
@@ -51,6 +53,9 @@ export function RecipeEnginePanel() {
                 <td className="py-2 pr-3 font-mono text-[12px] text-zinc-800">{r.auth}</td>
                 <td className="py-2 pr-3 font-mono text-[12px] text-zinc-800">{r.discovery}</td>
                 <td className="py-2 pr-3 font-mono text-[12px] text-zinc-800">{r.pdf}</td>
+                <td className="py-2 pr-3">
+                  <PostTestButton labKey={r.key} labName={r.labName} />
+                </td>
               </tr>
             ))}
           </tbody>

@@ -1,12 +1,19 @@
 import Fastify from "fastify";
 import { chromium } from "playwright";
+import { writeFile, mkdir } from "node:fs/promises";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { fetchOpenCases, postResultReady } from "./tracker-client.js";
 import { withLock } from "./lib/lock.js";
 import { vibrantScraper } from "./scrapers/vibrant.js";
 import { makeRecipeScraper } from "./recipes/runner.js";
 import { loadRecipes } from "./recipes/load.js";
 import { RECIPES } from "./recipes/catalog.js";
-import type { LabScraper } from "./scrapers/base.js";
+import { uploadPdfToPb } from "./uploaders/practicebetter.js";
+import type { LabScraper, ScrapeResult } from "./scrapers/base.js";
+
+// Where the post-test saves scraped PDFs for reuse (gitignored — may be PHI).
+const POST_TEST_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "captures", "post-test");
 
 // Hand-written scrapers that aren't recipes. Vibrant only — a multi-step per-case
 // API (login -> findPatient -> getReportStatus -> pdf-engine URL) that doesn't fit
@@ -178,6 +185,105 @@ app.post<{ Params: { lab: string }; Querystring: { dryRun?: string } }>(
     return reply.send({ ...base, dryRun: dry });
   },
 );
+
+// Phase 3 post-test: full pipeline (scrape → save PDF → PB upload) for ONE
+// nominated test patient only. Hard-guarded so it can never write to anyone
+// else's PB chart. Title is tagged "TEST", patient email suppressed, and the
+// scraped PDF is saved under captures/post-test/ for future reuse.
+app.post<{ Params: { lab: string } }>("/post-test/:lab", async (req, reply) => {
+  if ((req.headers.authorization ?? "") !== `Bearer ${SECRET}`) {
+    return reply.code(401).send({ ok: false, error: "unauthorized" });
+  }
+
+  const testName = process.env.PB_TEST_PATIENT_NAME;
+  const testDob = process.env.PB_TEST_PATIENT_DOB || undefined;
+  const testPatientId = process.env.PB_TEST_PATIENT_ID || undefined;
+  const pbUser = process.env.PB_USERNAME;
+  const pbPass = process.env.PB_PASSWORD;
+  const consultantId = process.env.PB_CONSULTANT_ID;
+  if (!testName || !pbUser || !pbPass || !consultantId) {
+    return reply.code(412).send({
+      ok: false,
+      error:
+        "post-test not configured (needs PB_TEST_PATIENT_NAME, PB_USERNAME, PB_PASSWORD, PB_CONSULTANT_ID)",
+    });
+  }
+
+  const labKey = req.params.lab.toLowerCase();
+  const scrapers = await resolveScrapers();
+  const scraper = scrapers[labKey];
+  if (!scraper) {
+    return reply.code(404).send({ ok: false, error: `unknown lab: ${labKey}` });
+  }
+
+  // Synthetic case for the TEST patient ONLY — never a real open case. With no
+  // ref the runner matches by name+dob, so this works across portals.
+  const testCase = {
+    caseId: "post-test",
+    patientName: testName,
+    patientDob: testDob ?? null,
+    patientEmail: "",
+    labName: scraper.labName,
+    labExternalRef: null,
+    sampleSentAt: null,
+    trackingDeliveredAt: null,
+    expectedResultAtMin: null,
+    expectedResultAtMax: null,
+  };
+
+  const browser = await chromium.launch({ headless: true });
+  let found: ScrapeResult | undefined;
+  let runErrors: Array<{ caseId: string; message: string }> = [];
+  try {
+    const run = await scraper.run(browser, [testCase]);
+    found = run.found[0];
+    runErrors = run.errors;
+  } finally {
+    await browser.close();
+  }
+
+  if (!found) {
+    return reply.send({
+      ok: false,
+      error: `no result found on ${scraper.labName} for test patient "${testName}"`,
+      errors: runErrors,
+    });
+  }
+
+  // Save the scraped PDF in-program for future reuse.
+  await mkdir(POST_TEST_DIR, { recursive: true });
+  const pdfFilename = found.pdfFilename || `${labKey}-test.pdf`;
+  const savePath = join(POST_TEST_DIR, pdfFilename);
+  const pdfBytes = Buffer.from(found.pdfBase64, "base64");
+  await writeFile(savePath, pdfBytes);
+
+  // Upload to PB — guarded so it can ONLY land on the nominated test patient.
+  const result = await uploadPdfToPb({
+    username: pbUser,
+    password: pbPass,
+    consultantId,
+    patientName: testName,
+    patientDob: testDob,
+    expectedPatientId: testPatientId,
+    labName: `TEST — ${scraper.labName} ${found.resultIssuedAt?.slice(0, 10) ?? ""}`.trim(),
+    dateOrdered: found.resultIssuedAt ?? new Date().toISOString(),
+    pdfPath: savePath,
+    pdfFilename,
+    isClientFacing: false,
+    notify: false,
+  });
+
+  return reply.send({
+    ok: true,
+    lab: scraper.labName,
+    testPatient: testName,
+    labRequestId: result.labRequestId,
+    patientId: result.patientId,
+    pdfSaved: savePath,
+    scraped: { ref: found.labExternalRef, bytes: pdfBytes.length, filename: pdfFilename },
+    errors: runErrors,
+  });
+});
 
 const port = Number(process.env.PORT ?? 8080);
 app.listen({ port, host: "0.0.0.0" }).catch((err) => {
