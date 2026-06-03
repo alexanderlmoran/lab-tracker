@@ -122,10 +122,14 @@ function matchRow(c: OpenCase, rows: DiscoveredRow[], recipe: LabRecipe): Discov
   if (c.labExternalRef) {
     const shapeOk = !recipe.match?.refLooksLike || new RegExp(recipe.match.refLooksLike).test(c.labExternalRef);
     if (shapeOk) {
-      const byRef = rows.find((r) => r.ref?.trim() === c.labExternalRef!.trim());
-      if (byRef) return byRef;
+      // A well-formed accession was entered → ONLY its exact result may match.
+      // Do NOT fall back to name+dob: if this accession's PDF isn't on the
+      // portal yet and the patient has OTHER results in the inbox, a name match
+      // would attach the WRONG lab. Better to find nothing and retry next cycle.
+      return rows.find((r) => r.ref?.trim() === c.labExternalRef!.trim()) ?? null;
     }
   }
+  // No usable accession → match by name (+ dob when both sides have it).
   const nameNorm = normalizeName(c.patientName);
   const dobNorm = normalizeDob(c.patientDob);
   return (
