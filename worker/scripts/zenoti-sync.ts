@@ -17,12 +17,17 @@
 import { request } from "undici";
 
 import { loadEnvLocal } from "../src/lib/load-env.js";
+import { materializePortalSessions } from "../src/lib/portal-sessions.js";
 import { fetchZenotiLabAppointments } from "../src/zenoti/fetch-browser.js";
 import type { LabAppointment } from "../src/zenoti/types.js";
 
 loadEnvLocal();
+materializePortalSessions(); // on Fly: ZENOTI_SESSION_B64 → temp file → ZENOTI_STORAGE_PATH
 
-const STORAGE_PATH = "captures/zenoti/20260522-103507/storage.json";
+// On Fly, ZENOTI_STORAGE_PATH is set from the secret; locally it falls back to
+// the most recent captured session (refresh via the lab-portal-capture skill).
+const STORAGE_PATH =
+  process.env.ZENOTI_STORAGE_PATH ?? "captures/zenoti/20260522-103507/storage.json";
 const BASE = process.env.TRACKER_BASE_URL;
 const SECRET = process.env.WORKER_SHARED_SECRET;
 const DATE = process.env.ZENOTI_DATE ?? new Date().toISOString().slice(0, 10);

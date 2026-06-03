@@ -10,7 +10,12 @@ import { makeRecipeScraper } from "./recipes/runner.js";
 import { loadRecipes } from "./recipes/load.js";
 import { RECIPES } from "./recipes/catalog.js";
 import { uploadPdfToPb } from "./uploaders/practicebetter.js";
+import { materializePortalSessions } from "./lib/portal-sessions.js";
 import type { LabScraper, ScrapeResult } from "./scrapers/base.js";
+
+// On Fly, decode any *_SESSION_B64 secrets to temp files + set *_SESSION_PATH so
+// session-gated scrapers (Genova) find their cookies. No-op locally.
+materializePortalSessions();
 
 // Where the post-test saves scraped PDFs for reuse (gitignored — may be PHI).
 const POST_TEST_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "captures", "post-test");
