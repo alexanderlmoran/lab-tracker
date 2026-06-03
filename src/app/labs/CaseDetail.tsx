@@ -17,6 +17,7 @@ import { PdfReviewModal } from "./PdfReviewModal";
 import { getPendingPdfForCase, type PendingPdf } from "./pdf-actions";
 import { LabPortalLinks } from "./LabPortalLinks";
 import { FindResultButton } from "./FindResultButton";
+import { ManageLabsButton } from "./PatientLabManager";
 import { RefreshLabStatusButton } from "./RefreshLabStatusButton";
 import { RefreshTrackingButton } from "./RefreshTrackingButton";
 import {
@@ -613,6 +614,11 @@ export function CaseDetail({
             <span>
               {done} / {totalSteps} steps
             </span>
+            <ManageLabsButton
+              patientName={row.patient_name}
+              patientEmail={row.patient_email}
+              variant="button"
+            />
             <CaseDialog
               mode="edit"
               initial={row}

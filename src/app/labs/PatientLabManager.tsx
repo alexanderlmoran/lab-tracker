@@ -6,7 +6,12 @@ import type { LabCase } from "@/lib/types";
 import { COLUMN_LABEL, getColumnFor } from "@/lib/columns";
 import { probeKeyForLab } from "@/lib/scrapers/normalize-lab";
 import { LabCombobox } from "./LabCombobox";
-import { bulkSetStepCompleted, bulkUpdatePatientCases, createLabCases } from "./actions";
+import {
+  bulkSetStepCompleted,
+  bulkUpdatePatientCases,
+  createLabCases,
+  listPatientCases,
+} from "./actions";
 import { probeCaseResult } from "./probe-actions";
 
 // Editable view of one existing case. We keep the originals alongside so Save
@@ -88,15 +93,25 @@ export function ManageLabsButton({
   patientName,
   patientEmail,
   cases,
+  variant = "chip",
 }: {
   patientName: string;
   patientEmail: string;
-  cases: LabCase[];
+  /** Preloaded cases (patient board groups already have them). When omitted,
+   * the button fetches the patient's labs by email on open — so it can live
+   * anywhere (lab board card detail, the full case page) without threading
+   * the sibling cases through. */
+  cases?: LabCase[];
+  /** "chip" = tiny outline button (patient card header); "button" = a normal
+   * button for the case detail / edit surface. */
+  variant?: "chip" | "button";
 }) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<RowEdit[]>([]);
+  const [srcCases, setSrcCases] = useState<LabCase[]>([]);
+  const [loading, setLoading] = useState(false);
   const [newLabs, setNewLabs] = useState<NewLab[]>([]);
   const [bulkTracking, setBulkTracking] = useState("");
   const [bulkAccession, setBulkAccession] = useState("");
@@ -116,10 +131,14 @@ export function ManageLabsButton({
     [rows],
   );
 
-  // Seed editable state from the patient's cases each time the dialog opens, so
-  // a re-open after a save reflects the refreshed rows (no stale edits linger).
+  // Seed editable state each time the dialog opens, so a re-open after a save
+  // reflects the refreshed rows (no stale edits linger). Uses preloaded cases
+  // when given, else fetches the patient's labs by email.
+  function seed(list: LabCase[]) {
+    setSrcCases(list);
+    setRows(list.map(toRowEdit));
+  }
   function openDialog() {
-    setRows(cases.map(toRowEdit));
     setNewLabs([]);
     setBulkTracking("");
     setBulkAccession("");
@@ -129,6 +148,17 @@ export function ManageLabsButton({
     setError(null);
     setOpen(true);
     queueMicrotask(() => dialogRef.current?.showModal());
+    if (cases && cases.length > 0) {
+      seed(cases);
+      return;
+    }
+    setRows([]);
+    setSrcCases([]);
+    setLoading(true);
+    listPatientCases(patientEmail.toLowerCase())
+      .then((list) => seed(list))
+      .catch(() => setError("Could not load this patient's labs."))
+      .finally(() => setLoading(false));
   }
   function closeDialog() {
     dialogRef.current?.close();
@@ -285,7 +315,7 @@ export function ManageLabsButton({
         const fd = new FormData();
         fd.set("patientName", patientName);
         fd.set("patientEmail", patientEmail);
-        const ref = cases[0];
+        const ref = srcCases[0];
         fd.set("patientPhone", s(ref?.patient_phone));
         fd.set("patientDob", s(ref?.patient_dob));
         fd.set("patientAddress", s(ref?.patient_address));
@@ -334,7 +364,11 @@ export function ManageLabsButton({
           e.preventDefault();
           openDialog();
         }}
-        className="shrink-0 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 hover:bg-zinc-50"
+        className={
+          variant === "button"
+            ? "rounded-md border border-indigo-300 bg-white px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50"
+            : "shrink-0 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 hover:bg-zinc-50"
+        }
         title="Edit tracking / accession / collection across all of this patient's labs"
       >
         Manage labs
@@ -364,8 +398,17 @@ export function ManageLabsButton({
             </div>
 
             <div className="overflow-y-auto px-5 py-4">
+              {loading ? (
+                <p className="px-1 py-6 text-center text-[12px] text-zinc-500">
+                  Loading this patient&rsquo;s labs…
+                </p>
+              ) : null}
               {/* Apply-to-all (shipped together / same draw day) */}
-              <div className="mb-3 flex flex-wrap items-end gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
+              <div
+                className={`mb-3 flex flex-wrap items-end gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 ${
+                  loading ? "hidden" : ""
+                }`}
+              >
                 <span className="text-[11px] font-medium text-zinc-600">
                   {selected.size > 0 ? `Apply to ${selected.size} selected:` : "Apply to all:"}
                 </span>
