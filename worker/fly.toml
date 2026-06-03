@@ -12,6 +12,15 @@ primary_region = "iad"
 [build]
   dockerfile = "Dockerfile"
 
+# Two process groups, both from the same image:
+#   app    — the HTTP worker (/run, /test, /post-test). Scale-to-zero via http_service.
+#   zenoti — the always-on Zenoti auto-login + sync loop (today + tomorrow, ~3 min).
+# Fly supervises these as real processes (reliable logs, restart on crash), unlike
+# ad-hoc `fly machine run` machines which exited immediately.
+[processes]
+  app = "node dist/server.js"
+  zenoti = "npx tsx scripts/zenoti-auto-loop.ts"
+
 [http_service]
   internal_port = 8080
   force_https = true
