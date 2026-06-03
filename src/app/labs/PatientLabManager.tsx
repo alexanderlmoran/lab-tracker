@@ -154,17 +154,15 @@ export function ManageLabsButton({
       return next;
     });
   }
-  // Click a person's name → select (or clear) all of their rows in one go.
+  // Click a person's name → FOCUS just their rows (replace the selection), so
+  // working one family member at a time can't bleed onto a sibling. Clicking
+  // the already-focused person clears it. Row checkboxes stay additive for
+  // fine-grained tweaks.
   function selectPerson(who: string) {
     const ids = rows.filter((r) => normName(r.who) === normName(who)).map((r) => r.caseId);
     setSelected((prev) => {
-      const allOn = ids.every((id) => prev.has(id));
-      const next = new Set(prev);
-      for (const id of ids) {
-        if (allOn) next.delete(id);
-        else next.add(id);
-      }
-      return next;
+      const isExactly = prev.size === ids.length && ids.every((id) => prev.has(id));
+      return isExactly ? new Set<string>() : new Set(ids);
     });
   }
 
