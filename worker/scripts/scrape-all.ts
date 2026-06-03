@@ -16,11 +16,17 @@ import { materializePortalSessions } from "../src/lib/portal-sessions.js";
 import { loadRecipes } from "../src/recipes/load.js";
 import { makeRecipeScraper } from "../src/recipes/runner.js";
 import { fetchOpenCases, postResultReady } from "../src/tracker-client.js";
+import { vibrantScraper } from "../src/scrapers/vibrant.js";
+import type { LabScraper } from "../src/scrapers/base.js";
 
 loadEnvLocal();
 materializePortalSessions();
 
-const LABS = (process.env.SCRAPE_LABS ?? "access,cyrex,spectracell,glycanage,doctorsdata")
+// Hand-written scrapers (not recipes). Vibrant is pure-HTTP/api-token (no session
+// file), so it runs headless on Fly like the recipe portals.
+const HANDWRITTEN: Record<string, LabScraper> = { vibrant: vibrantScraper };
+
+const LABS = (process.env.SCRAPE_LABS ?? "access,cyrex,spectracell,glycanage,doctorsdata,vibrant")
   .split(",")
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
@@ -28,12 +34,15 @@ const LABS = (process.env.SCRAPE_LABS ?? "access,cyrex,spectracell,glycanage,doc
 const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`);
 
 async function scrapeLab(labKey: string): Promise<void> {
-  const recipe = (await loadRecipes()).find((r) => r.key === labKey);
-  if (!recipe) {
-    log(`${labKey}: no recipe (hand-written or unknown) — skipped`);
-    return;
+  let scraper: LabScraper | undefined = HANDWRITTEN[labKey];
+  if (!scraper) {
+    const recipe = (await loadRecipes()).find((r) => r.key === labKey);
+    if (!recipe) {
+      log(`${labKey}: no recipe or hand-written scraper — skipped`);
+      return;
+    }
+    scraper = makeRecipeScraper(recipe);
   }
-  const scraper = makeRecipeScraper(recipe);
   const cases = await fetchOpenCases(scraper.labName);
   if (cases.length === 0) {
     log(`${labKey}: 0 open cases`);
