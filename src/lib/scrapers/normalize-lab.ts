@@ -7,7 +7,20 @@
 
 const PORTALS = ["Access", "Cyrex", "Spectracell", "Genova", "GlycanAge", "DoctorsData", "Vibrant"] as const;
 
+// Scraper keys the worker exposes at POST /probe/:lab and /run/:lab — the
+// canonical portal name lower-cased. Mirrors the worker's resolveScrapers()
+// set (handwritten Vibrant + the recipe catalog).
+const PROBE_KEYS: ReadonlySet<string> = new Set(PORTALS.map((p) => p.toLowerCase()));
+
 const canon = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/** The worker scraper key a lab maps to, or null when no scraper covers it
+ * (Kennedy Krieger, ReliGen, Peptides, …). Gates the name-probe "Find result"
+ * button — there's nothing to probe for a portal we can't scrape. */
+export function probeKeyForLab(labName: string | null | undefined): string | null {
+  const key = normalizeLabName(labName).toLowerCase();
+  return PROBE_KEYS.has(key) ? key : null;
+}
 
 /** Map a raw lab name to its canonical scraper portal, or trimmed raw if none. */
 export function normalizeLabName(raw: string | null | undefined): string {

@@ -16,6 +16,7 @@ import { CaseDialog } from "./CaseDialog";
 import { PdfReviewModal } from "./PdfReviewModal";
 import { getPendingPdfForCase, type PendingPdf } from "./pdf-actions";
 import { LabPortalLinks } from "./LabPortalLinks";
+import { FindResultButton } from "./FindResultButton";
 import { RefreshLabStatusButton } from "./RefreshLabStatusButton";
 import { RefreshTrackingButton } from "./RefreshTrackingButton";
 import {
@@ -630,12 +631,17 @@ export function CaseDetail({
                   <span>{row.lab_panel ? `${row.lab_name} · ${row.lab_panel}` : row.lab_name}</span>
                   <LabPortalLinks labName={row.lab_name} />
                 </span>
-                <span className="text-[11px] text-zinc-500">
-                  Acc#{" "}
-                  {row.lab_external_ref ? (
-                    <span className="font-medium text-zinc-900">{row.lab_external_ref}</span>
-                  ) : (
-                    <span className="text-zinc-400">—</span>
+                <span className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
+                  <span>
+                    Acc#{" "}
+                    {row.lab_external_ref ? (
+                      <span className="font-medium text-zinc-900">{row.lab_external_ref}</span>
+                    ) : (
+                      <span className="text-zinc-400">—</span>
+                    )}
+                  </span>
+                  {row.lab_external_ref ? null : (
+                    <FindResultButton caseId={row.id} labName={row.lab_name} />
                   )}
                 </span>
               </span>
