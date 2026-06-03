@@ -290,6 +290,58 @@ app.post<{ Params: { lab: string } }>("/post-test/:lab", async (req, reply) => {
   });
 });
 
+// Name-probe: find a result for a card by PATIENT NAME (no accession needed) so
+// staff can verify + clear accession-less cards proactively. Scrapes the portal
+// for the name and returns the candidate result (ref + date + pdf size) WITHOUT
+// posting. Unlike /run, this isn't gated on the case being in the open-cases feed.
+app.post<{ Params: { lab: string }; Querystring: { name?: string; dob?: string } }>(
+  "/probe/:lab",
+  async (req, reply) => {
+    if ((req.headers.authorization ?? "") !== `Bearer ${SECRET}`) {
+      return reply.code(401).send({ ok: false, error: "unauthorized" });
+    }
+    const labKey = req.params.lab.toLowerCase();
+    const name = (req.query?.name ?? "").trim();
+    if (!name) return reply.code(400).send({ ok: false, error: "name query param required" });
+
+    const scraper = (await resolveScrapers())[labKey];
+    if (!scraper) return reply.code(404).send({ ok: false, error: `unknown lab: ${labKey}` });
+
+    // Synthetic case with NO accession → the scraper matches by name (+ dob).
+    const probeCase = {
+      caseId: "probe",
+      patientName: name,
+      patientDob: req.query?.dob || null,
+      patientEmail: "",
+      labName: scraper.labName,
+      labExternalRef: null,
+      sampleSentAt: null,
+      trackingDeliveredAt: null,
+      expectedResultAtMin: null,
+      expectedResultAtMax: null,
+    };
+
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const run = await scraper.run(browser, [probeCase]);
+      return reply.send({
+        ok: true,
+        lab: scraper.labName,
+        name,
+        found: run.found.map((f) => ({
+          ref: f.labExternalRef,
+          pdfBytes: f.pdfBase64 ? Buffer.from(f.pdfBase64, "base64").length : 0,
+          pdfFilename: f.pdfFilename,
+          resultIssuedAt: f.resultIssuedAt,
+        })),
+        errors: run.errors,
+      });
+    } finally {
+      await browser.close();
+    }
+  },
+);
+
 const port = Number(process.env.PORT ?? 8080);
 app.listen({ port, host: "0.0.0.0" }).catch((err) => {
   app.log.error(err);
