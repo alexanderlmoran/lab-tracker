@@ -23,8 +23,7 @@ import { LabsCatalogPanel } from "./LabsCatalogPanel";
 import { EmailTemplatesPanel } from "./EmailTemplatesPanel";
 import { LabPortalsPanel } from "./LabPortalsPanel";
 import { ScrapersPanel } from "./ScrapersPanel";
-import { RecipeEnginePanel } from "./RecipeEnginePanel";
-import { RecipesPanel } from "./RecipesPanel";
+import { PortalRecipesPanel } from "./PortalRecipesPanel";
 import { SettingsTabs } from "./SettingsTabs";
 import { parseSettingsTab } from "./tab";
 import { BulkRecoveryTable } from "../BulkRecoveryTable";
@@ -180,20 +179,14 @@ export default async function SettingsPage({
         {wantsScrapers && scrapers ? (
           <>
             <Section
-              title="Recipe engine"
-              description="Config-driven scrapers: which portals run as data-driven recipes vs hand-written, and the strategy stack each uses."
-            >
-              <RecipeEnginePanel />
-            </Section>
-            <Section
-              title="Recipe overrides"
-              description="Edit recipes in the DB — a row overrides the worker's built-in recipe of the same key. Requires the scraper_recipes migration applied + worker redeploy to take effect."
-            >
-              <RecipesPanel rows={recipeOverrides ?? []} />
-            </Section>
-            <Section
               title="Scrapers"
-              description="Status of each lab portal scraper. Use the per-row commands to capture a new portal or recalibrate one whose session expired."
+              description="Every portal's effective recipe (built-in or DB override) and its test actions in one place. Test = resolve & build · Dry-run = scrape without posting · Post test = full chain to the test patient's PB chart."
+            >
+              <PortalRecipesPanel overrides={recipeOverrides ?? []} />
+            </Section>
+            <Section
+              title="Add or recalibrate a portal"
+              description="Per-portal capture + scrape status. Use this to onboard a new lab portal or recalibrate one whose session expired — run the capture command, then scaffold from the wizard."
             >
               <ScrapersPanel rows={scrapers} />
             </Section>
