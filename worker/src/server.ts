@@ -270,7 +270,7 @@ app.post<{ Params: { lab: string } }>("/post-test/:lab", async (req, reply) => {
     patientName: testName,
     patientDob: testDob,
     expectedPatientId: testPatientId,
-    labName: `TEST — ${scraper.labName} ${found.resultIssuedAt?.slice(0, 10) ?? ""}`.trim(),
+    labName: `TEST — ${scraper.labName}${found.labExternalRef ? ` - Acc#${found.labExternalRef}` : ""}`,
     dateOrdered: found.resultIssuedAt ?? new Date().toISOString(),
     pdfPath: savePath,
     pdfFilename,

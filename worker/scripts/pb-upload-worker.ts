@@ -77,23 +77,24 @@ function cleanServiceName(raw: string | null): string | null {
   return raw.replace(/^\s*Labs\s*-\s*/i, "").trim() || null;
 }
 
-/** Compose the title shown on the PB chart. Order of preference:
- *   1. Cleaned Zenoti service name + accession  ("Access Custom · Acc# 007143558")
- *   2. Cleaned Zenoti service name only          ("Access Custom")
- *   3. lab_name + accession                      ("Access · Acc# 007143558")
- *   4. lab_name                                  ("Access")
- * Clinicians scan the chart left-to-right; richer titles let them tell
- * "Access — basic panel" from "Access — custom panel" without opening
- * the PDF. Accession # supports look-up in the source lab portal. */
+/** Compose the title shown on the PB chart, vendor-first (per Alex 2026-06-03):
+ *   "<Lab> - Acc#<accession> <descriptor>"  e.g. "Vibrant - Acc#007143558 Eboo Waste"
+ * where Lab = the portal/vendor (lab_name), accession = the lab's accession #,
+ * and descriptor = the cleaned Zenoti service / typed test name (e.g. "Gut
+ * Zoomer", "Eboo Waste"). Pieces drop out gracefully when missing:
+ *   no descriptor → "Vibrant - Acc#007143558"
+ *   no accession  → "Vibrant Eboo Waste"
+ *   neither       → "Vibrant" */
 function composePbLabTitle(
   labName: string,
   serviceName: string | null,
   accession: string | null,
 ): string {
-  const cleaned = cleanServiceName(serviceName);
-  const head = cleaned ?? labName;
-  if (!accession) return head;
-  return `${head} · Acc# ${accession}`;
+  const descriptor = cleanServiceName(serviceName);
+  const parts = [labName];
+  if (accession) parts.push(`- Acc#${accession}`);
+  if (descriptor && descriptor.toLowerCase() !== labName.toLowerCase()) parts.push(descriptor);
+  return parts.join(" ");
 }
 
 async function claimNext(): Promise<Job | null> {
