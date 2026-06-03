@@ -10,6 +10,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
+import { sameLab, sameName } from "@/lib/scrapers/normalize-lab";
 
 export const dynamic = "force-dynamic";
 
@@ -176,6 +177,44 @@ export async function POST(request: Request) {
         caseId: existingCaseId,
         created: false,
       });
+      continue;
+    }
+
+    // Adoption: no case carries this appointment id yet. Before creating one,
+    // try to ADOPT a recent manual case (no zenoti id) for the same patient +
+    // same portal — staff often enter cases by hand before the sync sees them,
+    // and we don't want to duplicate. Conservative: recent (≤14d) manual cases
+    // only, and adopt ONLY when exactly one matches (a patient with several
+    // same-lab cases is ambiguous → leave it, don't risk attaching the wrong one).
+    const adoptCutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: adoptPool } = await db
+      .from("lab_cases")
+      .select("id, patient_name, lab_name")
+      .is("zenoti_appointment_id", null)
+      .is("deleted_at", null)
+      .is("archived_at", null)
+      .gte("created_at", adoptCutoff);
+    const adoptMatches = ((adoptPool ?? []) as Array<{ id: string; patient_name: string; lab_name: string }>).filter(
+      (c) => sameName(c.patient_name, appt.patientFullName) && sameLab(c.lab_name, appt.labName),
+    );
+    if (adoptMatches.length === 1) {
+      const adopteeId = adoptMatches[0].id;
+      await db
+        .from("lab_cases")
+        .update({
+          zenoti_appointment_id: appt.zenotiAppointmentId,
+          zenoti_guest_id: appt.zenotiGuestId,
+          zenoti_service_name: appt.serviceName,
+        })
+        .eq("id", adopteeId);
+      await db.from("lab_events").insert({
+        case_id: adopteeId,
+        kind: "case_adopted",
+        actor: "worker:zenoti-sync",
+        note: `Adopted manual case into Zenoti appointment ${appt.zenotiAppointmentId} • ${appt.serviceName}`,
+        meta: { zenoti_appointment_id: appt.zenotiAppointmentId, service_name: appt.serviceName },
+      });
+      results.push({ zenotiAppointmentId: appt.zenotiAppointmentId, caseId: adopteeId, created: false });
       continue;
     }
 

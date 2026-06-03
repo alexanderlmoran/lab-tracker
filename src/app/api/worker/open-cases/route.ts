@@ -12,6 +12,7 @@
 
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
+import { sameLab } from "@/lib/scrapers/normalize-lab";
 
 export const dynamic = "force-dynamic";
 
@@ -41,12 +42,14 @@ export async function GET(request: Request) {
   }
 
   const db = getSupabaseAdmin();
+  // No exact lab_name filter at the DB: the staff-typed lab_name ("Access
+  // Custom", "access · custom") often doesn't equal the scraper's canonical
+  // portal, so we normalize and match in JS (sameLab) instead.
   const { data, error } = await db
     .from("lab_cases")
     .select(
       "id, patient_name, patient_dob, patient_email, lab_name, lab_external_ref, step2_partial_received, step4_complete_received",
     )
-    .eq("lab_name", lab)
     .not("lab_external_ref", "is", null)
     .eq("step5_complete_uploaded", false)
     .is("archived_at", null)
@@ -57,6 +60,7 @@ export async function GET(request: Request) {
   }
 
   const cases = ((data ?? []) as Row[])
+    .filter((c) => sameLab(c.lab_name, lab))
     .filter((c) => c.step4_complete_received || c.step2_partial_received)
     .map((c) => ({
       caseId: c.id,
