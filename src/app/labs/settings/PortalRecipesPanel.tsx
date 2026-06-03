@@ -113,14 +113,28 @@ export function PortalRecipesPanel({ overrides }: { overrides: ScraperRecipeRow[
 
   return (
     <div className="space-y-4 rounded-lg border border-zinc-200 bg-white p-6">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-start justify-between gap-3">
         <p className="text-sm text-zinc-700">
           Every portal&apos;s <span className="font-medium">effective recipe</span> and its test actions in one place. A
           portal runs its built-in recipe unless you add a <span className="font-medium">DB override</span> for it.
+          Per row: <span className="font-medium">Test</span> resolves the recipe, <span className="font-medium">Dry-run</span>{" "}
+          scrapes without posting.
         </p>
-        <span className="shrink-0 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-800">
-          {recipes}/{total} on the engine
-        </span>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-800">
+            {recipes}/{total} on the engine
+          </span>
+          <button
+            type="button"
+            onClick={() => run("access", "post")}
+            disabled={pending}
+            title="Full chain for the test patient → uploads to their PB chart. Proves the PB-upload step (identical for every portal)."
+            className="rounded-md border border-red-300 bg-red-50 px-2 py-1 text-[11px] font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+          >
+            {busy?.action === "post" ? "Posting…" : "Post test (PB upload check)"}
+          </button>
+          {result?.state.kind === "post" ? <ResultLine state={result.state} /> : null}
+        </div>
       </div>
 
       {error ? (
@@ -180,9 +194,6 @@ export function PortalRecipesPanel({ overrides }: { overrides: ScraperRecipeRow[
                       <button type="button" onClick={() => run(s.key, "dryRun")} disabled={pending} title="Scrape against open cases — does NOT post" className="text-amber-700 hover:text-amber-900 disabled:opacity-50">
                         {isBusy && busy.action === "dryRun" ? "Running…" : "Dry-run"}
                       </button>
-                      <button type="button" onClick={() => run(s.key, "post")} disabled={pending} title="Full chain → uploads to the TEST patient's PB chart" className="text-red-600 hover:text-red-800 disabled:opacity-50">
-                        {isBusy && busy.action === "post" ? "Posting…" : "Post test"}
-                      </button>
                       <span className="text-zinc-300">|</span>
                       {handwritten ? (
                         <span className="text-[11px] text-zinc-400">no override</span>
@@ -202,7 +213,7 @@ export function PortalRecipesPanel({ overrides }: { overrides: ScraperRecipeRow[
                       )}
                     </div>
 
-                    {result?.key === s.key ? <ResultLine state={result.state} /> : null}
+                    {result?.key === s.key && result.state.kind !== "post" ? <ResultLine state={result.state} /> : null}
                   </td>
                 </tr>
               );
