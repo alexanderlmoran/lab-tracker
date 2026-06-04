@@ -3,6 +3,7 @@
 
 import { NextResponse } from "next/server";
 import { runStaleDigest } from "@/lib/email/digests";
+import { archiveStaleProtocolReceived } from "@/lib/labs/auto-archive";
 
 export const dynamic = "force-dynamic";
 
@@ -23,5 +24,9 @@ export async function GET(request: Request) {
   }
 
   const summary = await runStaleDigest({});
-  return NextResponse.json({ ...summary, at: new Date().toISOString() });
+  // Tidy: archive protocol-received cases idle 21+ days (→ /labs/archived).
+  const autoArchived = await archiveStaleProtocolReceived({ olderThanDays: 21 }).catch(
+    (e) => ({ archived: 0, error: e instanceof Error ? e.message : String(e) }),
+  );
+  return NextResponse.json({ ...summary, autoArchived, at: new Date().toISOString() });
 }
