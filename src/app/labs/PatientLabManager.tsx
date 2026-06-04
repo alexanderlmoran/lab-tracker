@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { LabCase } from "@/lib/types";
 import { COLUMN_LABEL, getColumnFor } from "@/lib/columns";
 import { probeKeyForLab } from "@/lib/scrapers/normalize-lab";
+import { normalizeScannedTracking } from "@/lib/tracking/normalize";
 import { labelForCase, panelFor } from "@/lib/labs/label";
 import { LabCombobox } from "./LabCombobox";
 import {
@@ -173,7 +174,10 @@ export function ManageLabsButton({
     const target = scan;
     setScan(null);
     if (!target) return;
-    const value = code.trim();
+    // A FedEx label's big barcode is the 34-digit "96" string — slice out the
+    // real tracking number. Accession barcodes pass through untouched.
+    const value =
+      target.field === "tracking" ? normalizeScannedTracking(code) : code.trim();
     if (!value) return;
     if (target.id.startsWith("new:")) {
       const key = Number(target.id.slice(4));
