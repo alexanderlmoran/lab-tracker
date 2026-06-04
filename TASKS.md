@@ -1,6 +1,38 @@
 # Lab Tracker — Backlog
 
 Add new entries at the top of each section. Move items to `## Done` once shipped.
+See also `docs/PLAYBOOK.md` (reuse index — read before building).
+
+## Roadmap — 2026-06-04 (current priorities, Alex's order)
+
+Order Alex set: **(2) partials safety → (3) FedEx pickup → reconcile the 57 → invoice gating.**
+The single biggest UNPROVEN thing remains: **no real PB post has ever run end-to-end** — only the synthetic Leila test patient. Prove it the next time a real *complete* result is in a portal.
+
+### (2) Partials safety — v1 SHIPPED, hardening remains
+Vibrant & Access drip partial results; the scraper grabbed a finished section and (because scrape-all never passed isPartial) marked the whole case COMPLETE → could post an incomplete lab + fire the all-done cascade.
+- **DONE:** `ScrapeResult.isPartial` + `ResultReadyPayload.isPartial` threaded; `scrape-all` force-stages `PARTIAL_PRONE_LABS = {vibrant, access}` as **partial (step 2)** so they never auto-complete. Human confirms completeness at Approve.
+- **TODO real completeness detection:** HAR-capture Vibrant `getReportStatusListV2` for a PARTIAL order (e.g. Michelle Scheumeister, 4/112 markers) AND a COMPLETE one → diff to find the pending/total field → set isPartial precisely instead of always-partial. Access: find its complete-signal (recipe-level `isPartial`).
+- **TODO UI:** "Approve as complete vs partial" affordance in the PDF review modal (right now the human can't promote a staged partial to complete on approve).
+- **TODO:** apply the partial-prone override to `/run` (server.ts), not just scrape-all.
+
+### Turnaround auto-learn (Alex idea 2026-06-04)
+Poll daily for when results actually arrive; measure the real sample→result turnaround per lab; write it back to **Settings → Lab catalog turnaround** (`labs_catalog.turnaround_days_min/max`). That turnaround drives the auto-pull result-window (`open-cases` effectiveWindow), which drives get-PDF + post. So learned turnaround = tighter, self-tuning detection. Source data: `lab_events` (sample-sent timestamp) → first result-staged timestamp.
+
+### (3) FedEx schedule-pickup button
+FedEx is already configured (tracking). Use their **Create Pickup API** (same OAuth) → a "Schedule FedEx pickup" action on the board (per-day or per-shipment) that books the pickup from the clinic address and stores the confirmation # on the case(s).
+
+### Reconcile the 57 (sample-sent backlog)
+Today's `open-cases` fallback-window fix (commit d77161a) already makes **accessioned** sample-sent cards auto-pull. Remaining: surface which sample-sent cards **lack an accession** (can't scrape) so staff add it via the grid 🔍 probe.
+
+### Invoice gating (chief's ask — needs requirements first)
+Chief wants Zenoti **invoice / paid / closed-invoice / package** status surfaced on cards to decide if labs should be sent, with a notification. BLOCKED until Alex learns Zenoti's invoice/package model from him. Then: pull paid/closed status per guest/appointment → "OK to send" badge + unpaid notification.
+
+### Reports — work-volume metrics over time
+Add an "Activity over time" section to `/labs/reports` from `lab_events`: cases created/day, advanced/day by step, patients touched ("yesterday I did 12–18"). 
+
+### Other queued
+- **Vibrant one-PDF-per-accession** (linked result group): one scrape of an accession attaches the same PDF to all cards sharing it + advances them together (no 3× work; keeps per-lab cards).
+- **Genova session is DEAD** (reCAPTCHA+MFA) — refresh before any Genova case can pull.
 
 ## End-state pipeline (the vision we're building toward)
 

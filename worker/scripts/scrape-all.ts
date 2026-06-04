@@ -31,6 +31,16 @@ const LABS = (process.env.SCRAPE_LABS ?? "access,cyrex,spectracell,glycanage,doc
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 
+// PATIENT SAFETY: these labs drip partial results (a Vibrant Zoomer's sections,
+// Access blood panels). The scraper can pull a finished section while the rest
+// of the order is still pending — we CANNOT confirm order-level completeness
+// from the portal yet (needs a HAR capture of the report-status pending count).
+// So anything auto-pulled for these is staged as PARTIAL (step 2), never auto-
+// completed (step 4) — the human confirms completeness at Approve. A complete
+// report mis-labeled "partial" is a harmless nuisance; a partial mis-labeled
+// "complete" fires the all-done cascade + posts an incomplete lab. See TASKS.md.
+const PARTIAL_PRONE_LABS = new Set(["vibrant", "access"]);
+
 const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`);
 
 async function scrapeLab(labKey: string): Promise<void> {
@@ -63,6 +73,8 @@ async function scrapeLab(labKey: string): Promise<void> {
           pdfFilename: r.pdfFilename,
           resultIssuedAt: r.resultIssuedAt,
           source: `worker:${labKey}`,
+          // Drip labs stage as partial unless the scraper proves completeness.
+          isPartial: PARTIAL_PRONE_LABS.has(labKey) || Boolean(r.isPartial),
         });
         posted += 1;
       } catch (err) {

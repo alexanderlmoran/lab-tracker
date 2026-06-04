@@ -7,6 +7,10 @@ export type ScrapeResult = {
   pdfBase64: string;
   pdfFilename: string;
   resultIssuedAt?: string;
+  /** Set true when the scraper KNOWS this is a partial/interim report (not the
+   * full order). Drip labs (Vibrant/Access) are also force-staged partial by
+   * scrape-all until per-portal completeness detection exists. */
+  isPartial?: boolean;
 };
 
 export type ScrapeRun = {

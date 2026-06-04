@@ -39,6 +39,10 @@ export type ResultReadyPayload = {
   pdfFilename: string;
   resultIssuedAt?: string;
   source: string;
+  /** When true the tracker marks step 2 (partial received) instead of step 4
+   * (complete) — so a drip lab (Vibrant/Access) can't auto-complete a case off
+   * a partial report. The result-ready route already understands this flag. */
+  isPartial?: boolean;
 };
 
 export async function postResultReady(payload: ResultReadyPayload): Promise<void> {
