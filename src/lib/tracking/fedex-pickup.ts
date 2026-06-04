@@ -124,29 +124,40 @@ export async function schedulePickup(input: SchedulePickupInput): Promise<Schedu
 
   const { token, base } = await getPickupToken();
 
+  // Body shape verified against the official Pickup Request API OpenAPI spec
+  // (Alex pulled it 2026-06-04): `countryRelationship` is SINGULAR, the ready
+  // timestamp needs a timezone offset, contact wants companyName, address wants
+  // `residential`. (The remaining SHIPMENT.USER.UNAUTHORIZED is a FedEx-side
+  // account/key authorization gate — see TASKS.md — not a body problem.)
+  const readyTime = input.readyTime ?? process.env.FEDEX_PICKUP_READY_TIME ?? "14:30:00";
+  const tzOffset = process.env.FEDEX_PICKUP_UTC_OFFSET ?? "-04:00"; // Miami EDT; -05:00 in winter
   const body = {
-    associatedAccountNumber: { value: cfg.account },
+    associatedAccountNumber: { key: "", value: cfg.account },
     originDetail: {
       pickupLocation: {
-        contact: { personName: cfg.contactName, phoneNumber: cfg.contactPhone },
+        contact: {
+          personName: cfg.contactName,
+          companyName: cfg.contactName,
+          phoneNumber: cfg.contactPhone,
+        },
         address: {
           streetLines: [cfg.street],
           city: cfg.city,
           stateOrProvinceCode: cfg.state,
           postalCode: cfg.zip,
           countryCode: cfg.country,
+          residential: false,
         },
       },
-      // Alex's preference: pickup window 2:30–4:30pm on lab days. Ready at
-      // 14:30, clinic close (customerCloseTime) defaults to 16:30 via env.
-      readyDateTimestamp: `${input.readyDate}T${input.readyTime ?? process.env.FEDEX_PICKUP_READY_TIME ?? "14:30:00"}`,
+      // Alex's preference: ready 2:30pm, clinic close (customerCloseTime) 4:30pm.
+      readyDateTimestamp: `${input.readyDate}T${readyTime}${tzOffset}`,
       customerCloseTime: cfg.closeTime,
+      earlyPickup: false,
     },
     totalWeight: { units: "LB", value: Math.max(1, input.packageCount ?? 1) },
-    packageCount: Math.max(1, input.packageCount ?? 1),
     carrierCode: input.carrierCode ?? "FDXE",
     remarks: input.remarks ?? "Lab sample pickup",
-    countryRelationships: "DOMESTIC",
+    countryRelationship: "DOMESTIC",
   };
 
   const res = await fetch(`${base}/pickup/v1/pickups`, {
