@@ -408,6 +408,11 @@ async function searchReports(
  *  the ready one whose collection date is closest to the case's known draw date
  *  (fallback: newest). */
 function matchSearchRow(c: OpenCase, rows: RowSnapshot[]): RowSnapshot | null {
+  // Skip accessions already rejected for this case ("keep searching" memory) —
+  // so a stale/wrong result the human disapproved is never re-offered.
+  const dismissed = new Set(c.dismissedRefs ?? []);
+  if (dismissed.size) rows = rows.filter((r) => !dismissed.has(r.accession.trim()));
+
   if (c.labExternalRef) {
     const byRef = rows.find((r) => r.accession.trim() === c.labExternalRef);
     if (byRef) return byRef;

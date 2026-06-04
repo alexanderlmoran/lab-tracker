@@ -208,7 +208,7 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
         {/* ── Action bar ───────────────────────────────────────────── */}
         <div className="flex items-center justify-between gap-3 border-t border-zinc-200 bg-zinc-50 px-4 py-3">
           <div className="text-[11px] text-zinc-500">
-            {error ? <span className="text-red-700">{error}</span> : "Approve uploads to PracticeBetter. Wrong PDF re-runs matching."}
+            {error ? <span className="text-red-700">{error}</span> : "Approve uploads to PracticeBetter. Disapprove skips this result and keeps searching for a newer one."}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -216,8 +216,9 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
               className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-[12px] font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
               disabled={isPending}
               onClick={() => run("wrong_pdf")}
+              title="This isn't the right result — skip this accession and keep searching the portal for a newer one"
             >
-              {pendingAction === "wrong_pdf" ? "Marking…" : "Wrong PDF"}
+              {pendingAction === "wrong_pdf" ? "Marking…" : "Disapprove — keep searching"}
             </button>
             {pdf.hadUploadFailure ? (
               <button

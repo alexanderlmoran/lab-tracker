@@ -249,9 +249,11 @@ const DisapproveInput = z.object({
 });
 
 /**
- * Staff says the PDF is wrong (wrong patient, corrupt, unrelated lab). We
- * supersede the PDF row + blank `lab_external_ref` so the scraper will
- * attempt a fresh name+DOB match on the next poll.
+ * Staff says the PDF is wrong (wrong patient, corrupt, or — the common case —
+ * a stale result that isn't this case's draw). We supersede the PDF, blank
+ * `lab_external_ref` so the scraper re-matches by name+DOB, AND remember the
+ * rejected accession in `dismissed_refs` so the scraper SKIPS it next time and
+ * keeps searching for a newer result instead of re-offering the same one.
  */
 export async function disapproveWrongPdf(
   input: z.infer<typeof DisapproveInput>,
@@ -276,6 +278,27 @@ export async function disapproveWrongPdf(
   });
   if (auditErr) return { ok: false, error: auditErr.message };
 
+  // Capture the rejected accession (from the PDF, falling back to the case)
+  // and the current dismissed list BEFORE we supersede / blank anything.
+  const { data: pdfRow } = await db
+    .from("lab_case_pdfs")
+    .select("external_ref")
+    .eq("id", parsed.data.pdfId)
+    .maybeSingle();
+  const { data: caseRow } = await db
+    .from("lab_cases")
+    .select("lab_external_ref, dismissed_refs")
+    .eq("id", parsed.data.caseId)
+    .maybeSingle();
+  const rejectedRef =
+    ((pdfRow?.external_ref as string | null) ??
+      (caseRow?.lab_external_ref as string | null) ??
+      "")?.trim() || null;
+  const existingDismissed = (caseRow?.dismissed_refs as string[] | null) ?? [];
+  const dismissed_refs = rejectedRef
+    ? Array.from(new Set([...existingDismissed, rejectedRef]))
+    : existingDismissed;
+
   const supersedeReason = parsed.data.notes ?? "marked wrong by staff";
   const { error: pdfErr } = await db
     .from("lab_case_pdfs")
@@ -286,10 +309,11 @@ export async function disapproveWrongPdf(
     .eq("id", parsed.data.pdfId);
   if (pdfErr) return { ok: false, error: pdfErr.message };
 
-  // Blank the accession so the scraper re-matches by name+DOB next poll.
+  // Blank the accession so the scraper re-matches by name+DOB next poll, and
+  // record the rejected ref so it skips it and keeps searching.
   const { error: caseErr } = await db
     .from("lab_cases")
-    .update({ lab_external_ref: null })
+    .update({ lab_external_ref: null, dismissed_refs })
     .eq("id", parsed.data.caseId);
   if (caseErr) return { ok: false, error: caseErr.message };
 

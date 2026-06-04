@@ -40,6 +40,7 @@ type Row = {
   expected_result_at_max: string | null;
   collection_date: string | null;
   created_at: string;
+  dismissed_refs: string[] | null;
 };
 
 export async function GET(request: Request) {
@@ -63,7 +64,7 @@ export async function GET(request: Request) {
   const { data, error } = await db
     .from("lab_cases")
     .select(
-      "id, patient_name, patient_dob, patient_email, lab_name, lab_external_ref, step1_sample_sent, step2_partial_received, step4_complete_received, expected_result_at_min, expected_result_at_max, collection_date, created_at",
+      "id, patient_name, patient_dob, patient_email, lab_name, lab_external_ref, step1_sample_sent, step2_partial_received, step4_complete_received, expected_result_at_min, expected_result_at_max, collection_date, created_at, dismissed_refs",
     )
     .not("lab_external_ref", "is", null)
     .eq("step5_complete_uploaded", false)
@@ -127,6 +128,7 @@ export async function GET(request: Request) {
       trackingDeliveredAt: null,
       expectedResultAtMin: null,
       expectedResultAtMax: null,
+      dismissedRefs: c.dismissed_refs ?? [],
     }));
 
   return NextResponse.json({ ok: true, cases });

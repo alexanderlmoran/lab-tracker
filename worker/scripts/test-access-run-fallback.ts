@@ -43,6 +43,14 @@ try {
   for (const e of run.errors) console.log(`  ERROR ${e.caseId}: ${e.message}`);
   const ok = run.found[0]?.labExternalRef === "006675487";
   console.log(`\nexpected acc 006675487 (collected 01/20/2026): ${ok ? "✓ MATCH" : "✗ got " + (run.found[0]?.labExternalRef ?? "nothing")}`);
+
+  // Now prove the dismissed-refs "keep searching" cache: with 006675487
+  // rejected, the scraper must NOT re-offer it.
+  console.log("\n--- with 006675487 dismissed (keep-searching cache) ---");
+  const run2 = await accessScraper.run(browser, [{ ...aged, dismissedRefs: ["006675487"] }]);
+  const got2 = run2.found[0]?.labExternalRef ?? "nothing";
+  const skipOk = got2 !== "006675487";
+  console.log(`  got acc=${got2}  → dismissed 006675487 was ${skipOk ? "✓ SKIPPED" : "✗ RE-OFFERED (bug)"}`);
 } catch (e) {
   console.error("FATAL:", e instanceof Error ? e.message : e);
   process.exit(1);

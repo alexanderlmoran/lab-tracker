@@ -17,6 +17,10 @@ export type OpenCase = {
   trackingDeliveredAt: string | null;
   expectedResultAtMin: string | null;
   expectedResultAtMax: string | null;
+  /** Accessions previously rejected for this case (Disapprove / engine
+   *  date-mismatch). The scraper skips these so it keeps searching for a
+   *  newer result instead of re-offering the same wrong one. */
+  dismissedRefs?: string[];
 };
 
 export async function fetchOpenCases(lab: string): Promise<OpenCase[]> {
