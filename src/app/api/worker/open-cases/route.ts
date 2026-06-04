@@ -13,8 +13,18 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { sameLab } from "@/lib/scrapers/normalize-lab";
+import { findLabByName, predictResultDates } from "@/lib/labs/catalog";
 
 export const dynamic = "force-dynamic";
+
+// Fallback turnaround when the catalog has no min/max for a lab (e.g. Vibrant).
+// Keeps every accessioned sample-sent case enterable into the result window so
+// the scrape can detect results — without it the auto-pull only covered cases
+// FedEx-delivery set an expected date on.
+const DEFAULT_TURNAROUND_MIN_DAYS = 7;
+const DEFAULT_TURNAROUND_MAX_DAYS = 35;
+const addDays = (anchorIso: string, days: number) =>
+  new Date(new Date(anchorIso).getTime() + days * 86_400_000).toISOString().slice(0, 10);
 
 type Row = {
   id: string;
@@ -28,6 +38,8 @@ type Row = {
   step4_complete_received: boolean;
   expected_result_at_min: string | null;
   expected_result_at_max: string | null;
+  collection_date: string | null;
+  created_at: string;
 };
 
 export async function GET(request: Request) {
@@ -51,7 +63,7 @@ export async function GET(request: Request) {
   const { data, error } = await db
     .from("lab_cases")
     .select(
-      "id, patient_name, patient_dob, patient_email, lab_name, lab_external_ref, step1_sample_sent, step2_partial_received, step4_complete_received, expected_result_at_min, expected_result_at_max",
+      "id, patient_name, patient_dob, patient_email, lab_name, lab_external_ref, step1_sample_sent, step2_partial_received, step4_complete_received, expected_result_at_min, expected_result_at_max, collection_date, created_at",
     )
     .not("lab_external_ref", "is", null)
     .eq("step5_complete_uploaded", false)
@@ -75,13 +87,31 @@ export async function GET(request: Request) {
   const graceFloor = new Date(Date.now() - GRACE_DAYS * 86_400_000)
     .toISOString()
     .slice(0, 10);
-  const inResultWindow = (c: Row) =>
-    c.step1_sample_sent &&
-    !c.step2_partial_received &&
-    !c.step4_complete_received &&
-    !!c.expected_result_at_min &&
-    c.expected_result_at_min <= today &&
-    (!c.expected_result_at_max || c.expected_result_at_max >= graceFloor);
+
+  // Effective [min, max] result window. Prefer the delivery/import-set dates;
+  // otherwise predict from the catalog turnaround anchored on collection date
+  // (or created date), with a default turnaround for labs the catalog doesn't
+  // specify. This is what makes auto-pull cover NON-FedEx-delivered cases too.
+  const effectiveWindow = (c: Row): { min: string | null; max: string | null } => {
+    if (c.expected_result_at_min) {
+      return { min: c.expected_result_at_min, max: c.expected_result_at_max };
+    }
+    const anchor = c.collection_date ?? c.created_at.slice(0, 10);
+    const entry = findLabByName(c.lab_name);
+    const pred = entry ? predictResultDates(new Date(anchor), entry) : { minIso: null, maxIso: null };
+    return {
+      min: pred.minIso ?? addDays(anchor, DEFAULT_TURNAROUND_MIN_DAYS),
+      max: pred.maxIso ?? addDays(anchor, DEFAULT_TURNAROUND_MAX_DAYS),
+    };
+  };
+
+  const inResultWindow = (c: Row) => {
+    if (!c.step1_sample_sent || c.step2_partial_received || c.step4_complete_received) {
+      return false;
+    }
+    const { min, max } = effectiveWindow(c);
+    return !!min && min <= today && (!max || max >= graceFloor);
+  };
 
   const cases = ((data ?? []) as Row[])
     .filter((c) => sameLab(c.lab_name, lab))
