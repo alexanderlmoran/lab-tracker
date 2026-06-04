@@ -8,7 +8,9 @@
 
 import type { Browser, Page } from "playwright";
 import type { OpenCase } from "../tracker-client.js";
-import type { LabScraper, ScrapeRun, ScrapeResult } from "./base.js";
+import type { LabScraper, ScrapeRun, ScrapeResult, ProbeCandidate } from "./base.js";
+
+const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 const ACCESS_LOGIN_URL = "https://access.labsvc.net/labgen/";
 const USERNAME = process.env.ACCESS_USERNAME;
@@ -80,29 +82,51 @@ export const accessScraper: LabScraper = {
     try {
       await login(page);
       await openInbox(page);
-      const rows = await readInboxRows(page);
+      const inboxRows = await readGridRows(page);
 
+      // Pass 1: the recent inbox (~11 rows) — the fast path for fresh results.
+      // Only a CONFIDENT inbox match counts (exact accession, or a name+dob row
+      // close in date to the case's draw); an ambiguous/absent match drops to the
+      // search fallback, which has the patient's full history to disambiguate.
+      // This stops a patient's newest inbox row from masking an aged case.
+      const unmatched: OpenCase[] = [];
       for (const c of openCases) {
         try {
-          const match = matchRow(c, rows);
-          if (!match) continue;
-          if (!isReady(match)) continue;
-
-          const pdf = await downloadRowPdf(page, match.accession);
-          if (!pdf) continue;
-
-          found.push({
-            caseId: c.caseId,
-            labExternalRef: match.accession.trim(),
-            pdfBase64: pdf.base64,
-            pdfFilename: pdf.filename,
-            resultIssuedAt: parseFinalDate(match.finalDate),
-          });
+          const match = confidentInboxMatch(c, inboxRows);
+          if (match) {
+            if (isReady(match)) await pushFound(c, match, page, found);
+            continue;
+          }
+          if (readyToSearch(c)) unmatched.push(c);
         } catch (err) {
-          errors.push({
-            caseId: c.caseId,
-            message: err instanceof Error ? err.message : String(err),
-          });
+          errors.push({ caseId: c.caseId, message: msg(err) });
+        }
+      }
+
+      // Pass 2: Search Reports fallback. Aged results age off the inbox but are
+      // still retrievable via name search (findpat.cgi). One search per distinct
+      // patient; the search grid shares the inbox's column layout, so matchRow +
+      // downloadRowPdf work unchanged. Download right after each search, before
+      // the next search replaces the grid.
+      for (const group of groupByPatient(unmatched)) {
+        const { last, first } = nameParts(group[0].patientName);
+        let rows: RowSnapshot[];
+        try {
+          rows = await searchReports(page, last, first);
+        } catch (err) {
+          for (const c of group) {
+            errors.push({ caseId: c.caseId, message: `search failed: ${msg(err)}` });
+          }
+          continue;
+        }
+        for (const c of group) {
+          try {
+            const match = matchSearchRow(c, rows);
+            if (!match || !isReady(match)) continue;
+            await pushFound(c, match, page, found);
+          } catch (err) {
+            errors.push({ caseId: c.caseId, message: msg(err) });
+          }
         }
       }
     } finally {
@@ -111,7 +135,71 @@ export const accessScraper: LabScraper = {
 
     return { found, errors };
   },
+
+  // Find-result / probe path: list a patient's candidate results by NAME without
+  // downloading any PDF. Searches Access Reports and returns every row matching
+  // the patient (ready first, newest collection date first). Used by /probe so
+  // staff can surface + confirm an accession for aged, inbox-invisible cases.
+  async probeByName(
+    browser: Browser,
+    name: string,
+    dob?: string | null,
+  ): Promise<ProbeCandidate[]> {
+    if (!USERNAME || !PASSWORD) {
+      throw new Error("ACCESS_USERNAME / ACCESS_PASSWORD not configured");
+    }
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    page.on("dialog", (d) => d.accept().catch(() => {}));
+    try {
+      await login(page);
+      const { last, first } = nameParts(name);
+      const rows = await searchReports(page, last, first);
+      const dobNorm = normalizeDob(dob ?? null);
+      const nameNorm = normalizeName(name);
+      const mine = rows.filter(
+        (r) =>
+          normalizeName(r.name) === nameNorm &&
+          (!dobNorm || normalizeDob(r.dob) === dobNorm),
+      );
+      return mine
+        .slice()
+        .sort(
+          (a, b) =>
+            Number(isReady(b)) - Number(isReady(a)) ||
+            collectionMs(b) - collectionMs(a),
+        )
+        .map((r) => ({
+          ref: r.accession.trim() || null,
+          resultIssuedAt: parseFinalDate(r.finalDate) ?? null,
+          collectionDate: r.collectionDate || null,
+          status: r.status,
+        }));
+    } finally {
+      await ctx.close();
+    }
+  },
 };
+
+/** Stage a matched grid row into `found`: download its PDF, push a ScrapeResult.
+ *  No-op (returns) if the PDF can't be captured. Grid must currently show the
+ *  row (inbox or search results). */
+async function pushFound(
+  c: OpenCase,
+  match: RowSnapshot,
+  page: Page,
+  found: ScrapeResult[],
+): Promise<void> {
+  const pdf = await downloadRowPdf(page, match.accession);
+  if (!pdf) return;
+  found.push({
+    caseId: c.caseId,
+    labExternalRef: match.accession.trim(),
+    pdfBase64: pdf.base64,
+    pdfFilename: pdf.filename,
+    resultIssuedAt: parseFinalDate(match.finalDate),
+  });
+}
 
 async function login(page: Page): Promise<void> {
   await page.goto(ACCESS_LOGIN_URL, { waitUntil: "networkidle" });
@@ -129,7 +217,9 @@ async function openInbox(page: Page): Promise<void> {
   await page.waitForSelector("table.x-grid-item[data-recordid]", { timeout: 15000 });
 }
 
-async function readInboxRows(page: Page): Promise<RowSnapshot[]> {
+// Reads the currently-displayed ExtJS grid (inbox OR Search Reports results —
+// both share this exact column layout, verified 2026-06-04).
+async function readGridRows(page: Page): Promise<RowSnapshot[]> {
   // Iterate with locators rather than $$eval — tsx/esbuild injects a __name
   // helper that breaks when callbacks are serialized into the browser context.
   // One call per cell is slower but reliable across runtimes.
@@ -158,20 +248,28 @@ function isReady(row: RowSnapshot): boolean {
   return row.status.toLowerCase().includes("complete") && row.finalDate.length > 0;
 }
 
-function matchRow(c: OpenCase, rows: RowSnapshot[]): RowSnapshot | null {
+// A name+dob inbox match is only trustworthy when its collection date lands near
+// the case's known draw date — otherwise a patient's newer inbox result would be
+// wrongly claimed by an older, still-open case (and mask it from the search).
+const INBOX_MATCH_WINDOW_MS = 45 * 86_400_000;
+
+/** A CONFIDENT inbox match: exact accession, or a date-validated name+dob match.
+ *  Returns null when the inbox can't confidently resolve the case (aged result
+ *  that aged off the inbox, ambiguous multi-result patient, or no anchor date) —
+ *  those drop to Search Reports, which has the full history to disambiguate. */
+function confidentInboxMatch(c: OpenCase, rows: RowSnapshot[]): RowSnapshot | null {
   // O(1) by stored accession if we've matched this case before.
   if (c.labExternalRef) {
     const byRef = rows.find((r) => r.accession.trim() === c.labExternalRef);
     if (byRef) return byRef;
   }
-  // First-time match: patient name + DOB. Access displays "LAST, FIRST".
-  const dobNorm = normalizeDob(c.patientDob);
-  const nameNorm = normalizeName(c.patientName);
-  return (
-    rows.find(
-      (r) => normalizeName(r.name) === nameNorm && normalizeDob(r.dob) === dobNorm,
-    ) ?? null
-  );
+  const anchorIso = c.sampleSentAt ?? c.trackingDeliveredAt ?? c.expectedResultAtMin;
+  const anchorMs = anchorIso ? Date.parse(anchorIso) : NaN;
+  if (Number.isNaN(anchorMs)) return null; // no anchor → let search decide
+  // Reuse the date-closest matcher, then gate on the proximity window.
+  const best = matchSearchRow({ ...c, labExternalRef: null }, rows);
+  if (!best) return null;
+  return offsetFrom(best, anchorMs) <= INBOX_MATCH_WINDOW_MS ? best : null;
 }
 
 function normalizeName(s: string): string {
@@ -202,6 +300,170 @@ function parseFinalDate(s: string): string | undefined {
   if (!m) return undefined;
   const year = m[3].length === 2 ? `20${m[3]}` : m[3];
   return `${year}-${m[1]}-${m[2]}`;
+}
+
+/** Collection date (MM/DD/YYYY) → epoch ms, or 0 if unparseable. */
+function collectionMs(r: RowSnapshot): number {
+  const iso = parseFinalDate(r.collectionDate);
+  return iso ? Date.parse(`${iso}T00:00:00Z`) : 0;
+}
+
+// ── Search Reports (aged-result discovery) ─────────────────────────────────
+//
+// The inbox only holds ~11 recent rows; older results age off it but stay
+// retrievable via Search → Search Reports (the findpat.cgi name search). The
+// results land in the SAME ExtJS grid as the inbox, so readGridRows /
+// downloadRowPdf work on them unchanged. Reverse-engineered 2026-06-04.
+
+/** Split a tracker patient name into Access search fields (last + first,
+ *  uppercased). Handles "First Last", "First Middle Last", and "Last, First". */
+function nameParts(fullName: string): { last: string; first: string } {
+  const clean = fullName.replace(/[^a-zA-Z, ]/g, "").trim();
+  if (clean.includes(",")) {
+    const [last, first] = clean.split(",").map((p) => p.trim());
+    return { last: last.toUpperCase(), first: (first ?? "").toUpperCase() };
+  }
+  const parts = clean.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { last: "", first: "" };
+  if (parts.length === 1) return { last: parts[0].toUpperCase(), first: "" };
+  return {
+    last: parts[parts.length - 1].toUpperCase(),
+    first: parts.slice(0, -1).join(" ").toUpperCase(),
+  };
+}
+
+/** Run Search Reports for a name and return the result grid as rows. Opens the
+ *  Search → Search Reports panel, fills last/first, clicks the form submit (the
+ *  lowest "Search" button — the top-nav item sits higher), waits for the async
+ *  findpat job to finish, and reads the grid. Empty array = no results. */
+async function searchReports(
+  page: Page,
+  last: string,
+  first: string,
+): Promise<RowSnapshot[]> {
+  // The top-nav Search tile (#mainsearch) goes non-visible once the inbox panel
+  // is open, so a normal .click() times out. Click it programmatically by id —
+  // ExtJS handles the event regardless of CSS visibility.
+  await page.evaluate(() => (document.querySelector("#mainsearch") as HTMLElement | null)?.click());
+  await page.waitForTimeout(1000);
+  await page
+    .click('a:has-text("Search Reports"), button:has-text("Search Reports")')
+    .catch(() => {});
+  await page.waitForSelector("#splname-inputEl", { timeout: 15000 });
+  await page.fill("#splname-inputEl", last);
+  if (first) await page.fill("#spfname-inputEl", first).catch(() => {});
+
+  // The async search posts to findpat.cgi and reports done:true when finished.
+  let done = false;
+  const onResp = async (res: { url(): string; text(): Promise<string> }) => {
+    if (!/findpat\.cgi/i.test(res.url())) return;
+    try {
+      if (/"done"\s*:\s*true/i.test(await res.text())) done = true;
+    } catch {
+      /* ignore */
+    }
+  };
+  page.on("response", onResp);
+  try {
+    const btnInfo = await page.evaluate(() =>
+      Array.from(document.querySelectorAll("a.x-btn, button"))
+        .map((el, i) => ({
+          i,
+          text: (el.textContent || "").trim(),
+          top: Math.round((el as HTMLElement).getBoundingClientRect().top),
+        }))
+        .filter((b) => /search/i.test(b.text) && b.text.length < 20),
+    );
+    const target = btnInfo.sort((a, b) => b.top - a.top)[0];
+    if (!target) throw new Error("Access search submit button not found");
+    await page.evaluate((idx) => {
+      (
+        Array.from(document.querySelectorAll("a.x-btn, button"))[idx] as
+          | HTMLElement
+          | undefined
+      )?.click();
+    }, target.i);
+
+    // Poll up to ~40s: stop as soon as rows render, or settle briefly once the
+    // job reports done (covers the 0-results case without a full timeout).
+    for (let i = 0; i < 80; i++) {
+      const rows = await page.evaluate(
+        () => document.querySelectorAll("table.x-grid-item[data-recordid]").length,
+      );
+      if (rows > 0) break;
+      if (done) {
+        await page.waitForTimeout(2000);
+        break;
+      }
+      await page.waitForTimeout(500);
+    }
+  } finally {
+    page.off("response", onResp);
+  }
+  return readGridRows(page);
+}
+
+/** Like matchRow, but for the (often multi-row) search grid: exact accession
+ *  wins; otherwise filter to this patient and, when several results exist, pick
+ *  the ready one whose collection date is closest to the case's known draw date
+ *  (fallback: newest). */
+function matchSearchRow(c: OpenCase, rows: RowSnapshot[]): RowSnapshot | null {
+  if (c.labExternalRef) {
+    const byRef = rows.find((r) => r.accession.trim() === c.labExternalRef);
+    if (byRef) return byRef;
+  }
+  const dobNorm = normalizeDob(c.patientDob);
+  const nameNorm = normalizeName(c.patientName);
+  const mine = rows.filter(
+    (r) =>
+      normalizeName(r.name) === nameNorm &&
+      (!dobNorm || normalizeDob(r.dob) === dobNorm),
+  );
+  if (mine.length === 0) return null;
+  if (mine.length === 1) return mine[0];
+
+  const ready = mine.filter(isReady);
+  const pool = ready.length ? ready : mine;
+  const anchorIso = c.sampleSentAt ?? c.trackingDeliveredAt ?? c.expectedResultAtMin;
+  const anchorMs = anchorIso ? Date.parse(anchorIso) : NaN;
+  if (!Number.isNaN(anchorMs)) {
+    return pool
+      .map((r) => ({ r, off: offsetFrom(r, anchorMs) }))
+      .sort((a, b) => a.off - b.off)[0].r;
+  }
+  return pool.slice().sort((a, b) => collectionMs(b) - collectionMs(a))[0];
+}
+
+function offsetFrom(r: RowSnapshot, anchorMs: number): number {
+  const ms = collectionMs(r);
+  return ms ? Math.abs(ms - anchorMs) : Number.POSITIVE_INFINITY;
+}
+
+/** Group cases by patient (name + dob) so we search each patient once. */
+function groupByPatient(cases: OpenCase[]): OpenCase[][] {
+  const map = new Map<string, OpenCase[]>();
+  for (const c of cases) {
+    const key = `${normalizeName(c.patientName)}|${normalizeDob(c.patientDob)}`;
+    const arr = map.get(key) ?? [];
+    arr.push(c);
+    map.set(key, arr);
+  }
+  return [...map.values()];
+}
+
+/** Gate the (slow) search fallback to cases whose result could plausibly be
+ *  ready — delivered, past the expected-result window, aged, or timing-unknown
+ *  (bulk imports) — so scrape-all doesn't search freshly-sent samples every run. */
+function readyToSearch(c: OpenCase): boolean {
+  const now = Date.now();
+  if (c.trackingDeliveredAt) return true;
+  const min = c.expectedResultAtMin ? Date.parse(c.expectedResultAtMin) : NaN;
+  if (!Number.isNaN(min) && min <= now) return true;
+  // Bulk-import historicals often have all-null timing but are months old.
+  if (!c.sampleSentAt && !c.expectedResultAtMin && !c.expectedResultAtMax) return true;
+  const sent = c.sampleSentAt ? Date.parse(c.sampleSentAt) : NaN;
+  if (!Number.isNaN(sent) && sent <= now - 7 * 86_400_000) return true;
+  return false;
 }
 
 async function downloadRowPdf(

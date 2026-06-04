@@ -18,9 +18,31 @@ export type ScrapeRun = {
   errors: Array<{ caseId: string; message: string }>;
 };
 
+/** A candidate result surfaced by a name-search, WITHOUT downloading the PDF.
+ *  Powers the find-result / probe path so aged results surface cheaply. */
+export type ProbeCandidate = {
+  /** Accession / order number (the value staff would write onto the case). */
+  ref: string | null;
+  /** ISO date the result was finalized, if parseable. */
+  resultIssuedAt: string | null;
+  /** Collection date as shown in the portal (MM/DD/YYYY), for disambiguation. */
+  collectionDate: string | null;
+  /** Portal status string, e.g. "Complete". */
+  status: string;
+};
+
 export interface LabScraper {
   /** The labName value in lab_cases that this scraper handles (e.g. "Access"). */
   labName: string;
   /** Run a scrape pass against the lab portal for the given open cases. */
   run(browser: Browser, openCases: OpenCase[]): Promise<ScrapeRun>;
+  /** Optional: list candidate results for a patient by NAME (no PDF download).
+   *  When present, the worker's /probe endpoint prefers this over a full run —
+   *  so the find-result button can surface aged results without pulling every
+   *  PDF. Returns ready + not-ready candidates; caller decides what to show. */
+  probeByName?(
+    browser: Browser,
+    name: string,
+    dob?: string | null,
+  ): Promise<ProbeCandidate[]>;
 }

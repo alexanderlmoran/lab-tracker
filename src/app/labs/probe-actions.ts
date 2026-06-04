@@ -11,6 +11,10 @@ export type ProbeCandidate = {
   pdfBytes: number;
   pdfFilename: string | null;
   resultIssuedAt: string | null;
+  /** Set by name-search probes (e.g. Access): collection date + portal status,
+   *  so staff can pick the right accession from a multi-result history. */
+  collectionDate?: string | null;
+  status?: string | null;
 };
 
 export type ProbeResult = {

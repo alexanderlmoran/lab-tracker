@@ -307,6 +307,40 @@ app.post<{ Params: { lab: string }; Querystring: { name?: string; dob?: string }
     const scraper = (await resolveScrapers())[labKey];
     if (!scraper) return reply.code(404).send({ ok: false, error: `unknown lab: ${labKey}` });
 
+    // Fast path: scrapers that implement probeByName list candidates by name
+    // WITHOUT downloading any PDF — so aged results (invisible to the inbox)
+    // surface in seconds instead of pulling every report. Access uses this.
+    if (scraper.probeByName) {
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const cands = await scraper.probeByName(browser, name, req.query?.dob || null);
+        return reply.send({
+          ok: true,
+          lab: scraper.labName,
+          name,
+          found: cands.map((c) => ({
+            ref: c.ref,
+            pdfBytes: 0,
+            pdfFilename: null,
+            resultIssuedAt: c.resultIssuedAt,
+            collectionDate: c.collectionDate,
+            status: c.status,
+          })),
+          errors: [],
+        });
+      } catch (err) {
+        return reply.send({
+          ok: true,
+          lab: scraper.labName,
+          name,
+          found: [],
+          errors: [{ caseId: "probe", message: err instanceof Error ? err.message : String(err) }],
+        });
+      } finally {
+        await browser.close();
+      }
+    }
+
     // Synthetic case with NO accession → the scraper matches by name (+ dob).
     const probeCase = {
       caseId: "probe",

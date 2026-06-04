@@ -86,8 +86,13 @@ export function FindResultButton({
                   {f.ref}
                 </span>
                 <span className="text-[10px] text-zinc-500">
-                  {f.resultIssuedAt ? `${f.resultIssuedAt.slice(0, 10)} · ` : ""}
-                  {kb(f.pdfBytes)}
+                  {f.collectionDate
+                    ? `collected ${f.collectionDate}`
+                    : f.resultIssuedAt
+                      ? `result ${f.resultIssuedAt.slice(0, 10)}`
+                      : ""}
+                  {f.status ? ` · ${f.status}` : ""}
+                  {f.pdfBytes ? ` · ${kb(f.pdfBytes)}` : ""}
                 </span>
                 <button
                   type="button"
