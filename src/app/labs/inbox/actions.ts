@@ -195,9 +195,20 @@ export async function listInboundEmails(): Promise<
     // Chronological by when the email actually arrived (received_at), newest
     // first — not ingest time, which batches out of order.
     .order("received_at", { ascending: false })
-    .limit(200);
+    .limit(300);
   if (error) throw new Error(error.message);
-  const list = (emails ?? []) as InboundEmail[];
+
+  // Hide inbox noise — billing receipts, supply-order pings, and dismissed
+  // rows aren't actionable lab results. Kept in the DB; just not shown here.
+  const isNoise = (e: InboundEmail): boolean => {
+    if (e.parser_status === "dismissed") return true;
+    const from = (e.from_address ?? "").toLowerCase();
+    const subj = (e.subject ?? "").toLowerCase();
+    if (from.includes("billingdept@vibrant-america.com")) return true;
+    if (/vibrant receipt|collection supplies|supplies ordered/.test(subj)) return true;
+    return false;
+  };
+  const list = ((emails ?? []) as InboundEmail[]).filter((e) => !isNoise(e));
 
   if (list.length === 0) return [];
   const ids = list.map((e) => e.id);
