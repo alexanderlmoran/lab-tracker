@@ -50,6 +50,10 @@ const SENDER_TO_LAB: ReadonlyArray<{ pattern: RegExp; lab: string }> = [
   { pattern: /microbiomelabs|microbiome\s?labs/i, lab: "MicrobiomeLabs" },
   { pattern: /microgendx|microgen\s?dx/i, lab: "MicroGenDX" },
   { pattern: /infectolab|qbench\.net/i, lab: "Infectolab" },
+  // Kennedy Krieger Genetics Lab — email-only (geneticslab@kennedykrieger.org),
+  // password-protected PDF ("kki"). The KK→BodyBio forward + post is built on
+  // top of this detection. See project memory / TASKS.md.
+  { pattern: /kennedykrieger|geneticslab/i, lab: "Kennedy Krieger" },
 ];
 
 export function detectLabFromEmail(input: {
