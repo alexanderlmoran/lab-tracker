@@ -60,10 +60,11 @@ export async function PATCH(request: Request) {
     action !== "soft-delete" &&
     action !== "hard-delete" &&
     action !== "set-collection-date" &&
+    action !== "advance-step1" &&
     action !== "advance-step5"
   ) {
     return NextResponse.json(
-      { ok: false, error: "action must be archive | soft-delete | hard-delete | set-collection-date | advance-step5" },
+      { ok: false, error: "action must be archive | soft-delete | hard-delete | set-collection-date | advance-step1 | advance-step5" },
       { status: 400 },
     );
   }
@@ -142,6 +143,39 @@ export async function PATCH(request: Request) {
     });
     if (evErr) {
       console.warn(`[debug/cases] advance-step5 audit log failed for ${id}: ${evErr.message}`);
+    }
+    return NextResponse.json({ ok: true, id, action });
+  }
+
+  // "Sample sent" backfill: tick step 1 for a card that has a tracking # but
+  // was never advanced (e.g. tracking added via the old edit form). Only acts
+  // on rows that aren't already step1 and DO have a tracking number — refuses
+  // otherwise so it can't blanket-advance untracked cards. No email cascade.
+  if (action === "advance-step1") {
+    const { data, error } = await db
+      .from("lab_cases")
+      .update({ step1_sample_sent: true })
+      .eq("id", id)
+      .eq("step1_sample_sent", false)
+      .not("tracking_number", "is", null)
+      .select("id, step1_sample_sent");
+    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    if (!data || data.length === 0) {
+      return NextResponse.json(
+        { ok: false, error: "case not found, already sample-sent, or has no tracking number" },
+        { status: 409 },
+      );
+    }
+    const { error: evErr } = await db.from("lab_events").insert({
+      case_id: id,
+      kind: "step_toggled",
+      step: 1,
+      completed: true,
+      actor: "admin:backfill",
+      note: "Sample-sent backfill — card had a tracking number but wasn't advanced",
+    });
+    if (evErr) {
+      console.warn(`[debug/cases] advance-step1 audit log failed for ${id}: ${evErr.message}`);
     }
     return NextResponse.json({ ok: true, id, action });
   }

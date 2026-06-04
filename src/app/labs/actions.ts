@@ -386,10 +386,22 @@ export async function updateLabCase(
   }
 
   const next = dbColumns(parsed.data);
+  const update: Record<string, unknown> = { ...next };
   const changes: Record<string, { from: unknown; to: unknown }> = {};
   for (const [k, v] of Object.entries(next)) {
     const prev = (current as Record<string, unknown>)[k];
     if (prev !== v) changes[k] = { from: prev, to: v };
+  }
+
+  // Adding a tracking # means the sample shipped → advance to Sample Sent if it
+  // isn't already (same rule as the scan-at-intake and grid paths). Closes the
+  // gap where editing tracking in this form left the card stuck in "untouched".
+  const cur = current as LabCase;
+  const trackingNewlyAdded =
+    !!next.tracking_number && !cur.tracking_number && !cur.step1_sample_sent;
+  if (trackingNewlyAdded) {
+    update.step1_sample_sent = true;
+    changes.step1_sample_sent = { from: false, to: true };
   }
 
   if (Object.keys(changes).length === 0) {
@@ -398,7 +410,7 @@ export async function updateLabCase(
 
   const { error: updateErr } = await db
     .from("lab_cases")
-    .update(next)
+    .update(update)
     .eq("id", caseId);
 
   if (updateErr) return { ok: false, error: updateErr.message };
@@ -407,7 +419,7 @@ export async function updateLabCase(
     case_id: caseId,
     kind: "case_edited",
     actor: user.email ?? "admin",
-    meta: { changes },
+    meta: { changes, ...(trackingNewlyAdded ? { auto_sample_sent: "tracking added" } : {}) },
   });
 
   revalidatePath("/labs");
