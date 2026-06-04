@@ -16,7 +16,50 @@
 // (separate from Tracking). Until configured, schedulePickup() returns a clear
 // "not configured" error rather than calling FedEx.
 
-import { FedExError, fedexApiBase, getFedExAccessToken, isFedExConfigured } from "./fedex";
+import { FedExError } from "./fedex";
+
+// Pickup uses its OWN FedEx Developer credentials — the Pickup product is
+// separate from Tracking, so Alex created a dedicated key. Falls back to the
+// tracking key only if a pickup-specific one isn't set.
+function pickupApiCreds(): { key: string; secret: string; base: string } | null {
+  const key = process.env.FEDEX_PICKUP_API_KEY ?? process.env.FEDEX_API_KEY;
+  const secret = process.env.FEDEX_PICKUP_API_SECRET ?? process.env.FEDEX_API_SECRET;
+  const base =
+    process.env.FEDEX_PICKUP_API_BASE ?? process.env.FEDEX_API_BASE ?? "https://apis.fedex.com";
+  if (!key || !secret) return null;
+  return { key, secret, base };
+}
+
+let cachedPickupToken: { token: string; expiresAtMs: number } | null = null;
+
+async function getPickupToken(): Promise<{ token: string; base: string }> {
+  const creds = pickupApiCreds();
+  if (!creds) throw new FedExError("FedEx pickup API creds not set (FEDEX_PICKUP_API_KEY/SECRET).");
+  if (cachedPickupToken && cachedPickupToken.expiresAtMs > Date.now() + 30_000) {
+    return { token: cachedPickupToken.token, base: creds.base };
+  }
+  const body = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: creds.key,
+    client_secret: creds.secret,
+  });
+  const r = await fetch(`${creds.base}/oauth/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+  if (!r.ok) {
+    const text = await r.text().catch(() => "");
+    throw new FedExError(`FedEx pickup OAuth failed (${r.status})`, r.status, text);
+  }
+  const json = (await r.json()) as { access_token?: string; expires_in?: number };
+  if (!json.access_token) throw new FedExError("FedEx pickup OAuth missing access_token", 200, json);
+  cachedPickupToken = {
+    token: json.access_token,
+    expiresAtMs: Date.now() + Math.min(json.expires_in ?? 3000, 3000) * 1000,
+  };
+  return { token: cachedPickupToken.token, base: creds.base };
+}
 
 export type SchedulePickupInput = {
   /** YYYY-MM-DD the package is ready for pickup. */
@@ -65,15 +108,12 @@ function readPickupConfig(): PickupConfig | { missing: string[] } {
   return cfg;
 }
 
-/** True when both the FedEx API and the pickup-location env are configured. */
+/** True when the pickup API creds AND the pickup-location env are configured. */
 export function isPickupConfigured(): boolean {
-  return isFedExConfigured() && !("missing" in readPickupConfig());
+  return pickupApiCreds() != null && !("missing" in readPickupConfig());
 }
 
 export async function schedulePickup(input: SchedulePickupInput): Promise<SchedulePickupResult> {
-  if (!isFedExConfigured()) {
-    throw new FedExError("FedEx API not configured (FEDEX_API_KEY/SECRET/BASE).");
-  }
   const cfg = readPickupConfig();
   if ("missing" in cfg) {
     throw new FedExError(`FedEx pickup not configured — set: ${cfg.missing.join(", ")}`);
@@ -82,8 +122,7 @@ export async function schedulePickup(input: SchedulePickupInput): Promise<Schedu
     throw new FedExError("readyDate must be YYYY-MM-DD");
   }
 
-  const token = await getFedExAccessToken();
-  const base = fedexApiBase();
+  const { token, base } = await getPickupToken();
 
   const body = {
     associatedAccountNumber: { value: cfg.account },
