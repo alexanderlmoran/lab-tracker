@@ -12,14 +12,18 @@ primary_region = "iad"
 [build]
   dockerfile = "Dockerfile"
 
-# Two process groups, both from the same image:
-#   app    — the HTTP worker (/run, /test, /post-test). Scale-to-zero via http_service.
-#   zenoti — the always-on Zenoti auto-login + sync loop (today + tomorrow, ~3 min).
+# Process groups, all from the same image:
+#   app      — the HTTP worker (/run, /test, /post-test). Scale-to-zero via http_service.
+#   zenoti   — the always-on Zenoti auto-login + sync loop (today + tomorrow, ~3 min).
+#   tracking — pokes the app's /api/cron/refresh-tracking every ~2h (Vercel Hobby
+#              caps crons at once/day; the worker has no cap). Auto-advances
+#              in-transit cards to Sample Sent. See docs/PLAYBOOK.md.
 # Fly supervises these as real processes (reliable logs, restart on crash), unlike
 # ad-hoc `fly machine run` machines which exited immediately.
 [processes]
   app = "node dist/server.js"
   zenoti = "npx tsx scripts/zenoti-auto-loop.ts"
+  tracking = "npx tsx scripts/refresh-tracking-loop.ts"
 
 [http_service]
   internal_port = 8080

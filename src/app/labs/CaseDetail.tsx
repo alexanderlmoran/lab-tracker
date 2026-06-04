@@ -36,6 +36,7 @@ import {
 import { useRouter } from "next/navigation";
 import { getLabDestination, trackingDestinationWarning } from "@/lib/labs/catalog";
 import { labelForCase } from "@/lib/labs/label";
+import { getAdapterFor } from "@/lib/lab-adapters";
 
 function DeleteCaseButton({ caseId }: { caseId: string }) {
   const [pending, start] = useTransition();
@@ -559,6 +560,11 @@ export function CaseDetail({
   const done = completedStepCount(row);
   const workflow = getCaseWorkflow(row);
   const totalSteps = getWorkflowSteps(workflow).length;
+  // "Refresh lab status" is the legacy LabCorp/Quest pull system; the real
+  // portals use the worker scrapers + the "Find result" probe. Only show it
+  // when an adapter actually exists, so DoctorsData et al. don't surface a
+  // confusing "No adapter" error.
+  const hasStatusAdapter = getAdapterFor(row.lab_name) != null;
   const destination = getLabDestination(row.lab_name, row.lab_panel);
   const destWarning = trackingDestinationWarning({
     labName: row.lab_name,
@@ -707,14 +713,14 @@ export function CaseDetail({
             </p>
             <div className="flex items-center gap-2">
               <RefreshTrackingButton caseId={row.id} />
-              <RefreshLabStatusButton caseId={row.id} />
+              {hasStatusAdapter ? <RefreshLabStatusButton caseId={row.id} /> : null}
             </div>
           </div>
-        ) : (
+        ) : hasStatusAdapter ? (
           <div className="mt-2 flex items-center justify-end">
             <RefreshLabStatusButton caseId={row.id} />
           </div>
-        )}
+        ) : null}
       </section>
 
       {/* Shared draw notes — keyed by patient + collection_date so a

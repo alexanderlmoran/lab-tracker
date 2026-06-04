@@ -9,15 +9,22 @@ import { refreshTrackingForActiveCasesCore } from "@/lib/tracking/refresh-core";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const expected = process.env.CRON_SECRET;
-  if (!expected) {
+  // Accept either the Vercel cron secret OR the worker's shared secret — the
+  // Fly worker drives this on a couple-hours cadence (Vercel Hobby caps crons
+  // at once/day), authing with the secret it already has. See docs/PLAYBOOK.md.
+  const cronSecret = process.env.CRON_SECRET;
+  const workerSecret = process.env.WORKER_SHARED_SECRET;
+  if (!cronSecret && !workerSecret) {
     return NextResponse.json(
-      { ok: false, error: "CRON_SECRET not configured" },
+      { ok: false, error: "no auth secret configured" },
       { status: 500 },
     );
   }
   const auth = request.headers.get("authorization") ?? "";
-  if (auth !== `Bearer ${expected}`) {
+  const ok =
+    (cronSecret && auth === `Bearer ${cronSecret}`) ||
+    (workerSecret && auth === `Bearer ${workerSecret}`);
+  if (!ok) {
     return NextResponse.json(
       { ok: false, error: "Unauthorized" },
       { status: 401 },
