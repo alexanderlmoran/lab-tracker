@@ -26,6 +26,11 @@ Poll daily for when results actually arrive; measure the real sample→result tu
 ### Reconcile the 57 (sample-sent backlog)
 Today's `open-cases` fallback-window fix (commit d77161a) already makes **accessioned** sample-sent cards auto-pull. Remaining: surface which sample-sent cards **lack an accession** (can't scrape) so staff add it via the grid 🔍 probe.
 
+### Access scraper only reads the INBOX — aged results need SEARCH (found 2026-06-04)
+**Root cause of "Find result pulled nothing" (Fereshteh Krasowski, 3 Access, delivered Apr):** the Access recipe discovery is `dom-inbox` — it reads only `#maininbox` (verified live: 11 rows, all recent; Krasowski NOT there). Her ~2-month-old results aged off the inbox, so the probe (and scrape-all) can't see them. They ARE reachable via the portal's **Search → Search Reports** form. Mapped the live field IDs: last name `#splname-inputEl`, first `#spfname-inputEl`, accession `#spacc-inputEl`, requisition `#spreq-inputEl`, date range `#spstartdt-inputEl`/`#spenddt-inputEl`, plus a form **Search** button. Headless replication didn't return rows in ~6 tries (ExtJS date pickers + result grid are finicky) — needs a **codegen capture** of the real search + report-open to nail the exact interactions + the search-results grid selector + the download flow (likely select-row → "Print Selected" → intercept `+repdown`, same as inbox).
+- **Build:** add an Access **search-based discovery** (use Search Reports when the case isn't in the inbox / for backfill). Debug scripts: `worker/scripts/access-inbox-probe.ts`, `access-search-explore.ts`.
+- **Backfill flow (the goal):** for each open Access case → search by name (+accession/date) → pull PDF → **CHECK PB FIRST** (Fereshteh's are already posted — `listPatientLabRequests` in the PB uploader can verify) → post only if missing. Then advance the card.
+
 ### Invoice gating (chief's ask — needs requirements first)
 Chief wants Zenoti **invoice / paid / closed-invoice / package** status surfaced on cards to decide if labs should be sent, with a notification. BLOCKED until Alex learns Zenoti's invoice/package model from him. Then: pull paid/closed status per guest/appointment → "OK to send" badge + unpaid notification.
 
