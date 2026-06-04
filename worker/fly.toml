@@ -22,7 +22,13 @@ primary_region = "iad"
 #              downloads the portal PDF, stages it (Pending Upload) for the human
 #              Approve. The detection front of the pipeline.
 #   pbdrain  — pb-upload-worker drain loop: posts APPROVED PDFs to PracticeBetter.
-#              The PB post is still gated on the human Approve click.
+#              The PB post is gated on the human Approve click — OR the reconcile
+#              engine's auto-approve for ≥90-confidence captures.
+#   reconcile — closed-loop reconciliation (~3h, RECONCILE_LOOP_MS to override):
+#              for every stuck Access case, cross-references PB (already posted →
+#              advance to Complete Uploaded) and the portal (search → grade → ≥90
+#              auto-post, <90 flag for Nadia+Alex, stale/none → keep searching).
+#              The "full-proof" net for aged/forgotten cards.
 # Fly supervises these as real processes (reliable logs, restart on crash), unlike
 # ad-hoc `fly machine run` machines which exited immediately.
 [processes]
@@ -31,6 +37,7 @@ primary_region = "iad"
   tracking = "npx tsx scripts/refresh-tracking-loop.ts"
   scrape = "npx tsx scripts/scrape-all.ts --loop"
   pbdrain = "npx tsx scripts/pb-upload-worker.ts"
+  reconcile = "npx tsx scripts/reconcile.ts --patient=all --lab=Access --apply --loop"
 
 [http_service]
   internal_port = 8080

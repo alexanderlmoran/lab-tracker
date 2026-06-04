@@ -44,7 +44,9 @@ const argv = process.argv.slice(2);
 const patientArg = argv.find((a) => a.startsWith("--patient="))?.split("=")[1] ?? "Fereshteh Krasowski";
 const labArg = argv.find((a) => a.startsWith("--lab="))?.split("=")[1] ?? "Access";
 const apply = argv.includes("--apply");
+const loop = argv.includes("--loop");
 const log = (m = "") => console.log(m);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Only stage a candidate whose collection date is within this many days of the
 // case's draw date — anything older is almost certainly a different lab, so we
@@ -155,7 +157,7 @@ async function advanceStep5(id: string): Promise<{ ok: boolean; error?: string }
   return { ok: res.statusCode === 200 && !!body.ok, error: body.error };
 }
 
-async function main() {
+async function runOnce() {
   log("─".repeat(84));
   log(`RECONCILE ENGINE — lab=${labArg} patient=${patientArg}  ${apply ? "APPLY (LIVE)" : "DRY (no writes)"}`);
   log("─".repeat(84));
@@ -290,6 +292,28 @@ async function main() {
   log(`  keep-searching:             ${tally.searching}`);
   log(`  errors:                     ${tally.errors}`);
   if (!apply) log(`\nDry-run — re-run with --apply to act.`);
+}
+
+async function main() {
+  // `--loop` (used by the Fly `reconcile` process) re-runs the sweep every
+  // RECONCILE_LOOP_MS so aged/forgotten cards get caught + advanced/posted
+  // without anyone touching a terminal. A crash in one cycle is logged and the
+  // loop continues. Bare invocation stays one-shot (manual/dry runs).
+  if (!loop) {
+    await runOnce();
+    return;
+  }
+  const intervalMs = Number(process.env.RECONCILE_LOOP_MS ?? String(3 * 60 * 60 * 1000)); // 3h
+  log(`reconcile loop: every ${intervalMs}ms (lab=${labArg}, ${apply ? "APPLY" : "DRY"})`);
+  await sleep(10_000); // let app + sibling processes settle after a deploy
+  for (;;) {
+    try {
+      await runOnce();
+    } catch (err) {
+      log(`cycle error (continuing): ${err instanceof Error ? err.message : err}`);
+    }
+    await sleep(intervalMs);
+  }
 }
 
 main().catch((err) => {
