@@ -137,7 +137,9 @@ export async function schedulePickup(input: SchedulePickupInput): Promise<Schedu
           countryCode: cfg.country,
         },
       },
-      readyDateTimestamp: `${input.readyDate}T${input.readyTime ?? "09:00:00"}`,
+      // Alex's preference: pickup window 2:30–4:30pm on lab days. Ready at
+      // 14:30, clinic close (customerCloseTime) defaults to 16:30 via env.
+      readyDateTimestamp: `${input.readyDate}T${input.readyTime ?? process.env.FEDEX_PICKUP_READY_TIME ?? "14:30:00"}`,
       customerCloseTime: cfg.closeTime,
     },
     totalWeight: { units: "LB", value: Math.max(1, input.packageCount ?? 1) },
