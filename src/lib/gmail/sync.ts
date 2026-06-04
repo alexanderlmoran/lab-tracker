@@ -31,7 +31,7 @@ const NOTIFICATION_QUERY =
   'OR "results have been posted" OR "secure portal") ' +
   `-has:attachment ${COMMON_FILTERS}`;
 
-function decodeBase64Url(input: string): Buffer {
+export function decodeBase64Url(input: string): Buffer {
   const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
   const pad = normalized.length % 4 === 0 ? "" : "=".repeat(4 - (normalized.length % 4));
   return Buffer.from(normalized + pad, "base64");
@@ -46,7 +46,7 @@ function findHeader(
   return headers.find((h) => (h.name ?? "").toLowerCase() === lower)?.value ?? null;
 }
 
-function collectPdfParts(
+export function collectPdfParts(
   part: gmail_v1.Schema$MessagePart | undefined,
   acc: Array<{ filename: string; attachmentId: string; mimeType: string }> = [],
 ): Array<{ filename: string; attachmentId: string; mimeType: string }> {

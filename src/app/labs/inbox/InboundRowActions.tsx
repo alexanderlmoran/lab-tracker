@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import {
   applyInboundEmail,
   dismissInboundEmail,
+  forwardKkEmailToBodyBio,
   rematchInboundEmail,
 } from "./actions";
 import type { LabCase } from "@/lib/types";
@@ -16,6 +17,7 @@ export function InboundRowActions({
   activeCases,
   alreadyApplied,
   dismissOnly = false,
+  forwardable = false,
 }: {
   inboundId: string;
   matchedCaseId: string | null;
@@ -24,11 +26,33 @@ export function InboundRowActions({
   alreadyApplied: boolean;
   /** Notification-only rows: only the Dismiss action makes sense. */
   dismissOnly?: boolean;
+  /** Kennedy Krieger emails: show "Forward to BodyBio". */
+  forwardable?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [step, setStep] = useState<2 | 4>(defaultStep);
   const [caseId, setCaseId] = useState<string | null>(matchedCaseId);
+
+  function onForward() {
+    startTransition(async () => {
+      const r = await forwardKkEmailToBodyBio(inboundId);
+      if (!r.ok) alert(r.error);
+      else alert(`Forwarded ${r.data?.filename ?? "PDF"} → ${r.data?.to}`);
+    });
+  }
+
+  const forwardBtn = forwardable ? (
+    <button
+      type="button"
+      onClick={onForward}
+      disabled={pending}
+      className="rounded-md border border-indigo-300 bg-white px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-60"
+      title="Forward this Kennedy Krieger PDF to BodyBio (test address until KK_FORWARD_TO is set)"
+    >
+      Forward to BodyBio
+    </button>
+  ) : null;
 
   function onApply() {
     if (!caseId) {
@@ -66,19 +90,23 @@ export function InboundRowActions({
 
   if (dismissOnly) {
     return (
-      <button
-        type="button"
-        onClick={onDismiss}
-        disabled={pending}
-        className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
-      >
-        Dismiss
-      </button>
+      <div className="flex flex-wrap items-center gap-2">
+        {forwardBtn}
+        <button
+          type="button"
+          onClick={onDismiss}
+          disabled={pending}
+          className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
+        >
+          Dismiss
+        </button>
+      </div>
     );
   }
 
   return (
     <div className="flex flex-wrap items-center gap-2">
+      {forwardBtn}
       <select
         value={step}
         onChange={(e) => setStep(Number(e.target.value) as 2 | 4)}

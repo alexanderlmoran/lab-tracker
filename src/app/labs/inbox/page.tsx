@@ -86,6 +86,13 @@ export default async function InboxPage() {
           <ul className="space-y-3">
             {emails.map((email) => {
               const ext = email.parser_extracted ?? null;
+              // Kennedy Krieger emails get a "Forward to BodyBio" action. Match
+              // on the detected lab OR the raw sender (the encrypted KK PDF
+              // can't be text-parsed, so it often lands as needs_manual_pull
+              // with no lab detected).
+              const isKk =
+                ext?.lab_name === "Kennedy Krieger" ||
+                /geneticslab|kennedykrieger/i.test(email.from_address ?? "");
               const matchedCase = email.matched_case_id
                 ? caseIndex.get(email.matched_case_id)
                 : null;
@@ -232,6 +239,7 @@ export default async function InboxPage() {
                         defaultStep={defaultStep}
                         activeCases={slimCases}
                         alreadyApplied={false}
+                        forwardable={isKk}
                       />
                     ) : isManualPull ? (
                       <InboundRowActions
@@ -241,6 +249,7 @@ export default async function InboxPage() {
                         activeCases={slimCases}
                         alreadyApplied={false}
                         dismissOnly
+                        forwardable={isKk}
                       />
                     ) : null}
                   </div>
