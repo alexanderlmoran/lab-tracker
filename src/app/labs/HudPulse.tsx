@@ -87,12 +87,12 @@ export function HudPulse({ user, cases }: HudPulseProps) {
   const canManage: boolean = user.role === "admin" || user.role === "developer";
   const isDeveloper: boolean = user.role === "developer";
 
-  // Archived / Deleted / Inbox / lab-portal links all moved into Settings
-  // tabs. The /labs/inbox route still exists so Gmail polling management
-  // works when needed — it's just not in the primary nav anymore. Admins
-  // can deep-link to it from a bookmark if they need it.
+  // Inbox is back in the primary nav (Gmail ingest for lab-result emails —
+  // Kennedy Krieger especially, which is email-only). Archived / Deleted /
+  // lab-portal links still live in Settings tabs.
   const navItems: Array<{ href: string; label: string; badge?: number; show: boolean }> = [
     { href: "/labs", label: "Home", show: true },
+    { href: "/labs/inbox", label: "Inbox", show: true },
     { href: "/labs/import", label: "Import", show: true },
     { href: "/labs/patients", label: "Patients", show: true },
     { href: "/labs/reports", label: "Reports", show: isDeveloper },
