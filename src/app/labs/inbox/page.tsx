@@ -92,7 +92,11 @@ export default async function InboxPage() {
               // with no lab detected).
               const isKk =
                 ext?.lab_name === "Kennedy Krieger" ||
-                /geneticslab|kennedykrieger/i.test(email.from_address ?? "");
+                /geneticslab|kennedy.?krieger/i.test(email.from_address ?? "") ||
+                /kennedy.?krieger|genetics\s*lab/i.test(email.subject ?? "") ||
+                (email.attachments ?? []).some((a) =>
+                  /kennedy.?krieger|genetics/i.test(a.filename ?? ""),
+                );
               const matchedCase = email.matched_case_id
                 ? caseIndex.get(email.matched_case_id)
                 : null;

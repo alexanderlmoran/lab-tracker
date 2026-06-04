@@ -192,7 +192,9 @@ export async function listInboundEmails(): Promise<
   const { data: emails, error } = await db
     .from("inbound_emails")
     .select("*")
-    .order("created_at", { ascending: false })
+    // Chronological by when the email actually arrived (received_at), newest
+    // first — not ingest time, which batches out of order.
+    .order("received_at", { ascending: false })
     .limit(200);
   if (error) throw new Error(error.message);
   const list = (emails ?? []) as InboundEmail[];
