@@ -5,15 +5,17 @@ import { useRouter } from "next/navigation";
 import type { LabCase } from "@/lib/types";
 import { COLUMN_LABEL, getColumnFor } from "@/lib/columns";
 import { probeKeyForLab } from "@/lib/scrapers/normalize-lab";
-import { labelForCase } from "@/lib/labs/label";
+import { labelForCase, panelFor } from "@/lib/labs/label";
 import { LabCombobox } from "./LabCombobox";
 import {
   bulkSetStepCompleted,
   bulkUpdatePatientCases,
   createLabCases,
+  deleteLabCase,
   listPatientCases,
 } from "./actions";
 import { probeCaseResult } from "./probe-actions";
+import { BarcodeScanner } from "./BarcodeScanner";
 
 // Editable view of one existing case. We keep the originals alongside so Save
 // only writes the fields the operator actually changed (matches updateLabCase).
@@ -107,6 +109,9 @@ export function ManageLabsButton({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [saving, startSave] = useTransition();
+  // Which field a barcode scan should fill. `id` is a caseId for existing rows
+  // or `new:<key>` for an add-lab row; `field` is which input it lands in.
+  const [scan, setScan] = useState<{ id: string; field: "tracking" | "accession" } | null>(null);
   const newKey = useRef(1);
 
   // A patient card groups by email, so a family on one shared email (e.g. kids
@@ -161,6 +166,39 @@ export function ManageLabsButton({
 
   function patchRow(caseId: string, patch: Partial<RowEdit>) {
     setRows((rs) => rs.map((r) => (r.caseId === caseId ? { ...r, ...patch } : r)));
+  }
+
+  // A barcode came back — drop it into whichever field opened the scanner.
+  function applyScan(code: string) {
+    const target = scan;
+    setScan(null);
+    if (!target) return;
+    const value = code.trim();
+    if (!value) return;
+    if (target.id.startsWith("new:")) {
+      const key = Number(target.id.slice(4));
+      patchNewLab(key, target.field === "tracking" ? { tracking: value } : { accession: value });
+    } else {
+      patchRow(target.id, target.field === "tracking" ? { tracking: value } : { accession: value });
+    }
+  }
+
+  // Soft-delete a row (recoverable from Settings → Deleted). Writes immediately
+  // — there's no "undo on cancel" for a delete — then drops it from the grid.
+  function deleteRow(caseId: string, label: string) {
+    if (!confirm(`Delete "${label}"?\n\nSoft delete — recoverable from Settings → Deleted.`)) {
+      return;
+    }
+    startSave(async () => {
+      const r = await deleteLabCase(caseId);
+      if (!r.ok) {
+        setError(r.error ?? "Could not delete");
+        return;
+      }
+      setRows((rs) => rs.filter((row) => row.caseId !== caseId));
+      setSrcCases((cs) => cs.filter((c) => c.id !== caseId));
+      router.refresh();
+    });
   }
 
   function toggleSel(caseId: string) {
@@ -267,15 +305,25 @@ export function ManageLabsButton({
     [rows],
   );
   const pendingNewLabs = useMemo(() => newLabs.filter((n) => n.labName.trim().length > 0), [newLabs]);
-  const sentTargets = useMemo(
+  // Adding a tracking # to a not-yet-sent lab means the sample shipped → tick
+  // step 1 (Sample sent), mirroring the barcode-scan-at-intake behavior. The
+  // explicit "mark sample sent" checkbox covers rows without tracking.
+  const trackingAdvance = useMemo(
     () =>
-      markSent
-        ? rows
-            .filter((r) => !r.step1Done && (selected.size === 0 || selected.has(r.caseId)))
-            .map((r) => r.caseId)
-        : [],
-    [markSent, rows, selected],
+      rows
+        .filter((r) => !r.step1Done && !r.origTracking.trim() && r.tracking.trim().length > 0)
+        .map((r) => r.caseId),
+    [rows],
   );
+  const sentTargets = useMemo(() => {
+    const ids = new Set(trackingAdvance);
+    if (markSent) {
+      for (const r of rows) {
+        if (!r.step1Done && (selected.size === 0 || selected.has(r.caseId))) ids.add(r.caseId);
+      }
+    }
+    return [...ids];
+  }, [markSent, rows, selected, trackingAdvance]);
   const dirty = fieldUpdates.length > 0 || pendingNewLabs.length > 0 || sentTargets.length > 0;
 
   function onSaveAll() {
@@ -286,6 +334,18 @@ export function ManageLabsButton({
     const missing = pendingNewLabs.find((n) => !n.noAccession && !n.accession.trim());
     if (missing) {
       setError(`Accession # is required for “${missing.labName}”. Enter it, or tick “No accession #”.`);
+      return;
+    }
+
+    // Dedup: don't add a lab the patient already has (same provider + panel).
+    // Different panels of the same provider (Vibrant Total Tox vs Zoomer) are
+    // allowed — only an exact provider+panel repeat is blocked.
+    const labKey = (name: string, panel: string) =>
+      `${normName(name)}|${normName(panel)}`;
+    const existingKeys = new Set(rows.map((r) => labKey(r.labName, panelFor(srcCases.find((c) => c.id === r.caseId) ?? { lab_name: r.labName, lab_panel: null, zenoti_service_name: null }))));
+    const dup = pendingNewLabs.find((n) => existingKeys.has(labKey(n.labName, n.labPanel ?? "")));
+    if (dup) {
+      setError(`“${dup.labName}${dup.labPanel ? ` · ${dup.labPanel}` : ""}” already exists for this patient — remove the duplicate row.`);
       return;
     }
 
@@ -449,6 +509,7 @@ export function ManageLabsButton({
                       <th className="px-2 py-1.5 font-medium">Tracking #</th>
                       <th className="px-2 py-1.5 font-medium">Acc#</th>
                       <th className="px-2 py-1.5 font-medium">Status</th>
+                      <th className="px-2 py-1.5 font-medium" />
                     </tr>
                   </thead>
                   <tbody>
@@ -491,12 +552,23 @@ export function ManageLabsButton({
                           />
                         </td>
                         <td className="px-2 py-1.5">
-                          <input
-                            type="text"
-                            value={r.tracking}
-                            onChange={(e) => patchRow(r.caseId, { tracking: e.target.value })}
-                            className={`${inputCls} w-44`}
-                          />
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="text"
+                              value={r.tracking}
+                              onChange={(e) => patchRow(r.caseId, { tracking: e.target.value })}
+                              className={`${inputCls} w-40`}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setScan({ id: r.caseId, field: "tracking" })}
+                              title="Scan tracking barcode"
+                              aria-label="Scan tracking barcode"
+                              className="shrink-0 rounded border border-zinc-300 bg-white px-1 py-1 text-[11px] hover:bg-zinc-50"
+                            >
+                              📷
+                            </button>
+                          </div>
                         </td>
                         <td className="px-2 py-1.5">
                           <div className="flex items-center gap-1">
@@ -504,8 +576,17 @@ export function ManageLabsButton({
                               type="text"
                               value={r.accession}
                               onChange={(e) => patchRow(r.caseId, { accession: e.target.value })}
-                              className={`${inputCls} w-32 font-mono`}
+                              className={`${inputCls} w-28 font-mono`}
                             />
+                            <button
+                              type="button"
+                              onClick={() => setScan({ id: r.caseId, field: "accession" })}
+                              title="Scan accession barcode"
+                              aria-label="Scan accession barcode"
+                              className="shrink-0 rounded border border-zinc-300 bg-white px-1 py-1 text-[11px] hover:bg-zinc-50"
+                            >
+                              📷
+                            </button>
                             {probeKeyForLab(r.labName) ? (
                               <button
                                 type="button"
@@ -523,6 +604,18 @@ export function ManageLabsButton({
                           ) : null}
                         </td>
                         <td className="px-2 py-1.5 text-[11px] text-zinc-500">{r.column}</td>
+                        <td className="px-2 py-1.5">
+                          <button
+                            type="button"
+                            onClick={() => deleteRow(r.caseId, r.labLabel)}
+                            disabled={saving}
+                            title="Delete this lab (recoverable)"
+                            aria-label="Delete this lab"
+                            className="rounded border border-rose-200 bg-white px-1.5 py-0.5 text-[11px] text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                          >
+                            ✕
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -560,22 +653,43 @@ export function ManageLabsButton({
                       </label>
                       <label className="flex flex-col gap-0.5">
                         <span className="text-[10px] text-zinc-500">Tracking #</span>
-                        <input
-                          type="text"
-                          value={n.tracking}
-                          onChange={(e) => patchNewLab(n.key, { tracking: e.target.value })}
-                          className={`${inputCls} w-40`}
-                        />
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            value={n.tracking}
+                            onChange={(e) => patchNewLab(n.key, { tracking: e.target.value })}
+                            className={`${inputCls} w-36`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setScan({ id: `new:${n.key}`, field: "tracking" })}
+                            title="Scan tracking barcode"
+                            className="shrink-0 rounded border border-zinc-300 bg-white px-1 py-1 text-[11px] hover:bg-zinc-50"
+                          >
+                            📷
+                          </button>
+                        </div>
                       </label>
                       <label className="flex flex-col gap-0.5">
                         <span className="text-[10px] text-zinc-500">Acc#</span>
-                        <input
-                          type="text"
-                          value={n.accession}
-                          disabled={n.noAccession}
-                          onChange={(e) => patchNewLab(n.key, { accession: e.target.value })}
-                          className={`${inputCls} w-28 font-mono disabled:bg-zinc-100`}
-                        />
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            value={n.accession}
+                            disabled={n.noAccession}
+                            onChange={(e) => patchNewLab(n.key, { accession: e.target.value })}
+                            className={`${inputCls} w-24 font-mono disabled:bg-zinc-100`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setScan({ id: `new:${n.key}`, field: "accession" })}
+                            disabled={n.noAccession}
+                            title="Scan accession barcode"
+                            className="shrink-0 rounded border border-zinc-300 bg-white px-1 py-1 text-[11px] hover:bg-zinc-50 disabled:opacity-50"
+                          >
+                            📷
+                          </button>
+                        </div>
                       </label>
                       <label className="flex items-center gap-1 pb-1.5 text-[10px] text-zinc-600">
                         <input
@@ -658,6 +772,14 @@ export function ManageLabsButton({
           </div>
         ) : null}
       </dialog>
+
+      {scan ? (
+        <BarcodeScanner
+          title={scan.field === "tracking" ? "Scan tracking barcode" : "Scan accession barcode"}
+          onClose={() => setScan(null)}
+          onDetect={applyScan}
+        />
+      ) : null}
     </>
   );
 }

@@ -101,6 +101,35 @@ async function onDeliveredTransition(args: {
   }
 }
 
+/** Tick step 1 ("Sample sent to lab") with an automation audit note. Used when
+ * FedEx first shows the sample moving (in transit) — having a live tracking
+ * number that's scanned into the network is definitive proof it shipped, so the
+ * card shouldn't sit in "untouched" waiting for a manual tick or for delivery. */
+async function tickStep1SampleSent(
+  db: ReturnType<typeof getSupabaseAdmin>,
+  caseId: string,
+  actor: string,
+  note: string,
+): Promise<void> {
+  try {
+    await db.from("lab_cases").update({ step1_sample_sent: true }).eq("id", caseId);
+    await db.from("lab_events").insert({
+      case_id: caseId,
+      kind: "step_toggled",
+      step: 1,
+      completed: true,
+      actor,
+      note,
+    });
+  } catch (err) {
+    console.error("[tracking] step1 tick failed", err);
+  }
+}
+
+// FedEx statuses that mean the sample is moving in the network (not just a
+// printed label) — enough to call it "sample sent".
+const IN_TRANSIT_STATUSES = new Set(["in_transit", "out_for_delivery"]);
+
 function mergeUpdate(result: FedExTrackResult, existing: CaseRow) {
   if (result.status === "unknown" && existing.tracking_status === "delivered") {
     return null;
@@ -211,6 +240,15 @@ export async function refreshTrackingForActiveCasesCore(opts: {
           expectedMaxAlready: c.expected_result_at_max,
           deliveredAtIso: r.deliveredAtIso ?? null,
         });
+      } else if (IN_TRANSIT_STATUSES.has(r.status) && !c.step1_sample_sent) {
+        // Sample is moving but not yet delivered → advance to Sample Sent now
+        // (expected-result dates still wait for the delivery anchor).
+        await tickStep1SampleSent(
+          db,
+          c.id,
+          opts.actor,
+          `Auto-advanced: FedEx shows sample in transit${r.location ? ` (${r.location})` : ""}`,
+        );
       }
     }
   }

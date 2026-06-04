@@ -29,7 +29,13 @@ type Case = {
   collection_date: string | null;
   lab_external_ref: string | null;
   tracking_number: string | null;
+  tracking_status: string | null;
   zenoti_appointment_id: string | null;
+  step1_sample_sent: boolean;
+  step2_partial_received: boolean;
+  step3_partial_uploaded: boolean;
+  step4_complete_received: boolean;
+  step5_complete_uploaded: boolean;
   archived_at: string | null;
   deleted_at: string | null;
   created_at: string;
@@ -85,10 +91,22 @@ async function main() {
       const trk = c.tracking_number ? c.tracking_number : "—";
       const acc = c.lab_external_ref ? c.lab_external_ref : "—";
       const z = c.zenoti_appointment_id ? "Z" : "-";
+      // Which step column the card sits in (mirrors the board lanes).
+      const step = c.step5_complete_uploaded
+        ? "5·uploaded"
+        : c.step4_complete_received
+          ? "4·results-in"
+          : c.step3_partial_uploaded
+            ? "3·partial-up"
+            : c.step2_partial_received
+              ? "2·partial-in"
+              : c.step1_sample_sent
+                ? "1·SAMPLE-SENT"
+                : "0·untouched";
       console.log(
-        `   [${status(c).padEnd(8)}] ${z}  id=${c.id.slice(0, 8)}  ` +
+        `   [${status(c).padEnd(8)}] ${z}  id=${c.id.slice(0, 8)}  step=${step.padEnd(14)} ` +
           `trk=${trk.padEnd(20)} acc=${acc.padEnd(14)} ` +
-          `coll=${c.collection_date ?? "—"}  email=${c.patient_email}`,
+          `coll=${c.collection_date ?? "—"}  trkStatus=${c.tracking_status ?? "—"}  email=${c.patient_email}`,
       );
       console.log(
         `              lab="${c.lab_name}"${c.zenoti_service_name ? ` zsvc="${c.zenoti_service_name}"` : ""}  ` +
