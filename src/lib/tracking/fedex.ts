@@ -56,6 +56,17 @@ function readEnv(): { key: string; secret: string; base: string } {
   return { key, secret, base };
 }
 
+/** FedEx API base URL (sandbox/prod), reused by the pickup client. */
+export function fedexApiBase(): string {
+  return readEnv().base;
+}
+
+/** OAuth token getter — shared by tracking and the pickup client so both reuse
+ * the same cached client-credentials token. */
+export async function getFedExAccessToken(): Promise<string> {
+  return getAccessToken();
+}
+
 async function getAccessToken(): Promise<string> {
   if (cachedToken && cachedToken.expiresAtMs > Date.now() + 30_000) {
     return cachedToken.token;

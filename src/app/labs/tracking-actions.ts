@@ -9,7 +9,35 @@ import {
   isFedExConfigured,
   type FedExTrackResult,
 } from "@/lib/tracking/fedex";
+import {
+  isPickupConfigured,
+  schedulePickup,
+  type SchedulePickupInput,
+} from "@/lib/tracking/fedex-pickup";
 import type { ActionResult, TrackingStatus } from "@/lib/types";
+
+/** Book a FedEx carrier pickup from the clinic (reuses the tracking OAuth).
+ * Returns the confirmation number; degrades to a clear "not configured" error
+ * listing the missing env when the pickup product / account isn't set up. */
+export async function scheduleFedexPickup(
+  input: SchedulePickupInput,
+): Promise<ActionResult<{ confirmationNumber: string; location?: string }>> {
+  await requireSignedIn();
+  if (!isPickupConfigured()) {
+    return {
+      ok: false,
+      error:
+        "FedEx pickup isn't configured yet — set FEDEX_ACCOUNT_NUMBER + the FEDEX_PICKUP_* address env vars, and enable the Pickup product on the FedEx Developer project.",
+    };
+  }
+  try {
+    const r = await schedulePickup(input);
+    return { ok: true, data: { confirmationNumber: r.confirmationNumber, location: r.location } };
+  } catch (err) {
+    const msg = err instanceof FedExError ? err.message : err instanceof Error ? err.message : "Pickup failed";
+    return { ok: false, error: msg };
+  }
+}
 
 type CaseRow = {
   id: string;

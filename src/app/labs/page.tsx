@@ -11,6 +11,7 @@ import { TimeRangeTabs } from "./TimeRangeTabs";
 import { SearchBar } from "./SearchBar";
 import { KanbanFilterChips } from "./KanbanFilterChips";
 import { RefreshAllTrackingButton } from "./RefreshAllTrackingButton";
+import { SchedulePickupButton } from "./SchedulePickupButton";
 import { HudPulse } from "./HudPulse";
 import { LabsLegend } from "./LabsLegend";
 import { CaseDialog } from "./CaseDialog";
@@ -109,6 +110,7 @@ export default async function LabsPage({
               <TimeRangeTabs since={since} />
               {tab === "labs" ? <KanbanFilterChips /> : null}
               <RefreshAllTrackingButton />
+              <SchedulePickupButton />
               <span className="ml-auto">
                 <LabsLegend />
               </span>
