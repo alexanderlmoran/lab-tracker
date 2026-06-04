@@ -18,12 +18,19 @@ primary_region = "iad"
 #   tracking — pokes the app's /api/cron/refresh-tracking every ~2h (Vercel Hobby
 #              caps crons at once/day; the worker has no cap). Auto-advances
 #              in-transit cards to Sample Sent. See docs/PLAYBOOK.md.
+#   scrape   — scrape-all loop (~1h): pulls every open + in-result-window case,
+#              downloads the portal PDF, stages it (Pending Upload) for the human
+#              Approve. The detection front of the pipeline.
+#   pbdrain  — pb-upload-worker drain loop: posts APPROVED PDFs to PracticeBetter.
+#              The PB post is still gated on the human Approve click.
 # Fly supervises these as real processes (reliable logs, restart on crash), unlike
 # ad-hoc `fly machine run` machines which exited immediately.
 [processes]
   app = "node dist/server.js"
   zenoti = "npx tsx scripts/zenoti-auto-loop.ts"
   tracking = "npx tsx scripts/refresh-tracking-loop.ts"
+  scrape = "npx tsx scripts/scrape-all.ts --loop"
+  pbdrain = "npx tsx scripts/pb-upload-worker.ts"
 
 [http_service]
   internal_port = 8080

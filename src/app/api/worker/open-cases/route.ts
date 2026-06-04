@@ -23,8 +23,11 @@ type Row = {
   patient_email: string | null;
   lab_name: string;
   lab_external_ref: string | null;
+  step1_sample_sent: boolean;
   step2_partial_received: boolean;
   step4_complete_received: boolean;
+  expected_result_at_min: string | null;
+  expected_result_at_max: string | null;
 };
 
 export async function GET(request: Request) {
@@ -48,7 +51,7 @@ export async function GET(request: Request) {
   const { data, error } = await db
     .from("lab_cases")
     .select(
-      "id, patient_name, patient_dob, patient_email, lab_name, lab_external_ref, step2_partial_received, step4_complete_received",
+      "id, patient_name, patient_dob, patient_email, lab_name, lab_external_ref, step1_sample_sent, step2_partial_received, step4_complete_received, expected_result_at_min, expected_result_at_max",
     )
     .not("lab_external_ref", "is", null)
     .eq("step5_complete_uploaded", false)
@@ -59,9 +62,30 @@ export async function GET(request: Request) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 
+  // A case is scrapeable when either:
+  //   (a) staff already marked results received (step2/step4) — the classic gate, OR
+  //   (b) it's in its RESULT WINDOW: sample sent, accession set, today is past the
+  //       predicted earliest result date and not more than GRACE_DAYS past the
+  //       latest — so the scheduled scrape auto-detects results the moment the
+  //       portal has them, without a human first ticking "results received".
+  //       The scraper only stages a PDF that matches the accession, so probing a
+  //       not-yet-ready case is a safe no-op. The window bounds portal load.
+  const today = new Date().toISOString().slice(0, 10);
+  const GRACE_DAYS = 21;
+  const graceFloor = new Date(Date.now() - GRACE_DAYS * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+  const inResultWindow = (c: Row) =>
+    c.step1_sample_sent &&
+    !c.step2_partial_received &&
+    !c.step4_complete_received &&
+    !!c.expected_result_at_min &&
+    c.expected_result_at_min <= today &&
+    (!c.expected_result_at_max || c.expected_result_at_max >= graceFloor);
+
   const cases = ((data ?? []) as Row[])
     .filter((c) => sameLab(c.lab_name, lab))
-    .filter((c) => c.step4_complete_received || c.step2_partial_received)
+    .filter((c) => c.step4_complete_received || c.step2_partial_received || inResultWindow(c))
     .map((c) => ({
       caseId: c.id,
       patientName: c.patient_name,

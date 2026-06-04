@@ -28,6 +28,8 @@ How to use this file:
 | Find a result with no accession | probe — `POST /probe/:lab?name=` (`worker/src/server.ts`) → `probeCaseResult` (`src/app/labs/probe-actions.ts`) | Scrapes the portal by patient name; empty = "not ready yet". The modern replacement for the dead lab-adapters. |
 | Read/patch prod case state from a script | debug endpoint `GET/PATCH /api/worker/debug/cases` (Bearer `WORKER_SHARED_SECRET`) | Worker scripts (`worker/scripts/*`) talk to prod through this, not Supabase directly. Actions: archive, soft/hard-delete, set-collection-date, advance-step1, advance-step5. |
 | Poll FedEx + advance/predict | `refreshTrackingForActiveCasesCore` — `src/lib/tracking/refresh-core.ts` | Cron-or-button. Advances on in_transit (not pre_transit) and on delivered (which also predicts result dates). |
+| Run the result pipeline | Fly `[processes]` loops in `worker/fly.toml`: `scrape` (scrape-all --loop → stage PDFs), `pbdrain` (post APPROVED PDFs to PB), `tracking`, `zenoti`. | Background jobs MUST be a supervised `[processes]` loop or they don't run. A code path existing ≠ scheduled (scrape-all + pb-drain + refresh-tracking were all built but unscheduled for weeks). After adding a process group, `fly deploy` then confirm it's in `fly scale show`. |
+| Which cases are scrapeable | `/api/worker/open-cases` — accession set + (results received OR in result-window) + not on PB. | The scraper matches by accession only (patient-safe), so probing an in-window not-yet-ready case is a safe no-op; `postResultReady` auto-marks step4 when a PDF is found. |
 
 ## The 7 portal scrapers (don't add an 8th pattern — copy one)
 Built via the recipe engine (`worker/src/recipes/`) or hand-written. All

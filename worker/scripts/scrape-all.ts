@@ -75,8 +75,9 @@ async function scrapeLab(labKey: string): Promise<void> {
   log(`${labKey}: checked ${cases.length}, posted ${posted}, errors ${errors.length}`);
 }
 
-async function main() {
-  log(`scrape-all → ${LABS.join(", ")}`);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function runOnce() {
   for (const lab of LABS) {
     try {
       await scrapeLab(lab);
@@ -84,7 +85,26 @@ async function main() {
       log(`${lab}: FATAL ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  log("scrape-all done");
+}
+
+async function main() {
+  // `--loop` (used by the Fly `scrape` process) keeps scraping every
+  // SCRAPE_LOOP_MS so newly-ready results get pulled + staged for Approve
+  // without a manual trigger. Bare invocation stays one-shot (manual runs).
+  const loop = process.argv.includes("--loop");
+  if (!loop) {
+    log(`scrape-all (once) → ${LABS.join(", ")}`);
+    await runOnce();
+    log("scrape-all done");
+    return;
+  }
+  const intervalMs = Number(process.env.SCRAPE_LOOP_MS ?? String(60 * 60 * 1000)); // 1h
+  log(`scrape-all loop: every ${intervalMs}ms → ${LABS.join(", ")}`);
+  await sleep(8000); // let app + sibling processes settle after a deploy
+  for (;;) {
+    await runOnce();
+    await sleep(intervalMs);
+  }
 }
 
 main().catch((e) => {
