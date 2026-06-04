@@ -17,8 +17,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
   if (!isPickupConfigured()) {
+    // Diagnostic: which env vars does THIS deployment's runtime actually see?
+    // Booleans only — never echoes the values.
+    const seen = {
+      ACCOUNT_NUMBER: !!process.env.FEDEX_ACCOUNT_NUMBER,
+      PICKUP_API_KEY: !!process.env.FEDEX_PICKUP_API_KEY,
+      PICKUP_API_SECRET: !!process.env.FEDEX_PICKUP_API_SECRET,
+      tracking_API_KEY_fallback: !!process.env.FEDEX_API_KEY,
+      CONTACT_NAME: !!process.env.FEDEX_PICKUP_CONTACT_NAME,
+      CONTACT_PHONE: !!process.env.FEDEX_PICKUP_CONTACT_PHONE,
+      STREET: !!process.env.FEDEX_PICKUP_STREET,
+      CITY: !!process.env.FEDEX_PICKUP_CITY,
+      STATE: !!process.env.FEDEX_PICKUP_STATE,
+      ZIP: !!process.env.FEDEX_PICKUP_ZIP,
+    };
     return NextResponse.json(
-      { ok: false, error: "FedEx pickup not configured (check FEDEX_PICKUP_* + FEDEX_ACCOUNT_NUMBER env)" },
+      { ok: false, error: "FedEx pickup not configured — runtime env presence below", seen },
       { status: 412 },
     );
   }
