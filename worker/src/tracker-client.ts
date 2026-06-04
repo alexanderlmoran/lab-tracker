@@ -47,6 +47,11 @@ export type ResultReadyPayload = {
    * (complete) — so a drip lab (Vibrant/Access) can't auto-complete a case off
    * a partial report. The result-ready route already understands this flag. */
   isPartial?: boolean;
+  /** Reconciliation engine: approve + enqueue the PB upload without a human
+   * click (only set when the capture graded ≥ the auto-post threshold). */
+  autoApprove?: boolean;
+  /** Capture-confidence score (0-100), recorded for audit/flag context. */
+  confidence?: number;
 };
 
 export async function postResultReady(payload: ResultReadyPayload): Promise<void> {

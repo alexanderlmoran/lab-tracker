@@ -1,0 +1,11 @@
+# Keep `vercel --prod` uploads small (the app build doesn't need any of this).
+worker
+docs
+*.csv
+*.db
+*.tsbuildinfo
+Centner Labs
+CSV Files
+Chrome_Passwords.csv
+claude
+hard-reset.sh

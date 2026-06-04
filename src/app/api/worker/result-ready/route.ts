@@ -29,6 +29,12 @@ const Body = z.object({
   source: z.string().min(1),
   /** When true, this is a partial result (auto-toggles step2 instead of step4). */
   isPartial: z.boolean().optional().default(false),
+  /** Reconciliation engine: when true, the capture graded ≥ threshold, so we
+   *  approve + enqueue the PB upload without waiting for a human Approve click.
+   *  When false/omitted the PDF lands in Pending Upload for staff review. */
+  autoApprove: z.boolean().optional().default(false),
+  /** Capture-confidence score (0-100) recorded on the audit/flag for context. */
+  confidence: z.number().optional(),
 });
 
 export async function POST(request: Request) {
@@ -191,8 +197,50 @@ export async function POST(request: Request) {
       pdf_id: pdfRow.id,
       external_ref: parsed.labExternalRef,
       result_issued_at: parsed.resultIssuedAt ?? null,
+      confidence: parsed.confidence ?? null,
     },
   });
 
-  return NextResponse.json({ ok: true, pdfId: pdfRow.id, storagePath });
+  // Reconciliation engine auto-approve: a high-confidence capture is approved +
+  // enqueued for PB upload without a human click (mirrors approvePdf). The
+  // existing pb-upload-worker drains the queue and flips step5 on success. A
+  // low-confidence capture skips this block and waits in Pending Upload.
+  if (parsed.autoApprove) {
+    const gradeNote =
+      parsed.confidence != null
+        ? `auto-approved by engine (capture grade ${parsed.confidence})`
+        : "auto-approved by engine";
+    const { error: auditErr } = await db.from("lab_case_audit").insert({
+      case_id: parsed.caseId,
+      pdf_id: pdfRow.id,
+      action: "approve",
+      actor_label: parsed.source,
+      notes: gradeNote,
+    });
+    if (auditErr) {
+      return NextResponse.json(
+        { ok: false, error: `pdf staged but auto-approve audit failed: ${auditErr.message}`, pdfId: pdfRow.id },
+        { status: 500 },
+      );
+    }
+    const { error: jobErr } = await db.from("pb_upload_jobs").upsert(
+      {
+        case_id: parsed.caseId,
+        pdf_id: pdfRow.id,
+        status: "queued",
+        last_error: null,
+        claimed_at: null,
+        finished_at: null,
+      },
+      { onConflict: "case_id,pdf_id" },
+    );
+    if (jobErr) {
+      return NextResponse.json(
+        { ok: false, error: `pdf approved but enqueue failed: ${jobErr.message}`, pdfId: pdfRow.id },
+        { status: 500 },
+      );
+    }
+  }
+
+  return NextResponse.json({ ok: true, pdfId: pdfRow.id, storagePath, autoApproved: parsed.autoApprove });
 }

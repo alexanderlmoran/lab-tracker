@@ -65,7 +65,9 @@ type TrackerCase = {
 
 async function fetchCases(query: string, lab: string): Promise<TrackerCase[]> {
   const q = query === "all" ? "" : `q=${encodeURIComponent(query)}&`;
-  const url = `${TRACKER_BASE}/api/worker/debug/cases?${q}deleted=null`;
+  // limit=all → full pagination (default cap is 50; filtering to one lab after
+  // a truncated page would silently drop cases).
+  const url = `${TRACKER_BASE}/api/worker/debug/cases?${q}deleted=null&limit=all`;
   const res = await request(url, { method: "GET", headers: { authorization: `Bearer ${WORKER_SECRET}` } });
   if (res.statusCode !== 200) throw new Error(`tracker debug ${res.statusCode}`);
   const json = (await res.body.json()) as { ok: boolean; cases: TrackerCase[] };
