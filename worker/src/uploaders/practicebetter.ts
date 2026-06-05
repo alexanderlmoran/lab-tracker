@@ -16,12 +16,32 @@
 // Set-Cookie headers from step 1 and re-send them on subsequent requests.
 
 import { readFile } from "node:fs/promises";
-import { request } from "undici";
+import { request, ProxyAgent, type Dispatcher } from "undici";
 
 const PB_BASE = "https://my.practicebetter.io";
 // This client_id is the public web client; identical for all PB tenants. Pulled
 // from the OAuth call in the capture HAR — not secret.
 const PB_CLIENT_ID = "099153c2625149bc8ecb3e85e03f0022";
+
+// PB blocks datacenter IPs (OAuth token endpoint returns error 8000) — confirmed
+// from BOTH Fly and Vercel; only residential IPs authenticate. When PB_PROXY_URL
+// is set, route every PB-DOMAIN call through it (a residential exit). The S3 PUT
+// is NOT proxied — pre-signed URLs aren't IP-restricted, and a large PDF body
+// shouldn't pay residential-proxy latency. If PB_PROXY_URL is unset, behavior is
+// unchanged (direct egress), so this is a no-op outside Fly/Vercel.
+const pbDispatcher: Dispatcher | undefined = process.env.PB_PROXY_URL
+  ? new ProxyAgent(process.env.PB_PROXY_URL)
+  : undefined;
+
+/** Like undici `request`, but routes PB-domain traffic through the residential
+ *  proxy when PB_PROXY_URL is configured. Use for every my.practicebetter.io
+ *  call; use bare `request` for S3. */
+function pbRequest(
+  url: Parameters<typeof request>[0],
+  opts: Parameters<typeof request>[1] = {},
+): ReturnType<typeof request> {
+  return request(url, pbDispatcher ? { ...opts, dispatcher: pbDispatcher } : opts);
+}
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -125,7 +145,7 @@ export async function pbLogin(
     verification_code: "",
     client_id: PB_CLIENT_ID,
   });
-  const res = await request(`${PB_BASE}/api/oauth2/token`, {
+  const res = await pbRequest(`${PB_BASE}/api/oauth2/token`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: body.toString(),
@@ -172,7 +192,7 @@ export async function findPbPatient(
   const cleaned = patientName.replace(/,/g, " ").replace(/\s+/g, " ").trim();
   const query = encodeURIComponent(cleaned).replace(/%20/g, "+");
   const url = `${PB_BASE}/api/consultant/records/search?countlimit=8&limit=8&query=${query}`;
-  const res = await request(url, {
+  const res = await pbRequest(url, {
     method: "GET",
     headers: pbApiHeaders(session),
   });
@@ -231,7 +251,7 @@ async function requestUploadToken(
   const batchBody = [
     { name: 0, method: "POST", path: "api/uploads/token", content: inner },
   ];
-  const res = await request(`${PB_BASE}/api/batch?context=uploadTokens`, {
+  const res = await pbRequest(`${PB_BASE}/api/batch?context=uploadTokens`, {
     method: "POST",
     headers: {
       ...pbApiHeaders(session),
@@ -319,7 +339,7 @@ async function createLabRequest(
       },
     ],
   };
-  const res = await request(`${PB_BASE}/api/consultant/labrequests`, {
+  const res = await pbRequest(`${PB_BASE}/api/consultant/labrequests`, {
     method: "POST",
     headers: {
       ...pbApiHeaders(session),
@@ -435,7 +455,7 @@ export async function listPatientLabRequests(
     `&sort=orderdate_desc`;
   if (status) url += `&status=${encodeURIComponent(status)}`;
 
-  const res = await request(url, {
+  const res = await pbRequest(url, {
     method: "GET",
     headers: pbApiHeaders(session),
   });
@@ -476,7 +496,7 @@ export async function listAllConsultantLabRequests(
   const url =
     `${PB_BASE}/api/consultant/labrequests` +
     `?limit=${limit}&sort=${encodeURIComponent(sort)}`;
-  const res = await request(url, {
+  const res = await pbRequest(url, {
     method: "GET",
     headers: pbApiHeaders(session),
   });
