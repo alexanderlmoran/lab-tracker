@@ -20,6 +20,9 @@ import { NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 
 const PB_BASE = "https://my.practicebetter.io";
+// Must match worker/src/uploaders/practicebetter.ts pbLogin() exactly, or PB
+// returns error 9999 (bad client request) regardless of IP.
+const PB_CLIENT_ID = "099153c2625149bc8ecb3e85e03f0022";
 
 export async function GET(request: Request) {
   const expected = process.env.WORKER_SHARED_SECRET;
@@ -39,7 +42,14 @@ export async function GET(request: Request) {
     });
   }
 
-  const body = new URLSearchParams({ username, password, grant_type: "password" });
+  const body = new URLSearchParams({
+    username,
+    password,
+    grant_type: "password",
+    remember_me: "false",
+    verification_code: "",
+    client_id: PB_CLIENT_ID,
+  });
   const started = Date.now();
   try {
     const res = await fetch(`${PB_BASE}/api/oauth2/token`, {
