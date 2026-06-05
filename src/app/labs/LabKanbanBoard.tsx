@@ -50,10 +50,13 @@ function LabCard({
   row,
   onOpen,
   counts,
+  dupSiblings,
 }: {
   row: LabCase;
   onOpen: (row: LabCase) => void;
   counts: CardCounts;
+  /** Other cards for the same patient sharing this card's accession. */
+  dupSiblings?: LabCase[];
 }) {
   const expected = formatExpectedRange(
     row.expected_result_at_min,
@@ -117,6 +120,14 @@ function LabCard({
             title="Likely ready — check lab portal"
           >
             ready?
+          </RailChip>
+        ) : null}
+        {dupSiblings && dupSiblings.length > 0 ? (
+          <RailChip
+            className="border-purple-300 bg-purple-50 text-purple-700"
+            title={`Same ACC# ${row.lab_external_ref} as ${dupSiblings.length} other card(s) for this patient — likely one lab split into multiple cards (e.g. PT/PTT/PT-INR). Tracking#: ${dupSiblings.map((s) => s.tracking_number ?? "—").join(", ")}. Merge/dismiss the extras.`}
+          >
+            dup ×{dupSiblings.length + 1}
           </RailChip>
         ) : null}
         <AttemptRailChip openAttempts={counts.openAttempts} />
@@ -209,6 +220,31 @@ export function LabKanbanBoard({
     return list;
   }, [rows, probablyReadyOnly, staleOnly]);
 
+  // Same-accession duplicate detection. One patient with >1 card sharing the
+  // SAME accession is almost always one lab split into multiple tracker cards
+  // (e.g. a PT/PTT/PT-INR shipped together — same draw, same accession, separate
+  // tracking#). Flag them so staff merge/dismiss the extras instead of uploading
+  // the same result twice. Computed over ALL rows so siblings in other columns
+  // still count. Keyed by patient + accession.
+  const dupByCaseId = useMemo(() => {
+    const groups = new Map<string, LabCase[]>();
+    for (const r of rows) {
+      const ref = r.lab_external_ref?.trim();
+      if (!ref) continue;
+      const who = (r.patient_email || r.patient_name || "").trim().toLowerCase();
+      const key = `${who}::${ref}`;
+      const arr = groups.get(key) ?? [];
+      arr.push(r);
+      groups.set(key, arr);
+    }
+    const out = new Map<string, LabCase[]>();
+    for (const arr of groups.values()) {
+      if (arr.length < 2) continue;
+      for (const r of arr) out.set(r.id, arr.filter((x) => x.id !== r.id));
+    }
+    return out;
+  }, [rows]);
+
   const grouped: Record<ColumnKey, LabCase[]> = {
     untouched: [],
     sample_sent: [],
@@ -265,6 +301,7 @@ export function LabKanbanBoard({
                     row={row}
                     onOpen={openLabDetail}
                     counts={counts?.[row.id] ?? ZERO_COUNTS}
+                    dupSiblings={dupByCaseId.get(row.id)}
                   />
                 ))
               )}
