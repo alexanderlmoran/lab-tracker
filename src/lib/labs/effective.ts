@@ -101,14 +101,30 @@ export async function getEffectiveLab(
 }
 
 /** Effective list for the combobox: every DB row + code entries that have
- * no DB twin. Retired entries last; otherwise sorted by name. */
+ * no DB twin. Retired entries last; otherwise sorted by name.
+ *
+ * Dedup is by NORMALIZED key (normalizeLabKey), not raw name — otherwise the
+ * same lab present in both the DB catalog and the code catalog with any
+ * spelling/case/whitespace difference ("Access" vs "Access ", "Peptides" vs
+ * "peptides") shows up TWICE in the dropdown. DB rows win (they're the editable
+ * overlay); the first row for a given key is kept. */
 export async function listEffectiveLabs(): Promise<LabCatalogEntry[]> {
   const rows = await getDbRowsCached();
-  const dbByName = new Map(rows.map((r) => [r.name, rowToEntry(r)]));
   const out: LabCatalogEntry[] = [];
-  for (const entry of dbByName.values()) out.push(entry);
+  const seen = new Set<string>();
+  // DB rows first (editable overlay wins); collapse duplicate DB rows too.
+  for (const r of rows) {
+    const key = normalizeLabKey(r.name);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(rowToEntry(r));
+  }
+  // Code entries only when no DB twin shares the normalized key.
   for (const code of LAB_CATALOG) {
-    if (!dbByName.has(code.name)) out.push(code);
+    const key = normalizeLabKey(code.name);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(code);
   }
   out.sort((a, b) => {
     const aRet = a.retired ? 1 : 0;

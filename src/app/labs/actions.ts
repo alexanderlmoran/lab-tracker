@@ -1212,7 +1212,11 @@ export async function listLabCases(opts: {
 
   const lab = opts.filters?.lab?.trim();
   if (lab) {
-    filtered = filtered.eq("lab_name", lab);
+    // The dropdown sends one deduped label per lab; match every case/format
+    // variant of it via a prefix ilike on the base (before " · "). Escape the
+    // ilike metacharacters so a lab name with % or _ stays literal.
+    const base = lab.split("·")[0].trim().replace(/[%_\\]/g, (m) => `\\${m}`);
+    filtered = filtered.ilike("lab_name", `${base}%`);
   }
 
   const sinceDays = opts.filters?.sinceDays;
@@ -1251,6 +1255,19 @@ export async function listEffectiveLabsForPicker() {
   }));
 }
 
+/** Normalized group key that collapses case + a "Labs -/·" prefix + the
+ *  " · panel" suffix, so variant spellings of one lab share a key.
+ *  "Access"/"access"/"access · custom" → "access"; "Peptides · Semax…" →
+ *  "peptides"; "Vibrant · EBOO Waste" → "vibrant". */
+export function labGroupKey(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/^labs\s*[·-]\s*/, "")
+    .split("·")[0]
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export async function listDistinctLabNames(): Promise<string[]> {
   await requireSignedIn();
   const db = getSupabaseAdmin();
@@ -1259,11 +1276,28 @@ export async function listDistinctLabNames(): Promise<string[]> {
     .select("lab_name")
     .is("deleted_at", null);
   if (error) throw new Error(error.message);
-  const names = new Set<string>();
+
+  // Collapse case/format variants of the same lab so the filter dropdown shows
+  // ONE entry per lab. Group by labGroupKey; the spelling used by the most cases
+  // becomes the display label (ties broken alphabetically). The picker sends
+  // that label and listLabCases matches every variant of it (prefix ilike).
+  const groups = new Map<string, Map<string, number>>();
   for (const row of (data ?? []) as Array<{ lab_name: string }>) {
-    if (row.lab_name) names.add(row.lab_name);
+    const name = row.lab_name?.trim();
+    if (!name) continue;
+    const key = labGroupKey(name);
+    const counts = groups.get(key) ?? new Map<string, number>();
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+    groups.set(key, counts);
   }
-  return [...names].sort((a, b) => a.localeCompare(b));
+  const labels: string[] = [];
+  for (const counts of groups.values()) {
+    const best = [...counts.entries()].sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+    )[0];
+    if (best) labels.push(best[0]);
+  }
+  return labels.sort((a, b) => a.localeCompare(b));
 }
 
 export type PatientSummary = {
