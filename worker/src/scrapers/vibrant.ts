@@ -1,7 +1,7 @@
 import { request } from "undici";
 import type { Browser } from "playwright";
 import type { OpenCase } from "../tracker-client.js";
-import type { LabScraper, ScrapeRun, ScrapeResult } from "./base.js";
+import type { LabScraper, ScrapeRun, ScrapeResult, ProbeCandidate } from "./base.js";
 
 const LOGIN_URL = "https://api.vibrant-wellness.com/v1/portal/trans-service/valogin/login";
 const FIND_PATIENT_URL = "https://api.vibrant-wellness.com/v1/portal/trans-service/trans/findPatient";
@@ -19,10 +19,19 @@ type ReportStatusEntry = {
   short_name: string;
   report_staus: string; // note: Vibrant typo "staus"
   final_report_date?: string;
+  final_sample_collection_date?: string;
 };
 
+// getReportStatusListV2 buckets each section by stage. An order is COMPLETE only
+// when every section is in finished_reports and the in-progress buckets are empty
+// (verified from the captured response — see captures/vibrant/20260526-194948).
 type ReportStatusResponse = {
-  finished_reports: ReportStatusEntry[];
+  pending_reports?: ReportStatusEntry[];
+  awaiting_samples_reports?: ReportStatusEntry[];
+  analyzing_samples_reports?: ReportStatusEntry[];
+  processing_reports?: ReportStatusEntry[];
+  finished_reports?: ReportStatusEntry[];
+  total_reports?: ReportStatusEntry[];
 };
 
 type FindPatientOrder = {
@@ -151,7 +160,7 @@ async function findPatientByName(
 async function getReportStatus(
   token: string,
   accessionId: string,
-): Promise<ReportStatusEntry[]> {
+): Promise<ReportStatusResponse> {
   const url = `${REPORT_STATUS_BASE}?barcode=${encodeURIComponent(accessionId)}`;
   const resp = await request(url, {
     method: "GET",
@@ -161,8 +170,31 @@ async function getReportStatus(
     const body = await resp.body.text();
     throw new Error(`getReportStatusListV2 failed ${resp.statusCode}: ${body}`);
   }
-  const json = (await resp.body.json()) as ReportStatusResponse;
-  return json.finished_reports ?? [];
+  return (await resp.body.json()) as ReportStatusResponse;
+}
+
+// An order is complete only when every section finished and nothing is still
+// pending/awaiting/analyzing/processing. This is the order-level completeness
+// gate that lets the reconcile engine auto-post Vibrant safely (a finished
+// SECTION alone never means a finished ORDER — Vibrant drips sections).
+function isOrderComplete(s: ReportStatusResponse): boolean {
+  const inProgress =
+    (s.pending_reports?.length ?? 0) +
+    (s.awaiting_samples_reports?.length ?? 0) +
+    (s.analyzing_samples_reports?.length ?? 0) +
+    (s.processing_reports?.length ?? 0);
+  const finished = s.finished_reports?.length ?? 0;
+  const total = s.total_reports?.length ?? 0;
+  return inProgress === 0 && total > 0 && finished === total;
+}
+
+function parseUsDate(s: string | undefined): string | null {
+  if (!s) return null;
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return null;
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${mm}/${dd}/${d.getUTCFullYear()}`;
 }
 
 async function downloadPdf(
@@ -249,20 +281,27 @@ export const vibrantScraper: LabScraper = {
 
         if (!patientEntry || !accessionId) continue;
 
-        const reports = await getReportStatus(token, accessionId);
+        const status = await getReportStatus(token, accessionId);
+        const reports = status.finished_reports ?? [];
         if (reports.length === 0) continue;
 
-        // Pick the first finished report (most recently finalized).
-        const report = reports[0];
-
-        const pdfBuf = await downloadPdf(token, accessionId, report.short_name);
+        // Download ALL finished sections in one request. Single-section is the
+        // norm (and verified); the comma-join is best-effort for multi-section
+        // orders — strictly safer than the old first-section-only. Log multis so
+        // any combined-PDF edge case is visible in the worker logs.
+        const shortNames = reports.map((r) => r.short_name).filter(Boolean);
+        if (shortNames.length > 1) {
+          console.log(`[vibrant] multi-section order ${accessionId}: ${shortNames.join(",")} (verify combined PDF)`);
+        }
+        const pdfBuf = await downloadPdf(token, accessionId, shortNames.join(","));
 
         found.push({
           caseId: c.caseId,
           labExternalRef: accessionId,
           pdfBase64: pdfBuf.toString("base64"),
-          pdfFilename: `vibrant_${accessionId}_${report.short_name}.pdf`,
-          resultIssuedAt: parseFinalDate(report.final_report_date),
+          pdfFilename: `vibrant_${accessionId}.pdf`,
+          resultIssuedAt: parseFinalDate(reports[0].final_report_date),
+          isPartial: !isOrderComplete(status),
         });
       } catch (err) {
         errors.push({
@@ -273,6 +312,58 @@ export const vibrantScraper: LabScraper = {
     }
 
     return { found, errors };
+  },
+
+  // Patient-name search for the reconcile engine. Vibrant exposes DOB (so matches
+  // are DOB-verified) but DRIPS sections — so we surface ONLY fully-complete
+  // orders (isOrderComplete), letting the engine auto-post them like Access while
+  // in-progress orders keep searching. Partials are never auto-finalized here.
+  async probeByName(
+    _browser: Browser,
+    name: string,
+    dob?: string | null,
+  ): Promise<ProbeCandidate[]> {
+    if (!USERNAME || !PASSWORD) {
+      throw new Error("VIBRANT_USERNAME / VIBRANT_PASSWORD not configured");
+    }
+    const loginToken = await login();
+    const token = await getEffectiveToken(loginToken);
+
+    const candidates = await findPatientByName(token, name);
+    const dobNorm = normalizeDob(dob ?? null);
+    const matched =
+      dobNorm === ""
+        ? candidates
+        : candidates.filter((p) => normalizeDob(p.patient_birthdate) === dobNorm);
+
+    const out: ProbeCandidate[] = [];
+    for (const p of matched) {
+      for (const o of p.Order ?? []) {
+        const acc = o.accession_id;
+        if (!acc) continue;
+        let status: ReportStatusResponse;
+        try {
+          status = await getReportStatus(token, acc);
+        } catch {
+          continue;
+        }
+        if (!isOrderComplete(status)) continue; // drip-safe: full order only
+        const fin = status.finished_reports ?? [];
+        const latestFinal = fin
+          .map((r) => r.final_report_date)
+          .filter(Boolean)
+          .sort((a, b) => new Date(a!).getTime() - new Date(b!).getTime())
+          .at(-1);
+        out.push({
+          ref: acc,
+          resultIssuedAt: parseFinalDate(latestFinal) ?? null,
+          collectionDate: parseUsDate(fin[0]?.final_sample_collection_date),
+          status: "Complete",
+          dobConfirmed: dobNorm !== "",
+        });
+      }
+    }
+    return out;
   },
 };
 
