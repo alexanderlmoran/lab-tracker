@@ -8,6 +8,13 @@ See also `docs/PLAYBOOK.md` (reuse index — read before building).
 Order Alex set: **(2) partials safety → (3) FedEx pickup → reconcile the 57 → invoice gating.**
 The single biggest UNPROVEN thing remains: **no real PB post has ever run end-to-end** — only the synthetic Leila test patient. Prove it the next time a real *complete* result is in a portal.
 
+### Same-accession duplicate cards
+**BEHAVIOR FIXED 2026-06-05 (commit 13cecb6):** the 3 review actions now cascade across same-accession siblings (`accessionSiblingIds` in src/lib/labs/siblings.ts) so resolving one resolves all — siblings move together (orphaned-sibling bug, Curtis McArthur, closed). Already-on-PB + Disapprove cascade instantly; Approve/Post cascades on PB upload success.
+**UI still to build (Alex refined 2026-06-05):** render same-accession dup cards as a **slightly elongated single card** (shows both tracking #s), plus a **quick toggle next to "By patient"** that merges the dup cards into one while STILL showing all the other (non-dup) patients' cards — i.e. a "merge dupes" view mode, not a per-patient collapse. Reuse `dupSiblings` detection + chip in `LabKanbanBoard.tsx`.
+
+### Vibrant multi-section download format (TODO, found 2026-06-05)
+Vibrant's report-PDF URL `?sections=<short_name>` works for SINGLE-section orders. The multi-section format is unknown — `sections=A,B,C` fails (`REPORT_TYPE_A,B,C_NOT_EXIST`). Until found, run() downloads the first finished section only (valid section-1 partial) and reconcile auto-posts only single-section complete orders. To fix: capture a real multi-section report download (lab-portal-capture on a patient with a multi-zoomer order) to learn the separator / param shape, then download all sections (likely merge with pdf-lib if they come as separate PDFs).
+
 ### (2) Partials safety — v1 SHIPPED, hardening remains
 Vibrant & Access drip partial results; the scraper grabbed a finished section and (because scrape-all never passed isPartial) marked the whole case COMPLETE → could post an incomplete lab + fire the all-done cascade.
 - **DONE:** `ScrapeResult.isPartial` + `ResultReadyPayload.isPartial` threaded; `scrape-all` force-stages `PARTIAL_PRONE_LABS = {vibrant, access}` as **partial (step 2)** so they never auto-complete. Human confirms completeness at Approve.
