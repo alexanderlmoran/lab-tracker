@@ -148,6 +148,8 @@ export const cyrexScraper: LabScraper = {
         resultIssuedAt: parseDate(r.resultDate) ?? parseDate(r.collectionDate) ?? null,
         collectionDate: padUsDate(r.collectionDate),
         status: isFinalized(r) ? "Complete" : r.status || "Pending",
+        // dob was applied as a filter above when provided → matched.
+        dobConfirmed: dobNorm !== "",
       }));
     } finally {
       await ctx.close();

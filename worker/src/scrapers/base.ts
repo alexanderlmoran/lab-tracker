@@ -29,6 +29,11 @@ export type ProbeCandidate = {
   collectionDate: string | null;
   /** Portal status string, e.g. "Complete". */
   status: string;
+  /** True only if this candidate's DOB was checked against the requested DOB and
+   *  matched. Portals that don't expose DOB (GlycanAge, DoctorsData) leave this
+   *  false/undefined so the reconcile engine grades them as a NAME-ONLY match
+   *  (not name+DOB) — preventing a confident auto-post on a name collision. */
+  dobConfirmed?: boolean;
 };
 
 export interface LabScraper {

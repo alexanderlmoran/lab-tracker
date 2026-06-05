@@ -21,7 +21,7 @@
 import { request } from "undici";
 import type { Browser } from "playwright";
 import type { OpenCase } from "../tracker-client.js";
-import type { LabScraper, ScrapeRun, ScrapeResult } from "./base.js";
+import type { LabScraper, ScrapeRun, ScrapeResult, ProbeCandidate } from "./base.js";
 
 const BASE = "https://www.doctorsdata.com";
 const ACCOUNT = process.env.DOCTORSDATA_USERNAME;
@@ -35,6 +35,8 @@ type DdRow = {
   Status?: string;
   ReportURL?: string | null;
   ReportReadStatus?: boolean;
+  DateReceivedUTC?: string;
+  DateReleasedUTC?: string;
 };
 
 class CookieJar {
@@ -95,7 +97,55 @@ export const doctorsdataScraper: LabScraper = {
 
     return { found, errors };
   },
+
+  // Patient-name search for the reconcile engine. DoctorsData exposes NO DOB, so
+  // matches are name-only (dobConfirmed:false) — the engine auto-posts only when
+  // the exact LabID also matches the case; otherwise it flags for review. Returns
+  // only ready+downloadable rows so a not-yet-released result cleanly "keeps
+  // searching" rather than erroring on a failed download.
+  async probeByName(
+    _browser: Browser,
+    name: string,
+    _dob?: string | null,
+  ): Promise<ProbeCandidate[]> {
+    if (!ACCOUNT || !PASSWORD) {
+      throw new Error("DOCTORSDATA_USERNAME / DOCTORSDATA_PASSWORD not configured");
+    }
+    const jar = new CookieJar();
+    await login(jar);
+    const token = await getFormToken(jar);
+    const rows = await fetchResults(jar, token, lastNameOf(name));
+    const nameNorm = normalizeName(name);
+    return rows
+      .filter(
+        (r) => normalizeName(r.PatientName ?? "") === nameNorm && isReady(r) && !!r.ReportURL,
+      )
+      .map((r) => ({
+        ref: r.LabID || null,
+        resultIssuedAt: ddDate(r.DateReleasedUTC)?.iso ?? null,
+        collectionDate: ddDate(r.DateReceivedUTC)?.us ?? ddDate(r.DateReleasedUTC)?.us ?? null,
+        status: r.Status || "Completed",
+        dobConfirmed: false,
+      }));
+  },
 };
+
+// DoctorsData dates arrive as ASP.NET "/Date(ms)/", ISO, or M/D/YYYY depending on
+// the column. Parse defensively → { iso: YYYY-MM-DD, us: MM/DD/YYYY }.
+function ddDate(s: string | undefined): { iso: string; us: string } | null {
+  if (!s) return null;
+  let d: Date | null = null;
+  const ms = s.match(/\/Date\((\d+)\)\//);
+  if (ms) d = new Date(Number(ms[1]));
+  else {
+    const t = Date.parse(s);
+    if (!Number.isNaN(t)) d = new Date(t);
+  }
+  if (!d || Number.isNaN(d.getTime())) return null;
+  const iso = d.toISOString().slice(0, 10);
+  const [y, m, day] = iso.split("-");
+  return { iso, us: `${m}/${day}/${y}` };
+}
 
 async function login(jar: CookieJar): Promise<void> {
   const home = await request(`${BASE}/`, { method: "GET", headers: { accept: "text/html" } });

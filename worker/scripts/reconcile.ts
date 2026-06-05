@@ -281,7 +281,9 @@ async function runOnce() {
           // Dry: grade on candidate signals (no pdf yet → engine adds +5 live).
           const g = gradeCapture({
             patientNameMatch: true,
-            patientDobMatch: c.patient_dob ? true : null,
+            // Only claim a DOB match if the portal actually verified it; portals
+            // without DOB (GlycanAge/DoctorsData) score as name-only here.
+            patientDobMatch: cand.dobConfirmed ? true : null,
             hasAccessionExact: !!c.lab_external_ref && cand.ref === c.lab_external_ref,
             daysOffAnchor: off,
             portalStatusComplete: !!cand.status?.toLowerCase().includes("complete"),
@@ -304,7 +306,7 @@ async function runOnce() {
         const complete = !!cand.status?.toLowerCase().includes("complete");
         const grade = gradeCapture({
           patientNameMatch: true,
-          patientDobMatch: c.patient_dob ? true : null,
+          patientDobMatch: cand.dobConfirmed ? true : null,
           hasAccessionExact: !!c.lab_external_ref && found.labExternalRef === c.lab_external_ref,
           daysOffAnchor: off,
           portalStatusComplete: complete,

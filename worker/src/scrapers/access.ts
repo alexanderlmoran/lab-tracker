@@ -174,6 +174,8 @@ export const accessScraper: LabScraper = {
           resultIssuedAt: parseFinalDate(r.finalDate) ?? null,
           collectionDate: r.collectionDate || null,
           status: r.status,
+          // dob was applied as a filter above when provided → matched.
+          dobConfirmed: !!dobNorm,
         }));
     } finally {
       await ctx.close();

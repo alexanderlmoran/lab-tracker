@@ -16,7 +16,7 @@
 import { request } from "undici";
 import type { Browser } from "playwright";
 import type { OpenCase } from "../tracker-client.js";
-import type { LabScraper, ScrapeRun, ScrapeResult } from "./base.js";
+import type { LabScraper, ScrapeRun, ScrapeResult, ProbeCandidate } from "./base.js";
 
 // Public Firebase web API key (embedded in the SPA — not a secret).
 const FIREBASE_KEY = "AIzaSyAtPKrUJ7hEy7G9E1Ju_FplScVrFSkXf2Q";
@@ -79,7 +79,43 @@ export const glycanageScraper: LabScraper = {
 
     return { found, errors };
   },
+
+  // Patient-name search for the reconcile engine. GlycanAge exposes NO DOB, so
+  // matches are name-only (dobConfirmed:false) — the engine then auto-posts only
+  // when the exact kit id (sample) also matches the case; otherwise it flags for
+  // human review. Presence in /reports == a finalized full report (not a drip).
+  async probeByName(
+    _browser: Browser,
+    name: string,
+    _dob?: string | null,
+  ): Promise<ProbeCandidate[]> {
+    if (!EMAIL || !PASSWORD) {
+      throw new Error("GLYCANAGE_USERNAME / GLYCANAGE_PASSWORD not configured");
+    }
+    const token = await signIn();
+    const reports = await fetchReports(token); // already createdOn desc (newest first)
+    const nameNorm = normalizeName(name);
+    return reports
+      .filter((r) => normalizeName(r.name ?? "") === nameNorm)
+      .map((r) => {
+        const iso = (r.dos || r.createdOn)?.slice(0, 10) ?? null;
+        return {
+          ref: r.sample || r.id || null,
+          resultIssuedAt: iso,
+          collectionDate: isoToUs(iso),
+          status: "Complete",
+          dobConfirmed: false,
+        };
+      });
+  },
 };
+
+// ISO (YYYY-MM-DD) → MM/DD/YYYY so the reconcile engine's daysOff() can parse it.
+function isoToUs(iso: string | null): string | null {
+  if (!iso) return null;
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[2]}/${m[3]}/${m[1]}` : null;
+}
 
 async function signIn(): Promise<string> {
   const res = await request(SIGNIN_URL, {
