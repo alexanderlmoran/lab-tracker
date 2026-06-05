@@ -48,6 +48,12 @@ const loop = argv.includes("--loop");
 const log = (m = "") => console.log(m);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Auto-post threshold (default 90 = the grader's line). Env-overridable so
+// auto-posting to PB can be held OFF entirely — set RECONCILE_AUTOPOST_THRESHOLD
+// = 101 and every capture flags for human review instead — until the first live
+// auto-posts have been eyeballed, then lower it back to 90.
+const AUTOPOST_THRESHOLD = Number(process.env.RECONCILE_AUTOPOST_THRESHOLD ?? "90");
+
 // Only stage a candidate whose collection date is within this many days of the
 // case's draw date — anything older is almost certainly a different lab, so we
 // keep searching rather than pester a human with it. Matches the scraper's
@@ -230,8 +236,9 @@ async function runOnce() {
             portalStatusComplete: !!cand.status?.toLowerCase().includes("complete"),
             hasFinalDate: !!cand.resultIssuedAt,
           });
-          if (g.decision === "auto-post") tally.autoposted++; else tally.flagged++;
-          log(`    • ${c.id.slice(0, 8)} → would download acc=${cand.ref} grade≈${g.score} → ${g.decision === "auto-post" ? "AUTO-POST" : "FLAG"}`);
+          const wouldAuto = g.score >= AUTOPOST_THRESHOLD;
+          if (wouldAuto) tally.autoposted++; else tally.flagged++;
+          log(`    • ${c.id.slice(0, 8)} → would download acc=${cand.ref} grade≈${g.score} → ${wouldAuto ? "AUTO-POST" : "FLAG"}`);
           continue;
         }
 
@@ -253,6 +260,7 @@ async function runOnce() {
           hasFinalDate: !!found.resultIssuedAt,
           pdfBytes: Buffer.from(found.pdfBase64, "base64").length,
         });
+        const auto = grade.score >= AUTOPOST_THRESHOLD;
         try {
           await postResultReady({
             caseId: c.id,
@@ -262,7 +270,7 @@ async function runOnce() {
             resultIssuedAt: found.resultIssuedAt,
             source: "engine:reconcile",
             isPartial: !complete,
-            autoApprove: grade.decision === "auto-post",
+            autoApprove: auto,
             confidence: grade.score,
           });
         } catch (err) {
@@ -270,7 +278,7 @@ async function runOnce() {
           log(`    ✗ ${c.id.slice(0, 8)} stage failed: ${err instanceof Error ? err.message : err}`);
           continue;
         }
-        if (grade.decision === "auto-post") {
+        if (auto) {
           tally.autoposted++;
           log(`    ✓ ${c.id.slice(0, 8)} acc=${found.labExternalRef} grade=${grade.score} → STAGED + AUTO-APPROVED (PB upload queued)`);
         } else {
