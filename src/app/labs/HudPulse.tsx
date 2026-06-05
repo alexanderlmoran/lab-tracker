@@ -95,7 +95,7 @@ export function HudPulse({ user, cases }: HudPulseProps) {
     { href: "/labs/inbox", label: "Inbox", show: true },
     { href: "/labs/import", label: "Import", show: true },
     { href: "/labs/patients", label: "Patients", show: true },
-    { href: "/labs/reports", label: "Reports", show: isDeveloper },
+    { href: "/labs/analytics", label: "Analytics", show: canManage },
     { href: "/labs/sales", label: "Sales", show: isDeveloper },
     { href: "/labs/settings", label: "Settings", show: canManage },
   ];

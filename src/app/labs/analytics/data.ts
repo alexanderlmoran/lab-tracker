@@ -1,0 +1,451 @@
+// Analytics data layer — Team activity + System health.
+//
+// Plain server module (NOT "use server"): these fetchers are called only from
+// the Analytics server components, so they don't need to be server actions —
+// and a plain module can export the shared types freely without tripping the
+// "use server" export trap (a "use server" file may only export async fns).
+//
+// Read-only aggregation following the getReportData() pattern in actions.ts:
+// pull the rows we need, aggregate in JS (no GROUP BY at the Supabase edge).
+
+import { requireRole } from "@/lib/auth-guard";
+import { getSupabaseAdmin } from "@/utils/supabase/admin";
+
+export type AnalyticsTab = "reports" | "team" | "health";
+
+// ── Team activity ────────────────────────────────────────────────────
+
+export type ActorKind = "human" | "automated";
+
+export type ActorActivity = {
+  /** Display name: 'staff:nadia' → "Nadia", 'admin' → "Admin", an email shown
+   *  as-is, anything 'worker:*'/'system' collapsed to "Automated". */
+  actor: string;
+  kind: ActorKind;
+  approvals: number; // audit: approve
+  corrections: number; // audit: disapprove_* / retry_upload / manual_override / accession_edited
+  stepsAdvanced: number; // events: step_toggled
+  emails: number; // events: email_sent
+  casesTouched: number; // events: case_created / case_edited / etc.
+  total: number; // every audit + event row attributed to this actor
+};
+
+export type TeamActivity = {
+  windowDays: number;
+  since: string; // ISO
+  totalActions: number;
+  humanActions: number;
+  automatedActions: number;
+  actors: ActorActivity[]; // sorted by total desc
+  perDay: Array<{ day: string; human: number; automated: number }>;
+};
+
+const CORRECTION_ACTIONS = new Set([
+  "disapprove_wrong_pdf",
+  "disapprove_upload_failed",
+  "retry_upload",
+  "manual_override",
+  "accession_edited",
+]);
+
+function titleCase(s: string): string {
+  return s
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+/** Normalize the heterogeneous actor strings (audit.actor_label is
+ *  'staff:nadia'/'admin'/'worker:access'/'system'; events.actor is usually a
+ *  user email or 'admin'/'system') into a stable display identity + kind.
+ *  Identity is best-effort — these columns are text, not FKs to auth.users
+ *  (see project-lab-tracker-pb... memory). Good enough for a small team. */
+export function normalizeActor(raw: string | null | undefined): {
+  name: string;
+  kind: ActorKind;
+} {
+  const a = (raw ?? "").trim();
+  if (!a || a === "system" || a.startsWith("worker:") || a.startsWith("cron")) {
+    return { name: "Automated", kind: "automated" };
+  }
+  if (a.startsWith("staff:")) return { name: titleCase(a.slice(6)), kind: "human" };
+  if (a === "admin") return { name: "Admin", kind: "human" };
+  if (a.includes("@")) return { name: a, kind: "human" }; // email — recognizable as-is
+  return { name: titleCase(a), kind: "human" };
+}
+
+export async function getTeamActivity(windowDays = 7): Promise<TeamActivity> {
+  await requireRole("admin");
+  const db = getSupabaseAdmin();
+  const days = Math.max(1, Math.min(90, Math.floor(windowDays)));
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+
+  const [auditRes, eventRes] = await Promise.all([
+    db
+      .from("lab_case_audit")
+      .select("action, actor_label, occurred_at")
+      .gte("occurred_at", since),
+    db
+      .from("lab_events")
+      .select("kind, actor, created_at")
+      .gte("created_at", since),
+  ]);
+  if (auditRes.error) throw new Error(auditRes.error.message);
+  if (eventRes.error) throw new Error(eventRes.error.message);
+
+  const audit = (auditRes.data ?? []) as Array<{
+    action: string;
+    actor_label: string | null;
+    occurred_at: string;
+  }>;
+  const events = (eventRes.data ?? []) as Array<{
+    kind: string;
+    actor: string | null;
+    created_at: string;
+  }>;
+
+  const byActor = new Map<string, ActorActivity>();
+  const ensure = (name: string, kind: ActorKind): ActorActivity => {
+    let row = byActor.get(name);
+    if (!row) {
+      row = {
+        actor: name,
+        kind,
+        approvals: 0,
+        corrections: 0,
+        stepsAdvanced: 0,
+        emails: 0,
+        casesTouched: 0,
+        total: 0,
+      };
+      byActor.set(name, row);
+    }
+    return row;
+  };
+
+  // Per-day buckets (oldest → newest) split human vs automated.
+  const dayMap = new Map<string, { human: number; automated: number }>();
+  for (let i = days - 1; i >= 0; i--) {
+    const key = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+    dayMap.set(key, { human: 0, automated: 0 });
+  }
+  const bumpDay = (iso: string, kind: ActorKind) => {
+    const bucket = dayMap.get(iso.slice(0, 10));
+    if (bucket) bucket[kind] += 1;
+  };
+
+  for (const a of audit) {
+    const { name, kind } = normalizeActor(a.actor_label);
+    const row = ensure(name, kind);
+    if (a.action === "approve") row.approvals += 1;
+    else if (CORRECTION_ACTIONS.has(a.action)) row.corrections += 1;
+    row.total += 1;
+    bumpDay(a.occurred_at, kind);
+  }
+  for (const e of events) {
+    const { name, kind } = normalizeActor(e.actor);
+    const row = ensure(name, kind);
+    if (e.kind === "step_toggled") row.stepsAdvanced += 1;
+    else if (e.kind === "email_sent") row.emails += 1;
+    else if (e.kind.startsWith("case_") || e.kind === "expected_dates_set")
+      row.casesTouched += 1;
+    row.total += 1;
+    bumpDay(e.created_at, kind);
+  }
+
+  const actors = [...byActor.values()].sort((a, b) => b.total - a.total);
+  const humanActions = actors
+    .filter((a) => a.kind === "human")
+    .reduce((s, a) => s + a.total, 0);
+  const automatedActions = actors
+    .filter((a) => a.kind === "automated")
+    .reduce((s, a) => s + a.total, 0);
+
+  return {
+    windowDays: days,
+    since,
+    totalActions: humanActions + automatedActions,
+    humanActions,
+    automatedActions,
+    actors,
+    perDay: [...dayMap.entries()].map(([day, v]) => ({ day, ...v })),
+  };
+}
+
+// ── System health ────────────────────────────────────────────────────
+
+export type HealthStatus = "green" | "yellow" | "red" | "idle";
+
+export type HealthItem = {
+  label: string;
+  status: HealthStatus;
+  note?: string;
+};
+
+export type HealthCategory = {
+  key: string;
+  label: string;
+  status: HealthStatus;
+  headline: string;
+  detail?: string;
+  items?: HealthItem[];
+};
+
+export type SystemHealth = {
+  generatedAt: string;
+  categories: HealthCategory[];
+};
+
+/** Human-friendly "3h ago" / "2d ago"; null when no timestamp. */
+export function formatAge(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "just now";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function ageHours(iso: string | null | undefined): number {
+  if (!iso) return Infinity;
+  const ms = Date.now() - new Date(iso).getTime();
+  return ms <= 0 ? 0 : ms / 3600000;
+}
+
+/** Worst status across items — red beats yellow beats green; idle only if
+ *  there's nothing at all to report. */
+function rollup(items: HealthItem[]): HealthStatus {
+  if (items.length === 0) return "idle";
+  if (items.some((i) => i.status === "red")) return "red";
+  if (items.some((i) => i.status === "yellow")) return "yellow";
+  if (items.some((i) => i.status === "green")) return "green";
+  return "idle";
+}
+
+export async function getSystemHealth(): Promise<SystemHealth> {
+  await requireRole("admin");
+  const db = getSupabaseAdmin();
+
+  const [scrapers, jobs, emails, inbound, cases, lastWorker] = await Promise.all([
+    db
+      .from("lab_scraper_status")
+      .select(
+        "portal_key, last_check_at, last_success_at, last_error, consecutive_failures",
+      ),
+    db.from("pb_upload_jobs").select("status, last_error, finished_at"),
+    db
+      .from("email_logs")
+      .select("status, created_at")
+      .gte("created_at", new Date(Date.now() - 14 * 86400000).toISOString()),
+    db
+      .from("inbound_emails")
+      .select("parser_status, from_address, subject, received_at")
+      .gte("received_at", new Date(Date.now() - 30 * 86400000).toISOString()),
+    db
+      .from("lab_cases")
+      .select("tracking_number, tracking_delivered_at, tracking_polled_at")
+      .is("archived_at", null)
+      .is("deleted_at", null),
+    db
+      .from("lab_case_audit")
+      .select("occurred_at")
+      .like("actor_label", "worker:%")
+      .order("occurred_at", { ascending: false })
+      .limit(1),
+  ]);
+
+  const categories: HealthCategory[] = [];
+
+  // 1) Portals — drive off consecutive_failures (existing ScrapersPanel
+  //    convention: 1 = yellow, ≥2 = red) plus last-success staleness as a
+  //    cron-liveness proxy (the portal probe runs ~daily).
+  {
+    const rows = (scrapers.data ?? []) as Array<{
+      portal_key: string;
+      last_check_at: string | null;
+      last_success_at: string | null;
+      last_error: string | null;
+      consecutive_failures: number;
+    }>;
+    const items: HealthItem[] = rows
+      .map((r) => {
+        let status: HealthStatus;
+        if (r.consecutive_failures >= 2) status = "red";
+        else if (r.consecutive_failures === 1) status = "yellow";
+        else if (ageHours(r.last_success_at) > 72) status = "red";
+        else if (ageHours(r.last_success_at) > 30) status = "yellow";
+        else status = "green";
+        const ok = formatAge(r.last_success_at);
+        const note =
+          status === "green"
+            ? ok
+              ? `ok · ${ok}`
+              : "ok"
+            : r.last_error
+              ? r.last_error.slice(0, 80)
+              : ok
+                ? `last ok ${ok}`
+                : "never succeeded";
+        return { label: r.portal_key, status, note };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label));
+    const healthy = items.filter((i) => i.status === "green").length;
+    categories.push({
+      key: "portals",
+      label: "Portal scrapers",
+      status: rollup(items),
+      headline:
+        items.length === 0
+          ? "No portals reporting yet"
+          : `${healthy}/${items.length} portals healthy`,
+      detail: "Daily login probe per portal. ≥2 failures = red.",
+      items,
+    });
+  }
+
+  // 2) PB upload queue
+  {
+    const rows = (jobs.data ?? []) as Array<{
+      status: string;
+      last_error: string | null;
+    }>;
+    const count = (s: string) => rows.filter((r) => r.status === s).length;
+    const queued = count("queued") + count("claimed");
+    const failed = count("failed");
+    const succeeded = count("succeeded");
+    const lastErr = rows.find((r) => r.status === "failed")?.last_error;
+    const status: HealthStatus =
+      failed > 0 ? "red" : queued > 5 ? "yellow" : rows.length === 0 ? "idle" : "green";
+    categories.push({
+      key: "pb_queue",
+      label: "PB upload queue",
+      status,
+      headline: `${queued} in flight · ${failed} failed · ${succeeded} done`,
+      detail: failed > 0 && lastErr ? `Last error: ${lastErr.slice(0, 120)}` : undefined,
+    });
+  }
+
+  // 3) Outbound email (14d)
+  {
+    const rows = (emails.data ?? []) as Array<{ status: string }>;
+    const sent = rows.filter((r) => r.status === "sent").length;
+    const failed = rows.filter((r) => r.status === "failed").length;
+    const skipped = rows.filter((r) => r.status === "skipped").length;
+    const attempted = sent + failed;
+    const failRate = attempted === 0 ? 0 : failed / attempted;
+    const status: HealthStatus =
+      rows.length === 0 ? "idle" : failed === 0 ? "green" : failRate > 0.1 ? "red" : "yellow";
+    categories.push({
+      key: "email_out",
+      label: "Outbound email (14d)",
+      status,
+      headline: `${sent} sent · ${failed} failed · ${skipped} skipped`,
+      detail: "Resend delivery for patient lifecycle emails.",
+    });
+  }
+
+  // 4) Inbound / Kennedy-BodyBio
+  {
+    const rows = (inbound.data ?? []) as Array<{
+      parser_status: string;
+      from_address: string | null;
+      subject: string | null;
+      received_at: string;
+    }>;
+    const count = (s: string) => rows.filter((r) => r.parser_status === s).length;
+    const pending = count("pending");
+    const failed = count("failed");
+    const parsed = count("parsed") + count("applied");
+    const isKennedy = (r: (typeof rows)[number]) =>
+      /kennedy|bodybio|krieger/i.test(`${r.from_address ?? ""} ${r.subject ?? ""}`);
+    const kennedy = rows.filter(isKennedy);
+    const kennedyAge = formatAge(
+      kennedy.map((r) => r.received_at).sort().at(-1) ?? null,
+    );
+    const items: HealthItem[] = [
+      {
+        label: "Kennedy / BodyBio",
+        status: kennedy.length === 0 ? "idle" : "green",
+        note:
+          kennedy.length === 0
+            ? "none in last 30d"
+            : `${kennedy.length} in 30d · latest ${kennedyAge}`,
+      },
+    ];
+    const status: HealthStatus =
+      rows.length === 0 ? "idle" : failed > 0 ? "yellow" : pending > 0 ? "yellow" : "green";
+    categories.push({
+      key: "inbound",
+      label: "Inbound email (30d)",
+      status,
+      headline: `${pending} pending · ${parsed} parsed · ${failed} failed`,
+      detail: "Gmail poll + manual uploads of lab-result emails.",
+      items,
+    });
+  }
+
+  // 5) Tracking (FedEx/carrier polling)
+  {
+    const rows = (cases.data ?? []) as Array<{
+      tracking_number: string | null;
+      tracking_delivered_at: string | null;
+      tracking_polled_at: string | null;
+    }>;
+    const tracked = rows.filter((r) => r.tracking_number);
+    const inFlight = tracked.filter((r) => !r.tracking_delivered_at);
+    const delivered = tracked.length - inFlight.length;
+    const newestPoll = tracked
+      .map((r) => r.tracking_polled_at)
+      .filter(Boolean)
+      .sort()
+      .at(-1) as string | null;
+    const pollAge = ageHours(newestPoll);
+    const status: HealthStatus =
+      tracked.length === 0
+        ? "idle"
+        : inFlight.length === 0
+          ? "green"
+          : pollAge > 30
+            ? "yellow"
+            : "green";
+    categories.push({
+      key: "tracking",
+      label: "Shipment tracking",
+      status,
+      headline: `${inFlight.length} in transit · ${delivered} delivered`,
+      detail: newestPoll
+        ? `Last poll ${formatAge(newestPoll)}`
+        : "No tracking polled yet",
+    });
+  }
+
+  // 6) Automation activity (informational liveness — never "red", since a
+  //    quiet engine usually just means no work, not an outage).
+  {
+    const lastWorkerAt =
+      ((lastWorker.data ?? [])[0] as { occurred_at?: string } | undefined)
+        ?.occurred_at ?? null;
+    const age = formatAge(lastWorkerAt);
+    const status: HealthStatus = lastWorkerAt
+      ? ageHours(lastWorkerAt) < 24
+        ? "green"
+        : "idle"
+      : "idle";
+    categories.push({
+      key: "automation",
+      label: "Automation activity",
+      status,
+      headline: lastWorkerAt
+        ? `Last automated post ${age}`
+        : "No automated posts yet",
+      detail: "Reconcile engine / worker write-backs (liveness signal).",
+    });
+  }
+
+  return { generatedAt: new Date().toISOString(), categories };
+}

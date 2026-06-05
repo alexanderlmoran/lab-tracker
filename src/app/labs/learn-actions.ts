@@ -216,7 +216,7 @@ export async function recomputeCatalogTurnaroundsFromHistory(): Promise<
   }
 
   invalidateEffectiveCatalogCache();
-  revalidatePath("/labs/reports");
+  revalidatePath("/labs/analytics"); // turnaround panel now lives in the Analytics → Reports tab
   revalidatePath("/labs/settings");
 
   return {
