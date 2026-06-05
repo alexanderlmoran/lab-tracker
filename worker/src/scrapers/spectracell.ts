@@ -27,7 +27,7 @@
 import { readFile } from "node:fs/promises";
 import type { Browser, Page } from "playwright";
 import type { OpenCase } from "../tracker-client.js";
-import type { LabScraper, ScrapeRun, ScrapeResult } from "./base.js";
+import type { LabScraper, ScrapeRun, ScrapeResult, ProbeCandidate } from "./base.js";
 
 const LOGIN_URL = "https://spec-portal.com/";
 const USERNAME = process.env.SPECTRACELL_USERNAME;
@@ -90,7 +90,117 @@ export const spectracellScraper: LabScraper = {
 
     return { found, errors };
   },
+
+  // Patient-name search for the reconcile engine — finds AGED orders the inbox
+  // has dropped (the gap the inbox-only run() couldn't cover). Captured 2026-06-05:
+  // top search → patient filter (last+first) → click patient → Order History →
+  // read the patientOrdersTable. The order-history row carries orderId, a
+  // collection date, and a "Complete" status; the patient-search row carries DOB,
+  // so matches are DOB-verified. Browser-driven (Orchard Copia is servlet/UI-based).
+  async probeByName(
+    browser: Browser,
+    name: string,
+    dob?: string | null,
+  ): Promise<ProbeCandidate[]> {
+    if (!USERNAME || !PASSWORD) {
+      throw new Error("SPECTRACELL_USERNAME / SPECTRACELL_PASSWORD not configured");
+    }
+    const ctx = await browser.newContext({ acceptDownloads: true });
+    const page = await ctx.newPage();
+    page.setDefaultTimeout(45_000);
+    try {
+      await login(page);
+      const { last, first } = splitName(name);
+
+      // Open the patient search, reveal the filter, type last + first name. The
+      // results table narrows as-you-type, so settle before reading.
+      await page.locator("#button_patient_search").click();
+      await page
+        .locator("#patientSearchTab")
+        .getByRole("link", { name: /show filter/i })
+        .click()
+        .catch(() => {});
+      await page.getByRole("textbox", { name: /Patient Last Name/i }).fill(last);
+      if (first) {
+        await page.getByRole("textbox", { name: /Patient First Name/i }).fill(first).catch(() => {});
+      }
+      await page.waitForTimeout(3000);
+
+      const dobNorm = normalizeDob(dob ?? null);
+      const nameNorm = normalizeName(name);
+
+      // Find the matching patient row (name + DOB) and open its context menu.
+      const pLinks = await page.locator("a.patientContextMenuElement").all();
+      let patientLink: (typeof pLinks)[number] | null = null;
+      for (const link of pLinks) {
+        const tr = link.locator("xpath=ancestor::tr[1]");
+        const cells = (await tr.locator("td").allTextContents()).map((c) => c.replace(/\s+/g, " ").trim());
+        const rowName = cells.find((c) => /^[A-Za-z'’.\- ]+,\s*[A-Za-z]/.test(c)) ?? "";
+        const rowDob = cells.find((c) => /^\d{2}\/\d{2}\/\d{4}$/.test(c)) ?? null;
+        if (normalizeName(rowName) === nameNorm && (dobNorm === "" || normalizeDob(rowDob) === dobNorm)) {
+          patientLink = link;
+          break;
+        }
+      }
+      if (!patientLink) return [];
+      const dobConfirmed = dobNorm !== "";
+
+      await patientLink.click();
+      await page.getByRole("menuitem", { name: /Order History/i }).click();
+      await page.waitForTimeout(3000);
+
+      // Read the order-history rows. Cols: orderId | specimen | test |
+      // collDate ("MM/DD/YYYY hh:mmAM") | provider | status ("Complete").
+      const orderLinks = await page.locator(ORDER_LINK_SEL).all();
+      const seen = new Set<string>();
+      const out: ProbeCandidate[] = [];
+      for (const link of orderLinks) {
+        const orderId = ((await link.textContent()) ?? "").replace(/\s+/g, " ").trim();
+        if (!orderId || seen.has(orderId)) continue; // frozen/scroll panes duplicate
+        seen.add(orderId);
+        const tr = link.locator("xpath=ancestor::tr[1]");
+        const cells = (await tr.locator("td").allTextContents()).map((c) => c.replace(/\s+/g, " ").trim());
+        const dateCell = cells.find((c) => /^\d{2}\/\d{2}\/\d{4}/.test(c)) ?? "";
+        const statusCell =
+          cells.find((c) =>
+            /^(complete|in[\s-]?process|pending|preliminary|final|received|partial|cancell?ed)$/i.test(c),
+          ) ?? "";
+        const md = dateCell.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+        out.push({
+          ref: orderId || null,
+          resultIssuedAt: md ? `${md[3]}-${md[1]}-${md[2]}` : null,
+          collectionDate: md ? `${md[1]}/${md[2]}/${md[3]}` : null,
+          status: statusCell,
+          dobConfirmed,
+        });
+      }
+      return out;
+    } finally {
+      await ctx.close();
+    }
+  },
 };
+
+// "Doe, Jane" / "Jane Doe" → { last: "Doe", first: "Jane" } for the search fields.
+function splitName(name: string): { last: string; first: string } {
+  const clean = name.replace(/[^a-zA-Z, ]/g, "").trim();
+  if (clean.includes(",")) {
+    const [last, first] = clean.split(",").map((p) => p.trim());
+    return { last: last ?? "", first: first ?? "" };
+  }
+  const parts = clean.split(/\s+/);
+  if (parts.length >= 2) return { last: parts[parts.length - 1], first: parts[0] };
+  return { last: clean, first: "" };
+}
+
+function normalizeDob(s: string | null): string {
+  if (!s) return "";
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (us) return `${us[3]}-${us[1].padStart(2, "0")}-${us[2].padStart(2, "0")}`;
+  return s.trim();
+}
 
 async function login(page: Page): Promise<void> {
   await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
