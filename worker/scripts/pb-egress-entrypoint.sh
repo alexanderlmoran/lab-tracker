@@ -55,6 +55,28 @@ if [ -z "$up_ok" ]; then
 fi
 
 echo "pb-egress: tailnet up; PracticeBetter traffic egresses via ${TS_EXIT_NODE}"
+
+# The relay path to the exit node can lag several seconds behind `tailscale up`.
+# Don't start the job until a real request through the proxy actually succeeds —
+# otherwise the job's first PB call fails and (for reconcile) aborts the whole
+# cycle until the next interval. If the tunnel never comes up, exit non-zero so
+# Fly restarts the machine and retries (seconds) rather than waiting hours.
+if command -v curl >/dev/null 2>&1; then
+  ready=""
+  for _ in $(seq 1 30); do
+    if curl -fsS --max-time 8 -x "http://localhost:1055" https://api.ipify.org >/dev/null 2>&1; then
+      ready=1; break
+    fi
+    sleep 2
+  done
+  if [ -z "$ready" ]; then
+    echo "pb-egress: exit-node tunnel not passing traffic after ~60s (exit node ${TS_EXIT_NODE} online?) — restarting" >&2
+    kill "$TSD_PID" 2>/dev/null || true
+    exit 1
+  fi
+  echo "pb-egress: exit-node tunnel confirmed reachable"
+fi
+
 # Only PB-domain calls (pbRequest in practicebetter.ts) read this; S3 + scraping
 # stay on direct Fly egress.
 export PB_PROXY_URL="http://localhost:1055"

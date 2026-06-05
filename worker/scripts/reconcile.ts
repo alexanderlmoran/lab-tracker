@@ -220,6 +220,9 @@ async function runOnce() {
 
   try {
     for (const [, plist] of byPatient) {
+      // Isolate each patient: a transient PB/portal failure for one shouldn't
+      // abort the whole --lab=all sweep (the next interval is hours away).
+      try {
       const first = plist[0];
       const pbPatient = await findPbPatient(session, first.patient_name, first.patient_dob ?? undefined);
       const pbReqs = pbPatient ? allPbReqs.filter((lr) => lr.clientRecord?.id === pbPatient.id) : [];
@@ -338,6 +341,10 @@ async function runOnce() {
           tally.flagged++;
           log(`    ⚑ ${c.id.slice(0, 8)} acc=${found.labExternalRef} grade=${grade.score} → STAGED, FLAGGED for review (${grade.reasons.join(", ")})`);
         }
+      }
+      } catch (err) {
+        tally.errors++;
+        log(`  ✗ ${plist[0]?.patient_name ?? "?"} — patient skipped (continuing): ${err instanceof Error ? err.message : err}`);
       }
     }
   } finally {
