@@ -550,11 +550,16 @@ function Field({
 export function CaseDetail({
   row,
   initialOpenAttempts = 0,
+  autoReview = false,
 }: {
   row: LabCase;
   /** Open contact attempts from the kanban — lets the action bar render the
    *  Reached button without a roundtrip on first open. */
   initialOpenAttempts?: number;
+  /** When the card was opened via its "Review" CTA (a Pending-Upload card),
+   *  auto-open the PDF review modal as soon as the pending PDF loads — saves
+   *  the open-dialog → find-banner → click-Review steps. */
+  autoReview?: boolean;
 }) {
   const currentCol = getColumnFor(row);
   const done = completedStepCount(row);
@@ -592,7 +597,9 @@ export function CaseDetail({
     setReviewLoading(true);
     getPendingPdfForCase(row.id)
       .then((p) => {
-        if (!cancelled) setPendingPdf(p);
+        if (cancelled) return;
+        setPendingPdf(p);
+        if (p && autoReview) setReviewOpen(true);
       })
       .catch((e: unknown) => {
         if (!cancelled)

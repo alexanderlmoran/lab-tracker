@@ -51,12 +51,16 @@ function LabCard({
   onOpen,
   counts,
   dupSiblings,
+  hasPendingPdf,
 }: {
   row: LabCase;
-  onOpen: (row: LabCase) => void;
+  onOpen: (row: LabCase, autoReview?: boolean) => void;
   counts: CardCounts;
   /** Other cards for the same patient sharing this card's accession. */
   dupSiblings?: LabCase[];
+  /** A result PDF is staged awaiting Approve — clicking the card jumps straight
+   *  to the review modal. */
+  hasPendingPdf?: boolean;
 }) {
   const expected = formatExpectedRange(
     row.expected_result_at_min,
@@ -79,11 +83,13 @@ function LabCard({
   return (
     <button
       type="button"
-      onClick={() => onOpen(row)}
+      onClick={() => onOpen(row, hasPendingPdf)}
       className={`flex w-full gap-2 rounded-md border p-1.5 text-left shadow-sm transition-shadow hover:shadow ${
-        probablyReady
-          ? "border-blue-300 bg-blue-50"
-          : attemptCardClasses(counts.openAttempts)
+        hasPendingPdf
+          ? "border-amber-400 bg-amber-50"
+          : probablyReady
+            ? "border-blue-300 bg-blue-50"
+            : attemptCardClasses(counts.openAttempts)
       }`}
     >
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -104,6 +110,14 @@ function LabCard({
       </div>
 
       <div className="flex shrink-0 flex-col items-end gap-0.5">
+        {hasPendingPdf ? (
+          <RailChip
+            className="border-amber-400 bg-amber-100 font-semibold text-amber-800"
+            title="Result PDF staged — click to review & approve"
+          >
+            review
+          </RailChip>
+        ) : null}
         {trackingMeta ? (
           <RailChip
             className={trackingMeta.className}
@@ -281,9 +295,11 @@ export function LabKanbanBoard({
 
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [activeRow, setActiveRow] = useState<LabCase | null>(null);
+  const [autoReview, setAutoReview] = useState(false);
 
-  function openLabDetail(row: LabCase) {
+  function openLabDetail(row: LabCase, review = false) {
     setActiveRow(row);
+    setAutoReview(review);
     queueMicrotask(() => dialogRef.current?.showModal());
   }
   function closeDialog() {
@@ -318,6 +334,7 @@ export function LabKanbanBoard({
                     onOpen={openLabDetail}
                     counts={counts?.[row.id] ?? ZERO_COUNTS}
                     dupSiblings={dupByCaseId.get(row.id)}
+                    hasPendingPdf={pendingPdfSet.has(row.id)}
                   />
                 ))
               )}
@@ -359,6 +376,7 @@ export function LabKanbanBoard({
                 // so without this an in-dialog edit wouldn't show until reopen.
                 row={rows.find((r) => r.id === activeRow.id) ?? activeRow}
                 initialOpenAttempts={counts?.[activeRow.id]?.openAttempts ?? 0}
+                autoReview={autoReview}
               />
             </div>
             <div className="flex items-center justify-end gap-2 border-t border-zinc-200 px-6 py-3">
