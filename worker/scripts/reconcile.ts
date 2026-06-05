@@ -78,6 +78,32 @@ const loop = argv.includes("--loop");
 const log = (m = "") => console.log(m);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// The PB egress runs through a residential Tailscale exit node (a clinic laptop)
+// whose path can briefly flap, surfacing as "Proxy response (500) when HTTP
+// Tunneling" on a PB call. The cycle's FIRST PB calls (login + the big labrequest
+// pull) happen before the per-patient try/catch, so a single flap there would
+// abort the whole sweep until the next interval. Retry transient tunnel/network
+// failures a few times so a brief flap doesn't cost hours.
+async function withRetry<T>(label: string, fn: () => Promise<T>, attempts = 5, delayMs = 6000): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const transient = /Tunneling|proxy|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket|fetch failed|terminated|other side closed|UND_ERR/i.test(msg);
+      if (!transient || i === attempts) {
+        log(`  (${label} failed${transient ? ` after ${attempts} tries` : ""}: ${msg.slice(0, 80)})`);
+        throw err;
+      }
+      log(`  (${label} attempt ${i}/${attempts} transient tunnel error, retry in ${delayMs / 1000}s)`);
+      await sleep(delayMs);
+    }
+  }
+  throw lastErr;
+}
+
 // Auto-post threshold (default 90 = the grader's line). Env-overridable so
 // auto-posting to PB can be held OFF entirely — set RECONCILE_AUTOPOST_THRESHOLD
 // = 101 and every capture flags for human review instead — until the first live
@@ -199,7 +225,7 @@ async function runOnce() {
   log(`RECONCILE ENGINE — lab=${labArg} patient=${patientArg}  ${apply ? "APPLY (LIVE)" : "DRY (no writes)"}`);
   log("─".repeat(84));
 
-  const session = await pbLogin(PB_USERNAME!, PB_PASSWORD!);
+  const session = await withRetry("pbLogin", () => pbLogin(PB_USERNAME!, PB_PASSWORD!));
   const cases = await fetchCases(patientArg, labArg);
   log(`Stuck cases (lab=${labArg}): ${cases.length}\n`);
   if (cases.length === 0) return;
@@ -207,7 +233,9 @@ async function runOnce() {
   // Pull the full PB labrequest list ONCE and filter per patient in memory.
   // (Re-fetching 2000 rows per patient doesn't scale to --lab=all and hammers
   // PB's rate limit.)
-  const allPbReqs = await listAllConsultantLabRequests(session, { limit: 2000 });
+  const allPbReqs = await withRetry("listAllConsultantLabRequests", () =>
+    listAllConsultantLabRequests(session, { limit: 2000 }),
+  );
 
   const browser = await chromium.launch({ headless: true });
   const byPatient = new Map<string, TrackerCase[]>();
@@ -224,7 +252,9 @@ async function runOnce() {
       // abort the whole --lab=all sweep (the next interval is hours away).
       try {
       const first = plist[0];
-      const pbPatient = await findPbPatient(session, first.patient_name, first.patient_dob ?? undefined);
+      const pbPatient = await withRetry("findPbPatient", () =>
+        findPbPatient(session, first.patient_name, first.patient_dob ?? undefined),
+      );
       const pbReqs = pbPatient ? allPbReqs.filter((lr) => lr.clientRecord?.id === pbPatient.id) : [];
 
       // Probe each portal this patient has stuck cases in (cache per lab). Only
