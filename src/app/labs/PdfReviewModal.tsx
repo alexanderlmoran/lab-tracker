@@ -70,6 +70,14 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
     });
   }
 
+  // Wrong-patient-result is the single biggest risk in the approve flow — when
+  // the PDF's accession doesn't match the case's, warn prominently (not a 10px tag).
+  const accMismatch = Boolean(
+    pdf.externalRef &&
+      pdf.caseRef.caseExternalRef &&
+      pdf.externalRef !== pdf.caseRef.caseExternalRef,
+  );
+
   const headerSubtitle = [
     pdf.externalRef ? `Acc# ${pdf.externalRef}` : null,
     pdf.isPartial ? "Partial result" : "Complete result",
@@ -111,6 +119,19 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
             Close
           </button>
         </div>
+
+        {/* ── Accession-mismatch warning (wrong-patient guard) ──────── */}
+        {accMismatch ? (
+          <div className="flex items-center gap-2 border-b border-red-300 bg-red-100 px-4 py-2 text-[12px] font-semibold text-red-800">
+            <span aria-hidden className="text-base leading-none">⚠</span>
+            <span>
+              Accession mismatch — this PDF reports{" "}
+              <span className="font-mono">{pdf.externalRef}</span> but the case expects{" "}
+              <span className="font-mono">{pdf.caseRef.caseExternalRef}</span>. Confirm this is the
+              right patient&apos;s result before approving.
+            </span>
+          </div>
+        ) : null}
 
         {/* ── Body: reference panel + PDF, side by side ─────────────── */}
         <div className="flex min-h-0 flex-1 overflow-hidden">

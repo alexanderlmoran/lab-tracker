@@ -177,14 +177,30 @@ function StaticColumn({
   count: number;
   children: React.ReactNode;
 }) {
+  // Pending Upload is the one lane that owes a human action (Approve → PB). Make
+  // it pop when it has cases so it can't hide among the 9 equal-width columns.
+  const needsAction = col === "pending_upload" && count > 0;
   return (
     <section
-      className="kanban-col flex min-w-0 flex-1 basis-0 flex-col p-1.5 lg:min-h-0"
+      className={`kanban-col flex min-w-0 flex-1 basis-0 flex-col p-1.5 lg:min-h-0 ${
+        needsAction ? "rounded-md bg-amber-50/50 ring-1 ring-amber-300" : ""
+      }`}
       data-col={col}
     >
       <header className="flex items-center justify-between px-1.5 py-1">
-        <h3 className="col-head-title">{COLUMN_LABEL[col]}</h3>
-        <span className="col-head-count">{count}</span>
+        <h3 className={`col-head-title ${needsAction ? "text-amber-800" : ""}`}>
+          {needsAction ? "● " : ""}
+          {COLUMN_LABEL[col]}
+        </h3>
+        <span
+          className={
+            needsAction
+              ? "rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold text-white"
+              : "col-head-count"
+          }
+        >
+          {count}
+        </span>
       </header>
       <div className="flex min-h-[40px] flex-col gap-1.5 p-0.5 lg:flex-1 lg:overflow-y-auto">
         {children}
