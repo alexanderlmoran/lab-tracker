@@ -41,7 +41,7 @@ primary_region = "iad"
   # PB traffic through the clinic exit node. Needs Fly secrets TS_AUTHKEY +
   # TS_EXIT_NODE. The other process groups don't touch PB, so they run unwrapped.
   pbdrain = "bash scripts/pb-egress-entrypoint.sh npx tsx scripts/pb-upload-worker.ts"
-  reconcile = "bash scripts/pb-egress-entrypoint.sh npx tsx scripts/reconcile.ts --patient=all --lab=Access --apply --loop"
+  reconcile = "bash scripts/pb-egress-entrypoint.sh npx tsx scripts/reconcile.ts --patient=all --lab=all --apply --loop"
 
 [http_service]
   internal_port = 8080

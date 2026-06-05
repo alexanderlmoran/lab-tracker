@@ -10,10 +10,14 @@
 //            grade <90 → stage in Pending Upload, FLAG for Nadia + Alex
 //
 //   cd worker
-//   npx tsx scripts/reconcile.ts                       # Fereshteh, dry
-//   npx tsx scripts/reconcile.ts --patient=all --apply # whole Access set, live
+//   npx tsx scripts/reconcile.ts                          # Fereshteh, dry
+//   npx tsx scripts/reconcile.ts --patient=all --apply    # whole Access set, live
+//   npx tsx scripts/reconcile.ts --lab=all --patient=all  # every portal
 //
-// Access only today; rolls to other portals once they expose probeByName.
+// --lab=all sweeps every portal. The PB-dedup half (advance already-on-PB) runs
+// for ALL labs; the portal search→grade→≥90-post half runs for labs whose
+// scraper exposes probeByName (Access today; others as they gain it — see the
+// scraperByLab registry below).
 
 import { request } from "undici";
 import { chromium } from "playwright";
@@ -26,12 +30,38 @@ const { pbLogin, findPbPatient, listAllConsultantLabRequests } = await import(
 );
 const { classifyCase } = await import("../src/backfill/engine.js");
 const { gradeCapture } = await import("../src/recon/grade.js");
-const { accessScraper } = await import("../src/scrapers/access.js");
 const { postResultReady } = await import("../src/tracker-client.js");
 
 type BackfillCaseT = import("../src/backfill/engine.js").BackfillCase;
 type ProbeCandidateT = import("../src/scrapers/base.js").ProbeCandidate;
 type OpenCaseT = import("../src/tracker-client.js").OpenCase;
+type LabScraperT = import("../src/scrapers/base.js").LabScraper;
+
+// Per-lab scraper registry. The hand-written scraper objects each expose run()
+// (download by labExternalRef) and OPTIONALLY probeByName() (patient search).
+// PB-dedup (advance already-on-PB) is portal-agnostic and runs for every lab;
+// the portal search→grade→post path runs only for labs whose scraper exposes
+// probeByName (Access today; others as they gain it). One bad/uninstallable
+// scraper module must not sink the others, so each import is isolated.
+const SCRAPER_MODULES: Array<[string, string]> = [
+  ["../src/scrapers/access.js", "accessScraper"],
+  ["../src/scrapers/cyrex.js", "cyrexScraper"],
+  ["../src/scrapers/spectracell.js", "spectracellScraper"],
+  ["../src/scrapers/genova.js", "genovaScraper"],
+  ["../src/scrapers/glycanage.js", "glycanageScraper"],
+  ["../src/scrapers/doctorsdata.js", "doctorsdataScraper"],
+  ["../src/scrapers/vibrant.js", "vibrantScraper"],
+];
+const scraperByLab = new Map<string, LabScraperT>();
+for (const [path, name] of SCRAPER_MODULES) {
+  try {
+    const mod = (await import(path)) as Record<string, LabScraperT | undefined>;
+    const s = mod[name];
+    if (s?.labName) scraperByLab.set(s.labName.toLowerCase(), s);
+  } catch (err) {
+    console.log(`(reconcile: scraper ${name} unavailable: ${err instanceof Error ? err.message : err})`);
+  }
+}
 
 const TRACKER_BASE = process.env.TRACKER_BASE_URL ?? "http://localhost:3000";
 const WORKER_SECRET = process.env.WORKER_SHARED_SECRET;
@@ -87,12 +117,13 @@ async function fetchCases(query: string, lab: string): Promise<TrackerCase[]> {
   const res = await request(url, { method: "GET", headers: { authorization: `Bearer ${WORKER_SECRET}` } });
   if (res.statusCode !== 200) throw new Error(`tracker debug ${res.statusCode}`);
   const json = (await res.body.json()) as { ok: boolean; cases: TrackerCase[] };
+  const allLabs = lab.toLowerCase() === "all";
   return (json.cases ?? []).filter(
     (c) =>
       c.step1_sample_sent &&
       !c.step5_complete_uploaded &&
       !c.archived_at &&
-      c.lab_name?.toLowerCase() === lab.toLowerCase(),
+      (allLabs || c.lab_name?.toLowerCase() === lab.toLowerCase()),
   );
 }
 
@@ -170,8 +201,13 @@ async function runOnce() {
 
   const session = await pbLogin(PB_USERNAME!, PB_PASSWORD!);
   const cases = await fetchCases(patientArg, labArg);
-  log(`Stuck ${labArg} cases: ${cases.length}\n`);
+  log(`Stuck cases (lab=${labArg}): ${cases.length}\n`);
   if (cases.length === 0) return;
+
+  // Pull the full PB labrequest list ONCE and filter per patient in memory.
+  // (Re-fetching 2000 rows per patient doesn't scale to --lab=all and hammers
+  // PB's rate limit.)
+  const allPbReqs = await listAllConsultantLabRequests(session, { limit: 2000 });
 
   const browser = await chromium.launch({ headless: true });
   const byPatient = new Map<string, TrackerCase[]>();
@@ -186,21 +222,30 @@ async function runOnce() {
     for (const [, plist] of byPatient) {
       const first = plist[0];
       const pbPatient = await findPbPatient(session, first.patient_name, first.patient_dob ?? undefined);
-      const pbReqs = pbPatient
-        ? (await listAllConsultantLabRequests(session, { limit: 2000 })).filter(
-            (lr) => lr.clientRecord?.id === pbPatient.id,
-          )
-        : [];
-      let cands: ProbeCandidateT[] = [];
-      try {
-        cands = await accessScraper.probeByName!(browser, first.patient_name, first.patient_dob);
-      } catch (err) {
-        log(`  ⚠ ${first.patient_name}: portal search failed: ${err instanceof Error ? err.message : err}`);
+      const pbReqs = pbPatient ? allPbReqs.filter((lr) => lr.clientRecord?.id === pbPatient.id) : [];
+
+      // Probe each portal this patient has stuck cases in (cache per lab). Only
+      // labs whose scraper exposes probeByName get a portal search; the rest
+      // fall through to PB-dedup-only ("keep searching").
+      const labsForPatient = new Set(plist.map((c) => c.lab_name?.toLowerCase() ?? ""));
+      const candsByLab = new Map<string, ProbeCandidateT[]>();
+      for (const labKey of labsForPatient) {
+        const scraper = scraperByLab.get(labKey);
+        if (!scraper?.probeByName) continue;
+        try {
+          candsByLab.set(labKey, await scraper.probeByName(browser, first.patient_name, first.patient_dob));
+        } catch (err) {
+          log(`  ⚠ ${first.patient_name} [${labKey}]: portal search failed: ${err instanceof Error ? err.message : err}`);
+        }
       }
-      log(`▸ ${first.patient_name}  pb=${pbReqs.length}  portal=${cands.length}`);
+      const portalSummary = [...candsByLab].map(([k, v]) => `${k}=${v.length}`).join(" ") || "—";
+      log(`▸ ${first.patient_name}  pb=${pbReqs.length}  portal: ${portalSummary}`);
 
       for (const c of plist) {
-        // 1. Already on PB → advance.
+        const labKey = c.lab_name?.toLowerCase() ?? "";
+        const scraper = scraperByLab.get(labKey);
+
+        // 1. Already on PB → advance (portal-agnostic — runs for every lab).
         const decision = classifyCase(toBackfillCase(c), pbReqs);
         if (decision.action === "already-on-pb" && decision.confidence === "high") {
           if (apply) {
@@ -212,7 +257,13 @@ async function runOnce() {
           continue;
         }
 
-        // 2. Not on PB → portal.
+        // 2. Not on PB → portal search (only for labs whose scraper can probe).
+        if (!scraper?.probeByName) {
+          tally.searching++;
+          log(`    • ${c.id.slice(0, 8)} → not on PB; ${labKey || "lab"} has no portal search yet → keep searching`);
+          continue;
+        }
+        const cands = candsByLab.get(labKey) ?? [];
         const cand = bestCandidate(c, cands);
         if (!cand || !cand.ref) {
           tally.searching++;
@@ -243,7 +294,7 @@ async function runOnce() {
         }
 
         // Apply: download the chosen accession, grade with pdf bytes, stage.
-        const run = await accessScraper.run(browser, [toOpenCase(c, cand.ref)]);
+        const run = await scraper.run(browser, [toOpenCase(c, cand.ref)]);
         const found = run.found[0];
         if (!found) {
           tally.errors++;
