@@ -36,8 +36,12 @@ primary_region = "iad"
   zenoti = "npx tsx scripts/zenoti-auto-loop.ts"
   tracking = "npx tsx scripts/refresh-tracking-loop.ts"
   scrape = "npx tsx scripts/scrape-all.ts --loop"
-  pbdrain = "npx tsx scripts/pb-upload-worker.ts"
-  reconcile = "npx tsx scripts/reconcile.ts --patient=all --lab=Access --apply --loop"
+  # pbdrain + reconcile touch PracticeBetter, which blocks datacenter IPs (error
+  # 8000). The pb-egress wrapper brings up Tailscale (userspace) and routes ONLY
+  # PB traffic through the clinic exit node. Needs Fly secrets TS_AUTHKEY +
+  # TS_EXIT_NODE. The other process groups don't touch PB, so they run unwrapped.
+  pbdrain = "bash scripts/pb-egress-entrypoint.sh npx tsx scripts/pb-upload-worker.ts"
+  reconcile = "bash scripts/pb-egress-entrypoint.sh npx tsx scripts/reconcile.ts --patient=all --lab=Access --apply --loop"
 
 [http_service]
   internal_port = 8080

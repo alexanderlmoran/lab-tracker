@@ -16,6 +16,14 @@ RUN npm run build
 # machine can `npx tsx scripts/<job>.ts --once`.
 COPY scripts ./scripts
 
+# Tailscale binaries — the pbdrain + reconcile process groups route PracticeBetter
+# traffic through a residential exit node (PB blocks datacenter IPs). We run
+# tailscaled in userspace mode via scripts/pb-egress-entrypoint.sh; no systemd.
+COPY --from=docker.io/tailscale/tailscale:stable /usr/local/bin/tailscaled /usr/local/bin/tailscaled
+COPY --from=docker.io/tailscale/tailscale:stable /usr/local/bin/tailscale /usr/local/bin/tailscale
+RUN mkdir -p /var/run/tailscale /var/lib/tailscale \
+ && chmod +x ./scripts/pb-egress-entrypoint.sh
+
 ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080
