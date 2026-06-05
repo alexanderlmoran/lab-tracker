@@ -1258,8 +1258,10 @@ export async function listEffectiveLabsForPicker() {
 /** Normalized group key that collapses case + a "Labs -/·" prefix + the
  *  " · panel" suffix, so variant spellings of one lab share a key.
  *  "Access"/"access"/"access · custom" → "access"; "Peptides · Semax…" →
- *  "peptides"; "Vibrant · EBOO Waste" → "vibrant". */
-export function labGroupKey(name: string): string {
+ *  "peptides"; "Vibrant · EBOO Waste" → "vibrant".
+ *  NOT exported — this file is "use server", where only async functions may be
+ *  exported (a sync export breaks the Next build). Keep it module-private. */
+function labGroupKey(name: string): string {
   return name
     .toLowerCase()
     .replace(/^labs\s*[·-]\s*/, "")
