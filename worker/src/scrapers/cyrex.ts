@@ -21,7 +21,7 @@
 import { readFile } from "node:fs/promises";
 import type { Browser, Page } from "playwright";
 import type { OpenCase } from "../tracker-client.js";
-import type { LabScraper, ScrapeRun, ScrapeResult } from "./base.js";
+import type { LabScraper, ScrapeRun, ScrapeResult, ProbeCandidate } from "./base.js";
 
 const LOGIN_URL = "https://www.cyrexlabs.com/Home/tabid/40/Default.aspx";
 const MY_ORDERS_URL = "https://www.cyrexlabs.com/MyOrders/tabid/80/Default.aspx";
@@ -100,6 +100,58 @@ export const cyrexScraper: LabScraper = {
     }
 
     return { found, errors };
+  },
+
+  // Patient-name search for the reconcile engine: list candidate orders WITHOUT
+  // downloading. Mirrors access.ts probeByName. Two Cyrex-specific normalizations
+  // so the engine's grader/date logic works: pad M/D/YYYY → MM/DD/YYYY, and map
+  // the finalized status "OnLine" → "Complete" (Cyrex isn't a drip lab, so a
+  // finalized order is a full result).
+  async probeByName(
+    browser: Browser,
+    name: string,
+    dob?: string | null,
+  ): Promise<ProbeCandidate[]> {
+    if (!USERNAME || !PASSWORD) {
+      throw new Error("CYREX_USERNAME / CYREX_PASSWORD not configured");
+    }
+    const ctx = await browser.newContext({ acceptDownloads: true });
+    const page = await ctx.newPage();
+    try {
+      await login(page);
+      await openMyOrders(page);
+      const rows = await search(page, { lastName: lastNameOf(name) });
+
+      const dobNorm = normalizeDob(dob ?? null);
+      const nameNorm = normalizeName(name);
+      const matched = rows.filter(
+        (r) =>
+          normalizeName(`${r.lastName}, ${r.firstName}`) === nameNorm &&
+          (dobNorm === "" || normalizeDob(r.dob) === dobNorm),
+      );
+
+      const isFinalized = (r: RowSnapshot) =>
+        r.hasResultLink || /online/i.test(r.status);
+
+      // Ready (finalized) first, then newest collection date first.
+      matched.sort((a, b) => {
+        const af = isFinalized(a) ? 0 : 1;
+        const bf = isFinalized(b) ? 0 : 1;
+        if (af !== bf) return af - bf;
+        return (parseDate(b.collectionDate) ?? "").localeCompare(
+          parseDate(a.collectionDate) ?? "",
+        );
+      });
+
+      return matched.map((r) => ({
+        ref: r.requisition || null,
+        resultIssuedAt: parseDate(r.resultDate) ?? parseDate(r.collectionDate) ?? null,
+        collectionDate: padUsDate(r.collectionDate),
+        status: isFinalized(r) ? "Complete" : r.status || "Pending",
+      }));
+    } finally {
+      await ctx.close();
+    }
   },
 };
 
@@ -297,4 +349,13 @@ function parseDate(s: string | undefined): string | undefined {
   const mm = m[1].padStart(2, "0");
   const dd = m[2].padStart(2, "0");
   return `${m[3]}-${mm}-${dd}`;
+}
+
+// Pad Cyrex's non-zero-padded M/D/YYYY → MM/DD/YYYY so the reconcile engine's
+// daysOff() (which expects 2-digit fields) can parse it for date-proximity.
+function padUsDate(s: string): string {
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!m) return s;
+  const yr = m[3].length === 2 ? `20${m[3]}` : m[3];
+  return `${m[1].padStart(2, "0")}/${m[2].padStart(2, "0")}/${yr}`;
 }
