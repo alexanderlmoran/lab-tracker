@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import {
   approvePdf,
   disapproveWrongPdf,
+  markAlreadyUploaded,
   retryPdfUpload,
   type PendingPdf,
 } from "./pdf-actions";
@@ -12,10 +13,12 @@ export type PdfReviewModalProps = {
   pdf: PendingPdf;
   /** Optional patient label for the modal header. */
   patientName?: string;
-  onClose: (result: { actionTaken: "approved" | "wrong_pdf" | "retry" | "cancel" }) => void;
+  onClose: (result: {
+    actionTaken: "approved" | "wrong_pdf" | "already_uploaded" | "retry" | "cancel";
+  }) => void;
 };
 
-type PendingAction = "approve" | "wrong_pdf" | "retry" | null;
+type PendingAction = "approve" | "wrong_pdf" | "already_uploaded" | "retry" | null;
 
 export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProps) {
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +49,8 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
           ? await approvePdf(args)
           : action === "wrong_pdf"
           ? await disapproveWrongPdf(args)
+          : action === "already_uploaded"
+          ? await markAlreadyUploaded(args)
           : await retryPdfUpload(args);
       if (!result.ok) {
         setError(result.error ?? "Action failed");
@@ -54,7 +59,13 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
       }
       onClose({
         actionTaken:
-          action === "approve" ? "approved" : action === "wrong_pdf" ? "wrong_pdf" : "retry",
+          action === "approve"
+            ? "approved"
+            : action === "wrong_pdf"
+            ? "wrong_pdf"
+            : action === "already_uploaded"
+            ? "already_uploaded"
+            : "retry",
       });
     });
   }
@@ -230,6 +241,15 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
                 {pendingAction === "retry" ? "Queuing…" : "Retry upload"}
               </button>
             ) : null}
+            <button
+              type="button"
+              className="rounded-md border border-sky-300 bg-white px-3 py-1.5 text-[12px] font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-50"
+              disabled={isPending}
+              onClick={() => run("already_uploaded")}
+              title="This result is already on the patient's PB chart — move the card to Complete Uploaded without re-uploading or emailing"
+            >
+              {pendingAction === "already_uploaded" ? "Marking…" : "Already on PB — complete"}
+            </button>
             <button
               type="button"
               className="rounded-md bg-emerald-600 px-4 py-1.5 text-[12px] font-medium text-white hover:bg-emerald-700 disabled:opacity-50"

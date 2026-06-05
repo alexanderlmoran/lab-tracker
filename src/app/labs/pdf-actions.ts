@@ -323,6 +323,65 @@ export async function disapproveWrongPdf(
 }
 
 /**
+ * Staff verified the result is ALREADY on the patient's PB chart (e.g. someone
+ * posted it manually) — so don't re-upload. Supersede the staged PDF, mark
+ * step 5 complete (card → Complete Uploaded), and log it. Stays silent on the
+ * patient/Nadia emails, like the engine's already-on-PB advance: PB already has
+ * it, so there's nothing new to announce.
+ */
+export async function markAlreadyUploaded(
+  input: z.infer<typeof DisapproveInput>,
+): Promise<ActionResult> {
+  const user = await requireSignedIn();
+  const parsed = DisapproveInput.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
+  const db = getSupabaseAdmin();
+
+  await db.from("lab_case_audit").insert({
+    case_id: parsed.data.caseId,
+    pdf_id: parsed.data.pdfId,
+    action: "approve",
+    actor_user_id: user.id,
+    actor_label: user.email ?? "staff",
+    notes: parsed.data.notes
+      ? `Already on PB (no re-upload): ${parsed.data.notes}`
+      : "Already on PB — marked complete without re-uploading",
+  });
+
+  // Discard the redundant staged PDF so it can't be re-surfaced / re-uploaded.
+  const { error: pdfErr } = await db
+    .from("lab_case_pdfs")
+    .update({
+      superseded_at: new Date().toISOString(),
+      superseded_reason: "already on PB (staff marked complete)",
+    })
+    .eq("id", parsed.data.pdfId);
+  if (pdfErr) return { ok: false, error: pdfErr.message };
+
+  const { error: caseErr } = await db
+    .from("lab_cases")
+    .update({ step5_complete_uploaded: true })
+    .eq("id", parsed.data.caseId);
+  if (caseErr) return { ok: false, error: caseErr.message };
+
+  await db.from("lab_events").insert({
+    case_id: parsed.data.caseId,
+    kind: "step_toggled",
+    step: 5,
+    completed: true,
+    actor: user.email ?? "staff",
+    note: "Marked complete — result already on PB (no re-upload, no email)",
+  });
+
+  revalidatePath("/labs");
+  revalidatePath(`/labs/${parsed.data.caseId}`);
+  return { ok: true };
+}
+
+/**
  * Staff clicks Retry after a prior upload failed. Logs intent — the worker
  * (PB uploader, future phase) is what actually re-runs the upload.
  */
