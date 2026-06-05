@@ -220,7 +220,15 @@ async function downloadPdf(
     throw new Error(`pdf-engine failed ${resp.statusCode}: ${body}`);
   }
   const buf = Buffer.from(await resp.body.arrayBuffer());
-  return buf;
+  // Vibrant returns an error/not-ready page with HTTP 200 when the report or the
+  // requested sections don't exist (e.g. "REPORT_TYPE_..._NOT_EXIST"). Only stage
+  // a real PDF — otherwise the error HTML gets saved + surfaced in the review modal.
+  const pdfStart = buf.indexOf("%PDF-");
+  if (pdfStart < 0) {
+    const head = buf.subarray(0, 200).toString("utf8").replace(/\s+/g, " ").trim();
+    throw new Error(`Vibrant report not a PDF (not ready / error): ${head.slice(0, 160)}`);
+  }
+  return buf.subarray(pdfStart);
 }
 
 function normalizeDob(s: string | null): string {
@@ -285,15 +293,16 @@ export const vibrantScraper: LabScraper = {
         const reports = status.finished_reports ?? [];
         if (reports.length === 0) continue;
 
-        // Download ALL finished sections in one request. Single-section is the
-        // norm (and verified); the comma-join is best-effort for multi-section
-        // orders — strictly safer than the old first-section-only. Log multis so
-        // any combined-PDF edge case is visible in the worker logs.
-        const shortNames = reports.map((r) => r.short_name).filter(Boolean);
-        if (shortNames.length > 1) {
-          console.log(`[vibrant] multi-section order ${accessionId}: ${shortNames.join(",")} (verify combined PDF)`);
+        // Download the FIRST finished section. Vibrant's multi-section URL format
+        // is NOT comma-joined (sections=A,B,C → REPORT_TYPE_A,B,C_NOT_EXIST error)
+        // and isn't yet known — so a multi-section order yields a VALID section-1
+        // PDF (staged partial for human review), never an error page. Capturing a
+        // real multi-section download to learn the format is a TASKS.md item.
+        const primary = reports[0];
+        if (reports.length > 1) {
+          console.log(`[vibrant] order ${accessionId} has ${reports.length} sections; downloading first (${primary.short_name}) only — multi-section format TBD`);
         }
-        const pdfBuf = await downloadPdf(token, accessionId, shortNames.join(","));
+        const pdfBuf = await downloadPdf(token, accessionId, primary.short_name);
 
         found.push({
           caseId: c.caseId,
@@ -348,6 +357,11 @@ export const vibrantScraper: LabScraper = {
           continue;
         }
         if (!isOrderComplete(status)) continue; // drip-safe: full order only
+        // Auto-post only SINGLE-section orders — run() can only download a valid
+        // full PDF for those (multi-section download format is unknown; see above).
+        // Multi-section complete orders stay "keep searching" → handled by
+        // scrape-all as a section-1 partial for human review, never auto-posted.
+        if ((status.total_reports?.length ?? 0) !== 1) continue;
         const fin = status.finished_reports ?? [];
         const latestFinal = fin
           .map((r) => r.final_report_date)
