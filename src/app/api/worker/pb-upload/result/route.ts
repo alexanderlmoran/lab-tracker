@@ -13,6 +13,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { maybeFireNadiaAllReceived } from "@/lib/workflow";
+import { accessionSiblingIds } from "@/lib/labs/siblings";
 
 export const dynamic = "force-dynamic";
 
@@ -89,6 +90,34 @@ export async function POST(request: Request) {
         pdf_id: job.pdf_id,
       },
     });
+
+    // Cascade to same-accession sibling cards: the result is now on PB, so the
+    // duplicate cards for this physical order are covered — advance them too
+    // (without re-uploading) so they don't orphan in Pending Upload. Best-effort.
+    try {
+      const sibIds = (await accessionSiblingIds(job.case_id)).filter((id) => id !== job.case_id);
+      if (sibIds.length) {
+        const now = new Date().toISOString();
+        await db
+          .from("lab_case_pdfs")
+          .update({ superseded_at: now, superseded_reason: "covered by same-accession sibling uploaded to PB" })
+          .in("case_id", sibIds)
+          .is("superseded_at", null);
+        await db.from("lab_cases").update({ step5_complete_uploaded: true }).in("id", sibIds);
+        for (const id of sibIds) {
+          await db.from("lab_events").insert({
+            case_id: id,
+            kind: "step_toggled",
+            step: 5,
+            completed: true,
+            actor: "worker:pb-upload",
+            note: `Complete — same-accession sibling uploaded to PB (labrequest=${parsed.pbLabRequestId})`,
+          });
+        }
+      }
+    } catch (err) {
+      console.error("[pb-upload/result] sibling cascade failed", err);
+    }
 
     // Fire the step-5 workflow gate (Nadia "all labs received" → confirm link)
     // that the UI step-toggle fires but this automated path previously skipped —

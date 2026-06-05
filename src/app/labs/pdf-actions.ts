@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
+import { accessionSiblingIds } from "@/lib/labs/siblings";
 import type { ActionResult } from "@/lib/types";
 
 // ── Types exposed to the modal client component ──────────────────────
@@ -278,8 +279,9 @@ export async function disapproveWrongPdf(
   });
   if (auditErr) return { ok: false, error: auditErr.message };
 
-  // Capture the rejected accession (from the PDF, falling back to the case)
-  // and the current dismissed list BEFORE we supersede / blank anything.
+  // Capture the rejected accession (from the PDF, falling back to the case) and
+  // snapshot the sibling group BEFORE we blank anything — resolving siblings
+  // depends on the accession we're about to clear.
   const { data: pdfRow } = await db
     .from("lab_case_pdfs")
     .select("external_ref")
@@ -287,38 +289,45 @@ export async function disapproveWrongPdf(
     .maybeSingle();
   const { data: caseRow } = await db
     .from("lab_cases")
-    .select("lab_external_ref, dismissed_refs")
+    .select("lab_external_ref")
     .eq("id", parsed.data.caseId)
     .maybeSingle();
   const rejectedRef =
     ((pdfRow?.external_ref as string | null) ??
       (caseRow?.lab_external_ref as string | null) ??
       "")?.trim() || null;
-  const existingDismissed = (caseRow?.dismissed_refs as string[] | null) ?? [];
-  const dismissed_refs = rejectedRef
-    ? Array.from(new Set([...existingDismissed, rejectedRef]))
-    : existingDismissed;
+  const ids = await accessionSiblingIds(parsed.data.caseId);
 
   const supersedeReason = parsed.data.notes ?? "marked wrong by staff";
+  // Supersede the staged PDF across the whole sibling group so the duplicates go
+  // back to "keep searching" together (otherwise the rejected card's sibling
+  // would keep re-offering the same wrong accession).
   const { error: pdfErr } = await db
     .from("lab_case_pdfs")
-    .update({
-      superseded_at: new Date().toISOString(),
-      superseded_reason: supersedeReason,
-    })
-    .eq("id", parsed.data.pdfId);
+    .update({ superseded_at: new Date().toISOString(), superseded_reason: supersedeReason })
+    .in("case_id", ids)
+    .is("superseded_at", null);
   if (pdfErr) return { ok: false, error: pdfErr.message };
 
-  // Blank the accession so the scraper re-matches by name+DOB next poll, and
-  // record the rejected ref so it skips it and keeps searching.
-  const { error: caseErr } = await db
+  // Per sibling: blank the accession (re-match by name+DOB next poll) and add
+  // the rejected ref to THAT sibling's own dismissed_refs so the scraper skips it.
+  const { data: sibRows } = await db
     .from("lab_cases")
-    .update({ lab_external_ref: null, dismissed_refs })
-    .eq("id", parsed.data.caseId);
-  if (caseErr) return { ok: false, error: caseErr.message };
-
+    .select("id, dismissed_refs")
+    .in("id", ids);
+  for (const s of sibRows ?? []) {
+    const existing = (s.dismissed_refs as string[] | null) ?? [];
+    const dismissed_refs = rejectedRef
+      ? Array.from(new Set([...existing, rejectedRef]))
+      : existing;
+    const { error } = await db
+      .from("lab_cases")
+      .update({ lab_external_ref: null, dismissed_refs })
+      .eq("id", s.id as string);
+    if (error) return { ok: false, error: error.message };
+    revalidatePath(`/labs/${s.id}`);
+  }
   revalidatePath("/labs");
-  revalidatePath(`/labs/${parsed.data.caseId}`);
   return { ok: true };
 }
 
@@ -351,33 +360,50 @@ export async function markAlreadyUploaded(
       : "Already on PB — marked complete without re-uploading",
   });
 
-  // Discard the redundant staged PDF so it can't be re-surfaced / re-uploaded.
+  // Resolve the whole same-accession sibling group, not just the reviewed card:
+  // the result is on PB, so every duplicate card for this physical order is
+  // complete. Move them together (the orphaned-sibling fix).
+  const ids = await accessionSiblingIds(parsed.data.caseId);
+  const now = new Date().toISOString();
+
+  // Discard every redundant staged PDF across the group so none re-surfaces.
   const { error: pdfErr } = await db
     .from("lab_case_pdfs")
-    .update({
-      superseded_at: new Date().toISOString(),
-      superseded_reason: "already on PB (staff marked complete)",
-    })
-    .eq("id", parsed.data.pdfId);
+    .update({ superseded_at: now, superseded_reason: "already on PB (staff marked complete)" })
+    .in("case_id", ids)
+    .is("superseded_at", null);
   if (pdfErr) return { ok: false, error: pdfErr.message };
 
   const { error: caseErr } = await db
     .from("lab_cases")
     .update({ step5_complete_uploaded: true })
-    .eq("id", parsed.data.caseId);
+    .in("id", ids);
   if (caseErr) return { ok: false, error: caseErr.message };
 
-  await db.from("lab_events").insert({
-    case_id: parsed.data.caseId,
-    kind: "step_toggled",
-    step: 5,
-    completed: true,
-    actor: user.email ?? "staff",
-    note: "Marked complete — result already on PB (no re-upload, no email)",
-  });
-
+  for (const id of ids) {
+    const sibling = id !== parsed.data.caseId;
+    await db.from("lab_events").insert({
+      case_id: id,
+      kind: "step_toggled",
+      step: 5,
+      completed: true,
+      actor: user.email ?? "staff",
+      note: sibling
+        ? "Marked complete — same-accession sibling of the reviewed card (already on PB)"
+        : "Marked complete — result already on PB (no re-upload, no email)",
+    });
+    if (sibling) {
+      await db.from("lab_case_audit").insert({
+        case_id: id,
+        action: "approve",
+        actor_user_id: user.id,
+        actor_label: user.email ?? "staff",
+        notes: "Already on PB (same-accession sibling of reviewed card) — marked complete",
+      });
+    }
+    revalidatePath(`/labs/${id}`);
+  }
   revalidatePath("/labs");
-  revalidatePath(`/labs/${parsed.data.caseId}`);
   return { ok: true };
 }
 
