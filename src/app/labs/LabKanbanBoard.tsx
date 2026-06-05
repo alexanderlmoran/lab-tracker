@@ -37,6 +37,15 @@ function formatExpectedRange(min: string | null, max: string | null): string | n
   return fmt(max ?? min ?? "");
 }
 
+// Grouping key for same-accession duplicate cards (same patient + ACC#) — the
+// same rule the dup chip uses. Null when there's no accession to group on.
+function dupKey(r: LabCase): string | null {
+  const ref = r.lab_external_ref?.trim();
+  if (!ref) return null;
+  const who = (r.patient_email || r.patient_name || "").trim().toLowerCase();
+  return `${who}::${ref}`;
+}
+
 function isProbablyReady(row: LabCase): boolean {
   if (row.step4_complete_received) return false;
   if (row.tracking_status !== "delivered") return false;
@@ -182,6 +191,55 @@ function LabCard({
   );
 }
 
+// Merged "elongated" card for same-accession duplicate siblings co-located in a
+// column (merge-dupes view). Shows the shared ACC# + every sibling's tracking #.
+// Clicking opens the lead case; the review actions cascade across the whole
+// group (siblings move together), so resolving from here resolves all.
+function MergedDupCard({
+  rows,
+  onOpen,
+  hasPendingPdf,
+}: {
+  rows: LabCase[];
+  onOpen: (row: LabCase, autoReview?: boolean) => void;
+  hasPendingPdf: boolean;
+}) {
+  const lead = rows[0];
+  const trackings = rows.map((r) => r.tracking_number).filter(Boolean) as string[];
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(lead, hasPendingPdf)}
+      className={`flex w-full flex-col gap-1 rounded-md border-2 border-dashed p-1.5 text-left shadow-sm transition-shadow hover:shadow ${
+        hasPendingPdf
+          ? "border-amber-400 bg-amber-50"
+          : "border-purple-300 bg-purple-50/60"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <p className="min-w-0 flex-1 truncate text-[13px] font-medium leading-tight text-zinc-900">
+          {labelForCase(lead)}
+        </p>
+        <span className="shrink-0 rounded bg-purple-200 px-1.5 text-[10px] font-semibold text-purple-800">
+          merged ×{rows.length}
+        </span>
+      </div>
+      <p className="truncate text-[12px] text-zinc-500">
+        {formatPersonName(lead.patient_name)}
+      </p>
+      <div className="flex flex-col gap-0.5 text-[10px] text-zinc-400">
+        {lead.lab_external_ref ? <span>ACC# {lead.lab_external_ref}</span> : null}
+        {trackings.length ? <span className="truncate">TRK {trackings.join(" · ")}</span> : null}
+      </div>
+      {hasPendingPdf ? (
+        <span className="self-start rounded border border-amber-400 bg-amber-100 px-1 text-[10px] font-semibold text-amber-800">
+          review — applies to all {rows.length}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
 function StaticColumn({
   col,
   count,
@@ -290,12 +348,37 @@ export function LabKanbanBoard({
     grouped[getColumnFor(r, { hasPendingPdf: pendingPdfSet.has(r.id) })].push(r);
   }
   for (const col of LAB_BOARD_COLUMN_ORDER) {
-    grouped[col].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+    // Float likely-ready cards to the top of their column so the "go get this
+    // result" ones are seen first; otherwise newest-updated first.
+    grouped[col].sort(
+      (a, b) =>
+        Number(isProbablyReady(b)) - Number(isProbablyReady(a)) ||
+        b.updated_at.localeCompare(a.updated_at),
+    );
   }
 
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [activeRow, setActiveRow] = useState<LabCase | null>(null);
   const [autoReview, setAutoReview] = useState(false);
+  const [mergeDupes, setMergeDupes] = useState(false);
+
+  // When merge-dupes is on, collapse same-accession siblings that sit in the
+  // SAME column into one merged card; everything else renders as its own card
+  // (so all other patients stay visible). Preserves column order.
+  function unitsFor(colRows: LabCase[]): LabCase[][] {
+    if (!mergeDupes) return colRows.map((r) => [r]);
+    const order: string[] = [];
+    const groups = new Map<string, LabCase[]>();
+    for (const r of colRows) {
+      const key = dupKey(r) ?? `single:${r.id}`;
+      if (!groups.has(key)) {
+        groups.set(key, []);
+        order.push(key);
+      }
+      groups.get(key)!.push(r);
+    }
+    return order.map((k) => groups.get(k)!);
+  }
 
   function openLabDetail(row: LabCase, review = false) {
     setActiveRow(row);
@@ -319,6 +402,22 @@ export function LabKanbanBoard({
 
   return (
     <div className="flex h-full flex-col">
+      {dupByCaseId.size > 0 ? (
+        <div className="flex items-center justify-end px-1.5 pb-1">
+          <button
+            type="button"
+            onClick={() => setMergeDupes((v) => !v)}
+            className={`rounded-md border px-2 py-0.5 text-[11px] font-medium ${
+              mergeDupes
+                ? "border-purple-400 bg-purple-100 text-purple-800"
+                : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50"
+            }`}
+            title="Collapse same-accession duplicate cards (same patient + ACC#) within a column into one merged card; all other cards stay as-is"
+          >
+            {mergeDupes ? "Merging dupes ✓" : "⊕ Merge dupes"}
+          </button>
+        </div>
+      ) : null}
       <div className="flex flex-row flex-nowrap gap-1.5 pb-2 lg:flex-1 lg:min-h-0">
         {LAB_BOARD_COLUMN_ORDER.map((col) => {
           const colRows = grouped[col];
@@ -327,16 +426,25 @@ export function LabKanbanBoard({
               {colRows.length === 0 ? (
                 <p className="px-2 py-3 text-[11px] text-zinc-400">—</p>
               ) : (
-                colRows.map((row) => (
-                  <LabCard
-                    key={row.id}
-                    row={row}
-                    onOpen={openLabDetail}
-                    counts={counts?.[row.id] ?? ZERO_COUNTS}
-                    dupSiblings={dupByCaseId.get(row.id)}
-                    hasPendingPdf={pendingPdfSet.has(row.id)}
-                  />
-                ))
+                unitsFor(colRows).map((unit) =>
+                  unit.length > 1 ? (
+                    <MergedDupCard
+                      key={`merged:${dupKey(unit[0]) ?? unit[0].id}`}
+                      rows={unit}
+                      onOpen={openLabDetail}
+                      hasPendingPdf={unit.some((r) => pendingPdfSet.has(r.id))}
+                    />
+                  ) : (
+                    <LabCard
+                      key={unit[0].id}
+                      row={unit[0]}
+                      onOpen={openLabDetail}
+                      counts={counts?.[unit[0].id] ?? ZERO_COUNTS}
+                      dupSiblings={dupByCaseId.get(unit[0].id)}
+                      hasPendingPdf={pendingPdfSet.has(unit[0].id)}
+                    />
+                  ),
+                )
               )}
             </StaticColumn>
           );
