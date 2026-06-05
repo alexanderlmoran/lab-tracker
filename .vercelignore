@@ -1,6 +1,11 @@
 # Keep `vercel --prod` uploads small (the app build doesn't need any of this).
-worker
-docs
+# IMPORTANT: anchor dir names with a leading "/" so they match ONLY the repo
+# root. A bare "worker" matches ANY dir named worker at any depth — it was
+# silently excluding src/app/api/worker/ from the deploy, 404ing every
+# /api/worker/* route in prod (pbdrain claim, result-ready, debug/cases, etc.)
+# while they worked locally. Same trap for /docs.
+/worker
+/docs
 *.csv
 *.db
 *.tsbuildinfo
