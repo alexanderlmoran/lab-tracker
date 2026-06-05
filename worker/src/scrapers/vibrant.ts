@@ -228,7 +228,18 @@ async function downloadPdf(
     const head = buf.subarray(0, 200).toString("utf8").replace(/\s+/g, " ").trim();
     throw new Error(`Vibrant report not a PDF (not ready / error): ${head.slice(0, 160)}`);
   }
-  return buf.subarray(pdfStart);
+  const pdf = buf.subarray(pdfStart);
+  // Vibrant serves its "report not ready / sections don't exist" error as a TINY
+  // valid PDF (~1KB) — it HAS %PDF- but is just the error text (e.g. JAMES FRANGI:
+  // 879 bytes, "...REPORT_TYPE_..._NOT_EXIST"), so the %PDF- check alone lets it
+  // through. A real lab report is many KB; reject anything implausibly small so we
+  // never stage a blank/error card and instead keep searching for the real one.
+  if (pdf.length < 10_000) {
+    throw new Error(
+      `Vibrant report not ready (only ${pdf.length} bytes — the not-ready/error page, not a result)`,
+    );
+  }
+  return pdf;
 }
 
 function normalizeDob(s: string | null): string {
