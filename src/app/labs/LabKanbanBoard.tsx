@@ -485,6 +485,7 @@ export function LabKanbanBoard({
                 row={rows.find((r) => r.id === activeRow.id) ?? activeRow}
                 initialOpenAttempts={counts?.[activeRow.id]?.openAttempts ?? 0}
                 autoReview={autoReview}
+                dupSiblings={dupByCaseId.get(activeRow.id)}
               />
             </div>
             <div className="flex items-center justify-end gap-2 border-t border-zinc-200 px-6 py-3">

@@ -551,6 +551,7 @@ export function CaseDetail({
   row,
   initialOpenAttempts = 0,
   autoReview = false,
+  dupSiblings,
 }: {
   row: LabCase;
   /** Open contact attempts from the kanban — lets the action bar render the
@@ -560,6 +561,10 @@ export function CaseDetail({
    *  auto-open the PDF review modal as soon as the pending PDF loads — saves
    *  the open-dialog → find-banner → click-Review steps. */
   autoReview?: boolean;
+  /** Other cards sharing this card's accession (same physical order split across
+   *  cards). When present, the dialog shows the merged order: every sibling's
+   *  lab + tracking #, and review actions cascade across the group. */
+  dupSiblings?: LabCase[];
 }) {
   const currentCol = getColumnFor(row);
   const done = completedStepCount(row);
@@ -738,6 +743,36 @@ export function CaseDetail({
         </h3>
         <DrawNoteEditor row={row} />
       </section>
+
+      {/* Merged order — same-accession siblings (one order split across cards).
+       *  Shows every card's lab + tracking #, stacked; the review actions below
+       *  cascade across the whole group so they resolve/move together. */}
+      {dupSiblings && dupSiblings.length > 0 ? (
+        <section className="rounded-md border border-purple-200 bg-purple-50/50 px-4 py-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-purple-800">
+            Same order — {dupSiblings.length + 1} cards
+            {row.lab_external_ref ? (
+              <span className="font-mono normal-case text-purple-600"> · ACC# {row.lab_external_ref}</span>
+            ) : null}
+          </h3>
+          <p className="mt-0.5 text-[11px] text-purple-700">
+            One lab order split across multiple cards (different tracking #s). Approve / Already-on-PB / Disapprove here applies to all of them.
+          </p>
+          <div className="mt-2 divide-y divide-purple-100 overflow-hidden rounded border border-purple-100 bg-white">
+            {[row, ...dupSiblings].map((c) => (
+              <div
+                key={c.id}
+                className="flex items-center justify-between gap-3 px-2 py-1 text-[12px]"
+              >
+                <span className="truncate text-zinc-900">{labelForCase(c)}</span>
+                <span className="shrink-0 font-mono text-[11px] text-zinc-600">
+                  {c.tracking_number ? `TRK ${c.tracking_number}` : "— no tracking —"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {/* PDF review banner — shown whenever a PDF is attached but no
        *  approve / wrong-pdf audit row exists yet. Gate on `pendingPdf`
