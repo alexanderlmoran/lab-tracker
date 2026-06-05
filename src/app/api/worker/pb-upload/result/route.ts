@@ -12,6 +12,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
+import { maybeFireNadiaAllReceived } from "@/lib/workflow";
 
 export const dynamic = "force-dynamic";
 
@@ -88,6 +89,17 @@ export async function POST(request: Request) {
         pdf_id: job.pdf_id,
       },
     });
+
+    // Fire the step-5 workflow gate (Nadia "all labs received" → confirm link)
+    // that the UI step-toggle fires but this automated path previously skipped —
+    // so a batch completing via Approve OR the engine's auto-post still triggers
+    // it. Guarded inside (only when ALL the patient's labs are at step 5, and
+    // deduped on an outstanding token) and best-effort (never blocks the upload).
+    try {
+      await maybeFireNadiaAllReceived(job.case_id, "worker:pb-upload");
+    } catch (err) {
+      console.error("[pb-upload/result] nadia trigger failed", err);
+    }
 
     return NextResponse.json({ ok: true });
   }
