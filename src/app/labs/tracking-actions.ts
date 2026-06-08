@@ -17,12 +17,13 @@ import {
 import type { ActionResult, TrackingStatus } from "@/lib/types";
 
 /** Book a FedEx carrier pickup from the clinic (reuses the tracking OAuth).
- * Returns the confirmation number; degrades to a clear "not configured" error
- * listing the missing env when the pickup product / account isn't set up. */
+ * When `caseIds` are given, stamps the pickup confirmation onto those cards so
+ * each is traceable to the day's pickup. Returns the confirmation number;
+ * degrades to a clear "not configured" error when the product/account isn't set. */
 export async function scheduleFedexPickup(
-  input: SchedulePickupInput,
-): Promise<ActionResult<{ confirmationNumber: string; location?: string }>> {
-  await requireSignedIn();
+  input: SchedulePickupInput & { caseIds?: string[] },
+): Promise<ActionResult<{ confirmationNumber: string; location?: string; stamped: number }>> {
+  const user = await requireSignedIn();
   if (!isPickupConfigured()) {
     return {
       ok: false,
@@ -30,9 +31,36 @@ export async function scheduleFedexPickup(
         "FedEx pickup isn't configured yet — set FEDEX_ACCOUNT_NUMBER + the FEDEX_PICKUP_* address env vars, and enable the Pickup product on the FedEx Developer project.",
     };
   }
+  const { caseIds, ...pickupInput } = input;
   try {
-    const r = await schedulePickup(input);
-    return { ok: true, data: { confirmationNumber: r.confirmationNumber, location: r.location } };
+    const r = await schedulePickup(pickupInput);
+    let stamped = 0;
+    if (caseIds && caseIds.length > 0) {
+      const db = getSupabaseAdmin();
+      const { data } = await db
+        .from("lab_cases")
+        .update({
+          pickup_confirmation: r.confirmationNumber,
+          pickup_scheduled_date: pickupInput.readyDate,
+          pickup_carrier: "fedex",
+        })
+        .in("id", caseIds)
+        .select("id");
+      stamped = (data ?? []).length;
+      await db.from("lab_events").insert(
+        caseIds.map((id) => ({
+          case_id: id,
+          kind: "case_edited" as const,
+          actor: user.email ?? "staff",
+          note: `FedEx pickup scheduled — confirmation ${r.confirmationNumber} (ready ${pickupInput.readyDate})`,
+        })),
+      );
+      revalidatePath("/labs");
+    }
+    return {
+      ok: true,
+      data: { confirmationNumber: r.confirmationNumber, location: r.location, stamped },
+    };
   } catch (err) {
     const msg = err instanceof FedExError ? err.message : err instanceof Error ? err.message : "Pickup failed";
     return { ok: false, error: msg };

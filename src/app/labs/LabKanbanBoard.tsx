@@ -108,11 +108,19 @@ function LabCard({
         <p className="truncate text-[12px] text-zinc-500">
           {formatPersonName(row.patient_name)}
         </p>
-        {expected || row.tracking_number ? (
+        {expected || row.tracking_number || row.pickup_confirmation ? (
           <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-zinc-400">
             {expected ? <span>↳ {expected}</span> : null}
             {row.tracking_number ? (
               <span className="truncate">TRK {row.tracking_number}</span>
+            ) : null}
+            {row.pickup_confirmation ? (
+              <span
+                className="text-emerald-600"
+                title={`Pickup scheduled${row.pickup_scheduled_date ? ` for ${row.pickup_scheduled_date}` : ""} (${(row.pickup_carrier ?? "fedex").toUpperCase()})`}
+              >
+                📦 {row.pickup_confirmation}
+              </span>
             ) : null}
           </div>
         ) : null}

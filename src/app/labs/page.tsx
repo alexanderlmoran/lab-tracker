@@ -110,7 +110,7 @@ export default async function LabsPage({
               <TimeRangeTabs since={since} />
               {tab === "labs" ? <KanbanFilterChips /> : null}
               <RefreshAllTrackingButton />
-              <SchedulePickupButton />
+              <SchedulePickupButton cases={cases} />
               <span className="ml-auto">
                 <LabsLegend />
               </span>

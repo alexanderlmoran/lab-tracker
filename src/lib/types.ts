@@ -80,6 +80,8 @@ export type LabCase = {
   tracking_polled_at: string | null;
   tracking_delivered_at: string | null;
   tracking_location: string | null;
+  pickup_scheduled_date: string | null;
+  pickup_carrier: string | null;
   nadia_confirm_token: string | null;
   nadia_confirm_sent_at: string | null;
   nadia_confirm_expires_at: string | null;

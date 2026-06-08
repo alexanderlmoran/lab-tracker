@@ -271,6 +271,8 @@ export async function renderTestEmail(args: {
     tracking_polled_at: null,
     tracking_delivered_at: null,
     tracking_location: null,
+    pickup_scheduled_date: null,
+    pickup_carrier: null,
     nadia_confirm_token: null,
     nadia_confirm_sent_at: null,
     nadia_confirm_expires_at: null,
