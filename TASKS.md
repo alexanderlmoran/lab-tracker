@@ -15,6 +15,7 @@ See also `docs/PLAYBOOK.md` (reuse index — read before building).
 5. **FedEx pickup** — Chromium/Akamai bot-detection scrape of fedex.com OR finish the Create-Pickup API auth (account 20847088 not authorized). See FedEx section below.
 6. **System-wide smoke test + page/UI review** — run the full pipeline; review every page for: leftover enums, stale phase notes/comments, dead code; tighten the UI/client interface so staff can drive it with minimal explanation (clean, obvious, few clicks).
 7. **md/TASKS review** — keep this file + memory current so nothing's missed.
+8. **Auto-fill requisition forms from Zenoti/PB** (Alex 2026-06-08) — tie patient/order info (name, DOB, address, ordering provider, dx, collection date) from Zenoti + PB into the req-form auto-fill feature, prioritizing **DoctorsData, Kennedy Krieger, and Spectracell** req forms first. Builds on the queued "req-form PDF auto-fill" feature (template PDF + marked editable areas → "Print req form" button → populate → verify → print, via pdf-lib). Feeds the unified vision below.
 
 **Later (after the above) — the unified vision:** make a Zenoti appt → auto-creates the order → auto-prints the req form → maximally seamless. Minimize button presses; humans only at the irreducible decision points. (Depends on the req-form auto-fill feature below.)
 
