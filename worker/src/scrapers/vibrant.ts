@@ -7,7 +7,13 @@ const LOGIN_URL = "https://api.vibrant-wellness.com/v1/portal/trans-service/valo
 const FIND_PATIENT_URL = "https://api.vibrant-wellness.com/v1/portal/trans-service/trans/findPatient";
 const REPORT_STATUS_BASE = "https://api.vibrant-wellness.com/v1/lis/base-report-service/result/getReportStatusListV2";
 const PDF_ENGINE_URL = "https://api.vibrant-america.com/v1/report-pdf-engine/pdf";
-const REPORT_VIEWER_BASE = "https://report.vibrant-wellness.com/#/printable/CUSTOM";
+// The portal's "Download all reports" renders the WHOLE order (every finished
+// section) as one PDF via the AllSummaryReport route. Learned from a HAR capture
+// 2026-06-08 (captures/vibrant/20260608-095759): the old per-section CUSTOM route
+// needs codes like "OAC.cbrf-OSU.cbrf-CDZ.cbrf" (hyphen-joined, ".cbrf" suffix) —
+// bare comma-joined short_names ("OAC,OSU,CDZ") return a REPORT_TYPE_..._NOT_EXIST
+// error page. AllSummaryReport needs no section codes, so we use it for everything.
+const ALL_SUMMARY_BASE = "https://report.vibrant-wellness.com/#/printable/AllSummaryReport";
 
 // TODO: Confirm VIBRANT_CLINIC_ID if account ever becomes multi-clinic; currently 128164 per HAR.
 const CENTNER_CLINIC_ID = 128164;
@@ -200,13 +206,13 @@ function parseUsDate(s: string | undefined): string | null {
 async function downloadPdf(
   token: string,
   accessionId: string,
-  shortName: string,
 ): Promise<Buffer> {
-  // Per operator notes: inner URL uses double && separator — preserve verbatim.
+  // Inner URL uses the double && separator (preserve verbatim) and the AllSummary
+  // route — no sections param. localTimeZone is required for the render.
   const innerUrl =
-    `${REPORT_VIEWER_BASE}/${accessionId}` +
-    `?sections=${encodeURIComponent(shortName)}` +
-    `&&startPageNumber=1` +
+    `${ALL_SUMMARY_BASE}/${accessionId}` +
+    `?startPageNumber=1` +
+    `&&localTimeZone=America/New_York` +
     `&&jwtToken=${encodeURIComponent(token)}`;
 
   const pdfUrl = `${PDF_ENGINE_URL}?url=${encodeURIComponent(innerUrl)}`;
@@ -304,16 +310,10 @@ export const vibrantScraper: LabScraper = {
         const reports = status.finished_reports ?? [];
         if (reports.length === 0) continue;
 
-        // Download the FIRST finished section. Vibrant's multi-section URL format
-        // is NOT comma-joined (sections=A,B,C → REPORT_TYPE_A,B,C_NOT_EXIST error)
-        // and isn't yet known — so a multi-section order yields a VALID section-1
-        // PDF (staged partial for human review), never an error page. Capturing a
-        // real multi-section download to learn the format is a TASKS.md item.
-        const primary = reports[0];
-        if (reports.length > 1) {
-          console.log(`[vibrant] order ${accessionId} has ${reports.length} sections; downloading first (${primary.short_name}) only — multi-section format TBD`);
-        }
-        const pdfBuf = await downloadPdf(token, accessionId, primary.short_name);
+        // Download the WHOLE order as one PDF (AllSummaryReport route — every
+        // finished section, no per-section codes). isPartial below still flags
+        // orders where not all sections are final, so the human reviews those.
+        const pdfBuf = await downloadPdf(token, accessionId);
 
         found.push({
           caseId: c.caseId,
@@ -368,11 +368,8 @@ export const vibrantScraper: LabScraper = {
           continue;
         }
         if (!isOrderComplete(status)) continue; // drip-safe: full order only
-        // Auto-post only SINGLE-section orders — run() can only download a valid
-        // full PDF for those (multi-section download format is unknown; see above).
-        // Multi-section complete orders stay "keep searching" → handled by
-        // scrape-all as a section-1 partial for human review, never auto-posted.
-        if ((status.total_reports?.length ?? 0) !== 1) continue;
+        // Multi-section complete orders auto-post too now — AllSummaryReport
+        // downloads every section in one PDF (no single-section restriction).
         const fin = status.finished_reports ?? [];
         const latestFinal = fin
           .map((r) => r.final_report_date)
