@@ -22,6 +22,7 @@ import { readFile } from "node:fs/promises";
 import type { Browser, Page } from "playwright";
 import type { OpenCase } from "../tracker-client.js";
 import type { LabScraper, ScrapeRun, ScrapeResult, ProbeCandidate } from "./base.js";
+import { normalizeDob } from "./base.js";
 
 const LOGIN_URL = "https://www.cyrexlabs.com/Home/tabid/40/Default.aspx";
 const MY_ORDERS_URL = "https://www.cyrexlabs.com/MyOrders/tabid/80/Default.aspx";
@@ -327,20 +328,6 @@ function normalizeName(s: string): string {
   const parts = clean.split(/\s+/);
   if (parts.length >= 2) return `${parts[parts.length - 1]} ${parts[0]}`;
   return clean;
-}
-
-function normalizeDob(s: string | null): string {
-  if (!s) return "";
-  // Tracker stores ISO (YYYY-MM-DD); Cyrex shows M/D/YYYY (non-zero-padded).
-  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (us) {
-    const mm = us[1].padStart(2, "0");
-    const dd = us[2].padStart(2, "0");
-    return `${us[3]}-${mm}-${dd}`;
-  }
-  return s.trim();
 }
 
 function parseDate(s: string | undefined): string | undefined {

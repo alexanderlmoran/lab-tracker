@@ -1,6 +1,22 @@
 import type { Browser } from "playwright";
 import type { OpenCase } from "../tracker-client.js";
 
+/**
+ * Canonical DOB normalizer shared by every scraper — DO NOT reimplement per
+ * portal. Returns "YYYY-MM-DD". Accepts the tracker's ISO form and US
+ * M/D/YYYY with OR WITHOUT zero-padding (portals vary: "3/5/1990" and
+ * "03/05/1990" must both match). Historically access.ts/vibrant.ts required
+ * zero-padding and silently failed unpadded dates — a wrong-patient-match risk.
+ */
+export function normalizeDob(s: string | null | undefined): string {
+  if (!s) return "";
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (us) return `${us[3]}-${us[1].padStart(2, "0")}-${us[2].padStart(2, "0")}`;
+  return s.trim();
+}
+
 export type ScrapeResult = {
   caseId: string;
   labExternalRef: string;

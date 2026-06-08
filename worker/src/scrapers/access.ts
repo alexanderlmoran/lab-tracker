@@ -9,6 +9,7 @@
 import type { Browser, Page } from "playwright";
 import type { OpenCase } from "../tracker-client.js";
 import type { LabScraper, ScrapeRun, ScrapeResult, ProbeCandidate } from "./base.js";
+import { normalizeDob } from "./base.js";
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -284,16 +285,6 @@ function normalizeName(s: string): string {
   const parts = clean.split(/\s+/);
   if (parts.length >= 2) return `${parts[parts.length - 1]} ${parts[0]}`;
   return clean;
-}
-
-function normalizeDob(s: string | null): string {
-  if (!s) return "";
-  // Tracker stores ISO (YYYY-MM-DD); Access shows MM/DD/YYYY. Normalize to YYYY-MM-DD.
-  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  const us = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
-  if (us) return `${us[3]}-${us[1]}-${us[2]}`;
-  return s.trim();
 }
 
 function parseFinalDate(s: string): string | undefined {

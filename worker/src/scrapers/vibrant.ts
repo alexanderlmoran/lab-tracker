@@ -2,6 +2,7 @@ import { request } from "undici";
 import type { Browser } from "playwright";
 import type { OpenCase } from "../tracker-client.js";
 import type { LabScraper, ScrapeRun, ScrapeResult, ProbeCandidate } from "./base.js";
+import { normalizeDob } from "./base.js";
 
 const LOGIN_URL = "https://api.vibrant-wellness.com/v1/portal/trans-service/valogin/login";
 const FIND_PATIENT_URL = "https://api.vibrant-wellness.com/v1/portal/trans-service/trans/findPatient";
@@ -246,15 +247,6 @@ async function downloadPdf(
     );
   }
   return pdf;
-}
-
-function normalizeDob(s: string | null): string {
-  if (!s) return "";
-  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  const us = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
-  if (us) return `${us[3]}-${us[1]}-${us[2]}`;
-  return s.trim();
 }
 
 function parseFinalDate(s: string | undefined): string | undefined {

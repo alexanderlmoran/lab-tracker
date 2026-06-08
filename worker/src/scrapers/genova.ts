@@ -23,6 +23,7 @@ import { request } from "undici";
 import type { Browser } from "playwright";
 import type { OpenCase } from "../tracker-client.js";
 import type { LabScraper, ScrapeRun, ScrapeResult } from "./base.js";
+import { normalizeDob } from "./base.js";
 
 const BASE = "https://www.gdx.net";
 const SESSION_PATH = process.env.GENOVA_SESSION_PATH;
@@ -184,13 +185,4 @@ function normalizeName(s: string): string {
   const parts = clean.split(/\s+/);
   if (parts.length >= 2) return `${parts[parts.length - 1]} ${parts[0]}`;
   return clean;
-}
-
-function normalizeDob(s: string | null): string {
-  if (!s) return "";
-  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (us) return `${us[3]}-${us[1].padStart(2, "0")}-${us[2].padStart(2, "0")}`;
-  return s.trim();
 }
