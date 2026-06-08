@@ -6,6 +6,7 @@ import type { AnalyticsTab } from "./data";
 
 const TABS: Array<{ key: AnalyticsTab; label: string }> = [
   { key: "reports", label: "Reports" },
+  { key: "engine", label: "Engine" },
   { key: "team", label: "Team" },
   { key: "health", label: "Health" },
 ];

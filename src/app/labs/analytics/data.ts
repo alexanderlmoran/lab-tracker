@@ -11,7 +11,7 @@
 import { requireRole } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 
-export type AnalyticsTab = "reports" | "team" | "health";
+export type AnalyticsTab = "reports" | "team" | "health" | "engine";
 
 // ── Team activity ────────────────────────────────────────────────────
 
@@ -448,4 +448,143 @@ export async function getSystemHealth(): Promise<SystemHealth> {
   }
 
   return { generatedAt: new Date().toISOString(), categories };
+}
+
+// ── Engine & posting accuracy ─────────────────────────────────────────
+//
+// "Is the automation accurate?" — derived entirely from existing tables:
+//   • lab_case_audit  → staged-PDF accuracy (approve vs wrong-PDF)
+//   • lab_events      → how completed labs reached the chart (auto vs manual)
+//   • pb_upload_jobs  → PB upload reliability
+//   • lab_case_pdfs   → how many staged results await human review right now
+// Time-series of per-reconcile-cycle tallies + live PB coverage % are a
+// follow-up (need a small metrics table the worker writes each cycle).
+
+export type EngineMetrics = {
+  generatedAt: string;
+  pdf: {
+    verdicts: number;
+    approved: number;
+    wrongPdf: number;
+    uploadFailed: number;
+    pctCorrect: number | null; // approved / (approved + wrongPdf)
+  };
+  posting: {
+    worker: number; // worker:pb-upload — real unattended PB post
+    auto: number; // engine:* auto-post
+    backfill: number; // admin:backfill-brain "already on PB" advance
+    manual: number; // staff marked complete by hand
+    total: number;
+  };
+  upload: { succeeded: number; failed: number; inFlight: number; pctSuccess: number | null };
+  queue: { awaitingReview: number };
+  // Weekly approve-vs-wrong trend (last 8 ISO weeks, oldest → newest).
+  trend: Array<{ week: string; approved: number; wrong: number }>;
+};
+
+function isoWeekKey(d: Date): string {
+  // Monday-anchored week label "MMM D" of that Monday — good enough for a chart.
+  const day = (d.getUTCDay() + 6) % 7; // 0 = Monday
+  const monday = new Date(d);
+  monday.setUTCDate(d.getUTCDate() - day);
+  return monday.toISOString().slice(0, 10);
+}
+
+export async function getEngineMetrics(): Promise<EngineMetrics> {
+  await requireRole("admin");
+  const db = getSupabaseAdmin();
+  const weeksBack = 8;
+  const since = new Date(Date.now() - weeksBack * 7 * 86400000).toISOString();
+
+  const [auditRes, postRes, jobsRes, pendingPdfRes] = await Promise.all([
+    db.from("lab_case_audit").select("action, occurred_at"),
+    // Step-5 completions = a lab landing on the chart. completed flag + step=5.
+    db
+      .from("lab_events")
+      .select("actor")
+      .eq("kind", "step_toggled")
+      .eq("step", 5)
+      .eq("completed", true),
+    db.from("pb_upload_jobs").select("status"),
+    // Non-superseded staged PDFs → their cases → those not yet complete are the
+    // ones a human still needs to review/approve.
+    db.from("lab_case_pdfs").select("case_id").is("superseded_at", null),
+  ]);
+  if (auditRes.error) throw new Error(auditRes.error.message);
+  if (postRes.error) throw new Error(postRes.error.message);
+  if (jobsRes.error) throw new Error(jobsRes.error.message);
+  if (pendingPdfRes.error) throw new Error(pendingPdfRes.error.message);
+
+  const audit = (auditRes.data ?? []) as Array<{ action: string; occurred_at: string }>;
+  const approved = audit.filter((a) => a.action === "approve").length;
+  const wrongPdf = audit.filter((a) => a.action === "disapprove_wrong_pdf").length;
+  const uploadFailed = audit.filter((a) => a.action === "disapprove_upload_failed").length;
+  const judged = approved + wrongPdf;
+
+  // Posting attribution by actor bucket.
+  const posts = (postRes.data ?? []) as Array<{ actor: string | null }>;
+  const bucket = { worker: 0, auto: 0, backfill: 0, manual: 0 };
+  for (const p of posts) {
+    const a = (p.actor ?? "").toLowerCase();
+    if (a.startsWith("worker:")) bucket.worker += 1;
+    else if (a.startsWith("engine")) bucket.auto += 1;
+    else if (a.startsWith("admin:backfill")) bucket.backfill += 1;
+    else bucket.manual += 1;
+  }
+
+  const jobs = (jobsRes.data ?? []) as Array<{ status: string }>;
+  const jSucceeded = jobs.filter((j) => j.status === "succeeded").length;
+  const jFailed = jobs.filter((j) => j.status === "failed").length;
+  const jInFlight = jobs.filter((j) => j.status === "queued" || j.status === "claimed").length;
+  const jAttempted = jSucceeded + jFailed;
+
+  // Awaiting review = distinct cases with a live staged PDF that aren't complete.
+  const pendingCaseIds = [
+    ...new Set((pendingPdfRes.data ?? []).map((r: { case_id: string }) => r.case_id)),
+  ];
+  let awaitingReview = 0;
+  if (pendingCaseIds.length) {
+    const { data: openCases } = await db
+      .from("lab_cases")
+      .select("id")
+      .in("id", pendingCaseIds)
+      .eq("step5_complete_uploaded", false)
+      .is("archived_at", null)
+      .is("deleted_at", null);
+    awaitingReview = (openCases ?? []).length;
+  }
+
+  // Weekly trend.
+  const weekMap = new Map<string, { approved: number; wrong: number }>();
+  for (let i = weeksBack - 1; i >= 0; i--) {
+    weekMap.set(isoWeekKey(new Date(Date.now() - i * 7 * 86400000)), { approved: 0, wrong: 0 });
+  }
+  for (const a of audit) {
+    if (a.occurred_at < since) continue;
+    const k = isoWeekKey(new Date(a.occurred_at));
+    const w = weekMap.get(k);
+    if (!w) continue;
+    if (a.action === "approve") w.approved += 1;
+    else if (a.action === "disapprove_wrong_pdf") w.wrong += 1;
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    pdf: {
+      verdicts: judged,
+      approved,
+      wrongPdf,
+      uploadFailed,
+      pctCorrect: judged === 0 ? null : Math.round((approved / judged) * 1000) / 10,
+    },
+    posting: { ...bucket, total: posts.length },
+    upload: {
+      succeeded: jSucceeded,
+      failed: jFailed,
+      inFlight: jInFlight,
+      pctSuccess: jAttempted === 0 ? null : Math.round((jSucceeded / jAttempted) * 1000) / 10,
+    },
+    queue: { awaitingReview },
+    trend: [...weekMap.entries()].map(([week, v]) => ({ week, ...v })),
+  };
 }

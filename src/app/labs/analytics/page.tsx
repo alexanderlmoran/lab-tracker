@@ -4,12 +4,14 @@ import { AnalyticsTabs } from "./AnalyticsTabs";
 import { ReportsView } from "./ReportsView";
 import { TeamView } from "./TeamView";
 import { HealthView } from "./HealthView";
-import { getTeamActivity, getSystemHealth, type AnalyticsTab } from "./data";
+import { EngineView } from "./EngineView";
+import { getTeamActivity, getSystemHealth, getEngineMetrics, type AnalyticsTab } from "./data";
 
 export const dynamic = "force-dynamic";
 
 const SUBTITLE: Record<AnalyticsTab, string> = {
   reports: "Snapshot of all-time data.",
+  engine: "Is the automation accurate? PDF correctness + posting.",
   team: "Who did what, and how much — per person.",
   health: "Is every part of the pipeline running?",
 };
@@ -25,7 +27,7 @@ export default async function AnalyticsPage({
 
   const rawTab = typeof sp.tab === "string" ? sp.tab : "reports";
   const tab: AnalyticsTab =
-    rawTab === "team" || rawTab === "health" ? rawTab : "reports";
+    rawTab === "team" || rawTab === "health" || rawTab === "engine" ? rawTab : "reports";
 
   const parsedWindow =
     typeof sp.window === "string" ? Number.parseInt(sp.window, 10) : 7;
@@ -46,6 +48,9 @@ export default async function AnalyticsPage({
         </div>
 
         {tab === "reports" ? <ReportsView /> : null}
+        {tab === "engine" ? (
+          <EngineView metrics={await getEngineMetrics()} />
+        ) : null}
         {tab === "team" ? (
           <TeamView activity={await getTeamActivity(windowDays)} />
         ) : null}
