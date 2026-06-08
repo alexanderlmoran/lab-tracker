@@ -480,6 +480,26 @@ export type EngineMetrics = {
   queue: { awaitingReview: number };
   // Weekly approve-vs-wrong trend (last 8 ISO weeks, oldest → newest).
   trend: Array<{ week: string; approved: number; wrong: number }>;
+  // Latest PB-coverage snapshot (null until the worker has written one / the
+  // metrics migration is applied).
+  coverage: {
+    coveragePct: number | null;
+    total: number;
+    strong: number;
+    likely: number;
+    missing: number;
+    noMatch: number;
+    ranAt: string | null;
+  } | null;
+  // Recent reconcile cycles, oldest → newest (empty until the worker writes them).
+  cycles: Array<{
+    ranAt: string;
+    advanced: number;
+    autoposted: number;
+    flagged: number;
+    searching: number;
+    errors: number;
+  }>;
 };
 
 function isoWeekKey(d: Date): string {
@@ -568,6 +588,39 @@ export async function getEngineMetrics(): Promise<EngineMetrics> {
     else if (a.action === "disapprove_wrong_pdf") w.wrong += 1;
   }
 
+  // Time-series from the worker-written metrics tables. These may not exist yet
+  // (migration 20260608_engine_metrics pending) — degrade gracefully to null/[].
+  let coverage: EngineMetrics["coverage"] = null;
+  let cycles: EngineMetrics["cycles"] = [];
+  const [auditSnap, engineRuns] = await Promise.all([
+    db.from("lab_audit_runs").select("*").order("ran_at", { ascending: false }).limit(1),
+    db.from("lab_engine_runs").select("*").order("ran_at", { ascending: false }).limit(24),
+  ]);
+  if (!auditSnap.error && auditSnap.data?.[0]) {
+    const r = auditSnap.data[0] as Record<string, unknown>;
+    coverage = {
+      coveragePct: (r.coverage_pct as number | null) ?? null,
+      total: (r.total as number) ?? 0,
+      strong: (r.strong as number) ?? 0,
+      likely: (r.likely as number) ?? 0,
+      missing: (r.missing as number) ?? 0,
+      noMatch: (r.no_match as number) ?? 0,
+      ranAt: (r.ran_at as string | null) ?? null,
+    };
+  }
+  if (!engineRuns.error && engineRuns.data) {
+    cycles = (engineRuns.data as Array<Record<string, unknown>>)
+      .map((r) => ({
+        ranAt: (r.ran_at as string) ?? "",
+        advanced: (r.advanced as number) ?? 0,
+        autoposted: (r.autoposted as number) ?? 0,
+        flagged: (r.flagged as number) ?? 0,
+        searching: (r.searching as number) ?? 0,
+        errors: (r.errors as number) ?? 0,
+      }))
+      .reverse(); // oldest → newest for the chart
+  }
+
   return {
     generatedAt: new Date().toISOString(),
     pdf: {
@@ -586,5 +639,7 @@ export async function getEngineMetrics(): Promise<EngineMetrics> {
     },
     queue: { awaitingReview },
     trend: [...weekMap.entries()].map(([week, v]) => ({ week, ...v })),
+    coverage,
+    cycles,
   };
 }

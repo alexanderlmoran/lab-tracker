@@ -68,3 +68,53 @@ export async function postResultReady(payload: ResultReadyPayload): Promise<void
     throw new Error(`result-ready failed ${res.statusCode}: ${body}`);
   }
 }
+
+export type EngineRunPayload = {
+  lab?: string;
+  mode?: "apply" | "dry";
+  advanced: number;
+  autoposted: number;
+  flagged: number;
+  searching: number;
+  errors: number;
+};
+
+/** Record one reconcile cycle's tally for the Analytics Engine tab. Metrics are
+ *  best-effort: a failed write must never break the cycle, so we swallow + warn. */
+export async function postEngineRun(payload: EngineRunPayload): Promise<void> {
+  try {
+    const res = await request(`${BASE}/api/worker/engine-run`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${SECRET}`, "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (res.statusCode !== 200) console.warn(`[metrics] engine-run ${res.statusCode}: ${(await res.body.text()).slice(0, 120)}`);
+    else await res.body.text();
+  } catch (e) {
+    console.warn(`[metrics] engine-run post failed: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
+export type RosterLabRequest = {
+  name: string;
+  dateOrdered: string | null;
+  clientId: string | null;
+  firstName: string | null;
+  lastName: string | null;
+};
+
+/** Ship the PB labrequest roster so the tracker can compute a coverage snapshot
+ *  (it owns the case data). Best-effort, like postEngineRun. */
+export async function postCoverageSnapshot(labrequests: RosterLabRequest[]): Promise<void> {
+  try {
+    const res = await request(`${BASE}/api/worker/coverage-snapshot`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${SECRET}`, "content-type": "application/json" },
+      body: JSON.stringify({ labrequests }),
+    });
+    if (res.statusCode !== 200) console.warn(`[metrics] coverage-snapshot ${res.statusCode}: ${(await res.body.text()).slice(0, 120)}`);
+    else await res.body.text();
+  } catch (e) {
+    console.warn(`[metrics] coverage-snapshot post failed: ${e instanceof Error ? e.message : e}`);
+  }
+}

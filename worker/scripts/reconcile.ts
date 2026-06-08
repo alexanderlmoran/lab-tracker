@@ -30,7 +30,7 @@ const { pbLogin, findPbPatient, listAllConsultantLabRequests } = await import(
 );
 const { classifyCase } = await import("../src/backfill/engine.js");
 const { gradeCapture } = await import("../src/recon/grade.js");
-const { postResultReady } = await import("../src/tracker-client.js");
+const { postResultReady, postEngineRun, postCoverageSnapshot } = await import("../src/tracker-client.js");
 
 type BackfillCaseT = import("../src/backfill/engine.js").BackfillCase;
 type ProbeCandidateT = import("../src/scrapers/base.js").ProbeCandidate;
@@ -385,11 +385,29 @@ async function runOnce() {
   log(`SUMMARY  (${apply ? "applied" : "dry-run"})`);
   log("─".repeat(84));
   log(`  advanced (already on PB):   ${tally.advanced}`);
-  log(`  auto-posted (grade ≥90):    ${tally.autoposted}`);
+  log(`  auto-posted (grade ≥${AUTOPOST_THRESHOLD}):    ${tally.autoposted}`);
   log(`  flagged for Nadia+Alex:     ${tally.flagged}`);
   log(`  keep-searching:             ${tally.searching}`);
   log(`  errors:                     ${tally.errors}`);
   if (!apply) log(`\nDry-run — re-run with --apply to act.`);
+
+  // Persist metrics for the Analytics Engine tab (only real applied runs, so
+  // manual dry runs don't pollute the trend). Both are best-effort (swallow).
+  if (apply) {
+    await postEngineRun({ lab: labArg, mode: "apply", ...tally });
+    // Coverage is global; only the comprehensive --lab=all run writes a snapshot.
+    if (labArg.toLowerCase() === "all") {
+      await postCoverageSnapshot(
+        allPbReqs.map((lr) => ({
+          name: lr.name,
+          dateOrdered: lr.dateOrdered ?? null,
+          clientId: lr.clientRecord?.id ?? null,
+          firstName: lr.clientRecord?.profile?.firstName ?? null,
+          lastName: lr.clientRecord?.profile?.lastName ?? null,
+        })),
+      );
+    }
+  }
 }
 
 async function main() {

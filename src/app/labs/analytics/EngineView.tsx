@@ -1,14 +1,14 @@
-// Engine sub-tab — "is the automation accurate?" Staged-PDF accuracy, how
-// completed labs reached the chart, PB upload reliability, the live review
-// queue, and an 8-week approve-vs-wrong trend. All from existing tables.
+// Engine sub-tab — "is the automation accurate?" Live PB-coverage %, staged-PDF
+// accuracy, how completed labs reached the chart, PB upload reliability, the live
+// review queue, recent reconcile cycles, and an 8-week approve-vs-wrong trend.
 
 import type { EngineMetrics } from "./data";
+import { formatAge } from "./data";
 
 function pct(n: number | null): string {
   return n == null ? "—" : `${n}%`;
 }
 
-// Tone the headline % by how good it is (accuracy/reliability metrics).
 function tone(n: number | null): string {
   if (n == null) return "text-zinc-400";
   if (n >= 95) return "text-emerald-600";
@@ -53,12 +53,48 @@ function Bar({ label, value, total, color }: { label: string; value: number; tot
 }
 
 export function EngineView({ metrics }: { metrics: EngineMetrics }) {
-  const { pdf, posting, upload, queue, trend } = metrics;
+  const { pdf, posting, upload, queue, trend, coverage, cycles } = metrics;
   const trendMax = Math.max(1, ...trend.map((t) => t.approved + t.wrong));
+  const cycleMax = Math.max(1, ...cycles.map((c) => c.autoposted + c.flagged + c.errors));
 
   return (
     <div className="space-y-5">
-      {/* Headline accuracy cards */}
+      {/* PB coverage banner — the "is everything on the chart?" headline */}
+      <section
+        className={`flex flex-wrap items-center gap-4 rounded-lg border p-4 ${
+          coverage == null
+            ? "border-zinc-200 bg-white"
+            : (coverage.coveragePct ?? 0) >= 95
+              ? "border-emerald-200 bg-emerald-50"
+              : "border-amber-200 bg-amber-50"
+        }`}
+      >
+        <div className="flex flex-col">
+          <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">PB coverage</span>
+          <span className={`text-3xl font-semibold tabular-nums ${tone(coverage?.coveragePct ?? null)}`}>
+            {pct(coverage?.coveragePct ?? null)}
+          </span>
+        </div>
+        <div className="text-sm text-zinc-600">
+          {coverage == null ? (
+            <>
+              No snapshot yet — the worker writes one each <code>--lab=all</code> reconcile cycle once the
+              metrics migration is applied.
+            </>
+          ) : (
+            <>
+              <span className="font-medium text-zinc-800">
+                {coverage.strong + coverage.likely}/{coverage.total}
+              </span>{" "}
+              complete labs verified on a PB chart · {coverage.strong} accession-exact ·{" "}
+              {coverage.missing + coverage.noMatch} to review
+              <span className="ml-2 text-xs text-zinc-400">audited {formatAge(coverage.ranAt) ?? "—"}</span>
+            </>
+          )}
+        </div>
+      </section>
+
+      {/* Accuracy stat cards */}
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           label="Correct PDF rate"
@@ -103,6 +139,46 @@ export function EngineView({ metrics }: { metrics: EngineMetrics }) {
         </p>
       </section>
 
+      {/* Reconcile cycles */}
+      <section className="space-y-3 rounded-lg border border-zinc-200 bg-white p-4">
+        <h3 className="text-sm font-semibold text-zinc-900">Reconcile cycles (recent)</h3>
+        {cycles.length === 0 ? (
+          <p className="text-sm text-zinc-500">
+            No cycles recorded yet — each scheduled reconcile run writes one once the metrics migration is
+            applied and the worker redeploys.
+          </p>
+        ) : (
+          <>
+            <div className="flex items-end gap-1.5" style={{ height: 96 }}>
+              {cycles.map((c) => {
+                const total = c.autoposted + c.flagged + c.errors;
+                const h = Math.round((total / cycleMax) * 80);
+                const seg = (v: number) => (total === 0 ? 0 : Math.round((v / total) * h));
+                return (
+                  <div key={c.ranAt} className="flex flex-1 flex-col items-center gap-1">
+                    <div
+                      className="flex w-full flex-col justify-end"
+                      style={{ height: 80 }}
+                      title={`${formatAge(c.ranAt) ?? c.ranAt}\nauto-posted ${c.autoposted} · flagged ${c.flagged} · errors ${c.errors} · advanced ${c.advanced}`}
+                    >
+                      <div className="w-full bg-red-400" style={{ height: seg(c.errors) }} />
+                      <div className="w-full bg-amber-400" style={{ height: seg(c.flagged) }} />
+                      <div className="w-full rounded-t-sm bg-emerald-500" style={{ height: seg(c.autoposted) }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-4 border-t border-zinc-100 pt-3 text-xs text-zinc-500">
+              <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Auto-posted</span>
+              <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-400" /> Flagged</span>
+              <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-red-400" /> Errors</span>
+              <span className="ml-auto">{cycles.length} cycles</span>
+            </div>
+          </>
+        )}
+      </section>
+
       {/* Weekly accuracy trend */}
       <section className="space-y-3 rounded-lg border border-zinc-200 bg-white p-4">
         <h3 className="text-sm font-semibold text-zinc-900">Review outcomes — last 8 weeks</h3>
@@ -127,11 +203,6 @@ export function EngineView({ metrics }: { metrics: EngineMetrics }) {
           <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-red-400" /> Wrong PDF</span>
         </div>
       </section>
-
-      <p className="text-xs text-zinc-400">
-        From the audit trail (lab_case_audit / lab_events / pb_upload_jobs). Live PB-coverage % and
-        per-reconcile-cycle history are a follow-up (a metrics table the worker writes each cycle).
-      </p>
     </div>
   );
 }
