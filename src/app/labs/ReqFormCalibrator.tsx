@@ -59,9 +59,12 @@ export function ReqFormCalibrator({ caseId, onBack }: { caseId: string; onBack: 
     setItems(r.items.filter((it) => it.page === 0));
 
     try {
-      const pdfjs = await import("pdfjs-dist");
-      // Served raw from /public as .js (reliable text/javascript MIME for the
-      // module worker) and excluded from the auth proxy — see src/proxy.ts.
+      // LEGACY build — the modern build (build/pdf.mjs) throws "Object.define-
+      // Property called on non-object" under the bundler. Legacy works (and its
+      // fake-worker fallback is self-sufficient if the worker can't load).
+      const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+      // Worker served raw from /public as .js (reliable text/javascript MIME)
+      // and excluded from the auth proxy — see src/proxy.ts.
       pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
       const doc = await pdfjs.getDocument({ data: b64ToBytes(r.templateBase64) }).promise;
       const page = await doc.getPage(1);
