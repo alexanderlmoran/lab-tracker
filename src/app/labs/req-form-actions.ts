@@ -4,8 +4,21 @@ import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { resolveReqForm } from "@/lib/req-forms/resolve";
 import { fillReqForm } from "@/lib/req-forms/fill";
-import { specForLab } from "@/lib/req-forms/specs";
-import type { ReqFormData } from "@/lib/req-forms/types";
+import { specForLab, REQ_FORM_SPECS } from "@/lib/req-forms/specs";
+import { loadOverrides, saveOverrides, mergeFields, type FieldOverrides } from "@/lib/req-forms/overrides";
+import type { ReqFormData, ReqField } from "@/lib/req-forms/types";
+
+const BUCKET = "req-form-templates";
+
+// Representative text so even still-empty fields are draggable in the calibrator.
+const SAMPLE: Partial<Record<ReqField, string>> = {
+  patientName: "Patient Name", firstName: "First", lastName: "Last", mi: "A",
+  dob: "01/15/1980", sex: "M", collectionDate: "06/08/2026", orderNumber: "0000",
+};
+function calibText(field: ReqField, data: ReqFormData): string {
+  if (field === "sexMaleX" || field === "sexFemaleX" || field === "fastingX") return "X";
+  return data[field] || SAMPLE[field] || field;
+}
 
 /** Resolve a case's requisition-form values (DOB cascade etc.) for the edit dialog. */
 export async function prepareReqForm(caseId: string) {
@@ -72,4 +85,53 @@ export async function generateReqForm(caseId: string, fields: ReqFormData) {
     pdfBase64: Buffer.from(bytes).toString("base64"),
     filename: `${spec.label.split(" ")[0]}-req-${caseId.slice(0, 8)}.pdf`,
   };
+}
+
+/** Load everything the visual calibrator needs: the blank template bytes (to
+ *  render in-browser) plus each positioned field's current coords + sample text.
+ *  Coords are the spec merged with any saved overrides — so calibration resumes
+ *  from where it was left, not from the original spec. */
+export async function loadReqFormCalibration(caseId: string) {
+  await requireSignedIn();
+  const r = await resolveReqForm(caseId);
+  if (!r) return { ok: false as const, error: "No requisition template for this lab yet." };
+
+  const db = getSupabaseAdmin();
+  const { data: file, error } = await db.storage.from(BUCKET).download(r.spec.templateKey);
+  if (error || !file) {
+    return { ok: false as const, error: `Template "${r.spec.templateKey}" not found: ${error?.message ?? "missing"}` };
+  }
+  const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
+  const fields = mergeFields(r.spec.fields, await loadOverrides(r.spec.templateKey));
+
+  // [field, pos, sample-text] for every positioned field — the calibrator stamps
+  // these as draggable SVG text over the rendered page.
+  const items = Object.entries(fields).map(([field, pos]) => ({
+    field: field as ReqField,
+    text: calibText(field as ReqField, r.data),
+    x: pos!.x,
+    yTop: pos!.yTop,
+    size: pos!.size ?? 26,
+    page: pos!.page ?? 0,
+  }));
+
+  return {
+    ok: true as const,
+    label: r.spec.label,
+    templateKey: r.spec.templateKey,
+    templateBase64: base64,
+    fields, // full map, preserved on save (page / maxChars etc.)
+    items,
+  };
+}
+
+/** Persist calibrated positions for a template (validated against known specs).
+ *  Lives instantly: fillReqForm merges these over the spec on the next render. */
+export async function saveReqFormPositions(templateKey: string, fields: FieldOverrides) {
+  await requireSignedIn();
+  if (!REQ_FORM_SPECS.some((s) => s.templateKey === templateKey)) {
+    return { ok: false as const, error: `Unknown template "${templateKey}".` };
+  }
+  await saveOverrides(templateKey, fields);
+  return { ok: true as const };
 }

@@ -5,6 +5,7 @@
 import "server-only";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
+import { loadOverrides, mergeFields } from "./overrides";
 import type { ReqFormSpec, ReqFormData } from "./types";
 
 const BUCKET = "req-form-templates";
@@ -20,7 +21,9 @@ export async function fillReqForm(spec: ReqFormSpec, data: ReqFormData): Promise
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const pages = pdf.getPages();
 
-  for (const [field, pos] of Object.entries(spec.fields)) {
+  // Live calibrator overrides win over the static spec, field-by-field.
+  const fields = mergeFields(spec.fields, await loadOverrides(spec.templateKey));
+  for (const [field, pos] of Object.entries(fields)) {
     if (!pos) continue;
     let val = data[field as keyof ReqFormData];
     if (val == null || val === "") continue;

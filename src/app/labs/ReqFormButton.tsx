@@ -4,6 +4,7 @@ import { useRef, useState, useTransition } from "react";
 import { specForLab } from "@/lib/req-forms/specs";
 import type { ReqFormData } from "@/lib/req-forms/types";
 import { prepareReqForm, generateReqForm } from "./req-form-actions";
+import { ReqFormCalibrator } from "./ReqFormCalibrator";
 
 // Editable fields shown in the dialog, in order. label + which forms care is
 // handled by just showing all and letting the spec stamp what it positions.
@@ -35,6 +36,7 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
   const [err, setErr] = useState<string | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [filename, setFilename] = useState("req-form.pdf");
+  const [calibrate, setCalibrate] = useState(false);
 
   // Only render the button if this lab has a req-form template.
   if (!specForLab(labName)) return null;
@@ -57,6 +59,7 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
     setOpen(false);
     if (pdfUrl) URL.revokeObjectURL(pdfUrl);
     setPdfUrl(null);
+    setCalibrate(false);
   }
   function set(key: keyof ReqFormData, v: string) {
     setFields((f) => ({ ...f, [key]: v }));
@@ -92,8 +95,10 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
         Print req form
       </button>
 
-      <dialog ref={dialogRef} className={`w-full ${pdfUrl ? "max-w-3xl" : "max-w-md"} rounded-lg border border-zinc-200 bg-white p-0 shadow-xl backdrop:bg-zinc-900/40`}>
-        {open ? (
+      <dialog ref={dialogRef} className={`w-full ${calibrate ? "max-w-4xl" : pdfUrl ? "max-w-3xl" : "max-w-md"} rounded-lg border border-zinc-200 bg-white p-0 shadow-xl backdrop:bg-zinc-900/40`}>
+        {open && calibrate ? (
+          <ReqFormCalibrator caseId={caseId} onBack={() => setCalibrate(false)} />
+        ) : open ? (
           <div className="flex flex-col">
             <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">
               <h2 className="text-sm font-semibold text-zinc-900">{label || "Requisition form"}</h2>
@@ -132,11 +137,14 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
                   </div>
                   {err ? <p className="mt-2 rounded border border-rose-200 bg-rose-50 px-2 py-1.5 text-[12px] text-rose-700">{err}</p> : null}
                 </div>
-                <div className="flex items-center justify-end gap-2 border-t border-zinc-200 px-4 py-3">
-                  <button type="button" onClick={close} className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50">Close</button>
-                  <button type="button" onClick={generate} disabled={pending} className="rounded-md border border-indigo-600 bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
-                    {pending ? "Working…" : "Generate preview"}
-                  </button>
+                <div className="flex items-center justify-between gap-2 border-t border-zinc-200 px-4 py-3">
+                  <button type="button" onClick={() => setCalibrate(true)} className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50" title="Drag fields to position them on the form">⤢ Calibrate positions</button>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={close} className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50">Close</button>
+                    <button type="button" onClick={generate} disabled={pending} className="rounded-md border border-indigo-600 bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
+                      {pending ? "Working…" : "Generate preview"}
+                    </button>
+                  </div>
                 </div>
               </>
             )}
