@@ -3,6 +3,21 @@
 Add new entries at the top of each section. Move items to `## Done` once shipped.
 See also `docs/PLAYBOOK.md` (reuse index — read before building).
 
+## Roadmap — 2026-06-08 (Alex's current backlog)
+
+**Shipped today:** Vibrant scraper fixed (AllSummaryReport — real reports now); stale Vibrant error PDFs swept; PB coverage audit (`worker/scripts/audit-pb-coverage.ts`) + Engine analytics tab (`/labs/analytics?tab=engine`, % correct PDF / posting / upload reliability); auto-post threshold **101→95** (LIVE on worker v32); 4 wrong-year collection_dates fixed.
+
+**Open (Alex's list, 2026-06-08):**
+1. **Metrics-persistence follow-up** — `lab_engine_runs` + `lab_audit_runs` tables the worker writes each reconcile cycle + a nightly PB-coverage cron, so the Engine tab shows live coverage % and per-cycle history (auto-posted/flagged/errors over time), not just point-in-time. Needs a migration (no supabase CLI here → Alex pastes SQL).
+2. **Archive timeframe** — CONFIRMED: 21 days idle in "Protocol received" (step8+step9) → archived (cron fired 6/5, works). 0 qualify now (recently touched). Decide: keep 21d, lower it, and/or auto-archive complete-uploaded cards too. `src/lib/labs/auto-archive.ts`.
+3. **Kennedy email automation (Phase A finish)** — schedule Gmail sync → auto-forward KK PDF to BodyBio → catch reply → escalation timers (2d flag / 1–2wk escalate). See existing KK section below.
+4. **Kennedy Phase B** — our OWN patient-friendly report PDF from the KK raw PDF (skip BodyBio, save $125). Alex has resources for report-building; must be original/provider-paired/no patent infringement (see memory project-lab-tracker-kennedy-bodybio). Initial email to Centner = custom patient-friendly PDF.
+5. **FedEx pickup** — Chromium/Akamai bot-detection scrape of fedex.com OR finish the Create-Pickup API auth (account 20847088 not authorized). See FedEx section below.
+6. **System-wide smoke test + page/UI review** — run the full pipeline; review every page for: leftover enums, stale phase notes/comments, dead code; tighten the UI/client interface so staff can drive it with minimal explanation (clean, obvious, few clicks).
+7. **md/TASKS review** — keep this file + memory current so nothing's missed.
+
+**Later (after the above) — the unified vision:** make a Zenoti appt → auto-creates the order → auto-prints the req form → maximally seamless. Minimize button presses; humans only at the irreducible decision points. (Depends on the req-form auto-fill feature below.)
+
 ## Roadmap — 2026-06-04 (current priorities, Alex's order)
 
 Order Alex set: **(2) partials safety → (3) FedEx pickup → reconcile the 57 → invoice gating.**
