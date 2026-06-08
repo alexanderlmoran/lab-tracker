@@ -33,7 +33,7 @@ export async function fillReqForm(spec: ReqFormSpec, data: ReqFormData): Promise
       y: height - pos.yTop, // yTop is from the top of the page
       size: pos.size ?? 26,
       font,
-      color: rgb(0, 0, 0.65), // blue-black, clearly an overlay vs the printed form
+      color: rgb(0, 0, 0), // black
     });
   }
   return pdf.save();

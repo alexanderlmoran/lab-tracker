@@ -39,9 +39,10 @@ export const REQ_FORM_SPECS: ReqFormSpec[] = [
       firstName: { x: 445, yTop: 755, size: 28 },
       mi: { x: 695, yTop: 755, size: 28 },
       dob: { x: 55, yTop: 862, size: 26 },
-      sexMaleX: { x: 372, yTop: 908, size: 28 },
-      sexFemaleX: { x: 432, yTop: 908, size: 28 },
-      address: { x: 130, yTop: 908, size: 28 },
+      // Gender □M □F sits up on the Date-of-Birth row, not the Address row
+      sexMaleX: { x: 372, yTop: 818, size: 28 },
+      sexFemaleX: { x: 422, yTop: 818, size: 28 },
+      address: { x: 130, yTop: 908, size: 26 },
       city: { x: 100, yTop: 958, size: 26 },
       state: { x: 475, yTop: 958, size: 26 },
       zip: { x: 655, yTop: 958, size: 26 },

@@ -33,6 +33,8 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
   const [editableKeys, setEditableKeys] = useState<string[]>([]);
   const [label, setLabel] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [filename, setFilename] = useState("req-form.pdf");
 
   // Only render the button if this lab has a req-form template.
   if (!specForLab(labName)) return null;
@@ -53,6 +55,8 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
   function close() {
     dialogRef.current?.close();
     setOpen(false);
+    if (pdfUrl) URL.revokeObjectURL(pdfUrl);
+    setPdfUrl(null);
   }
   function set(key: keyof ReqFormData, v: string) {
     setFields((f) => ({ ...f, [key]: v }));
@@ -62,12 +66,13 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
     start(async () => {
       const r = await generateReqForm(caseId, fields);
       if (!r.ok) return setErr(r.error);
-      // base64 → blob → open in a new tab for review/print
+      // base64 → blob → embedded preview (like the PDF review modal)
       const bin = atob(r.pdfBase64);
       const buf = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-      const url = URL.createObjectURL(new Blob([buf], { type: "application/pdf" }));
-      window.open(url, "_blank");
+      if (pdfUrl) URL.revokeObjectURL(pdfUrl);
+      setPdfUrl(URL.createObjectURL(new Blob([buf], { type: "application/pdf" })));
+      setFilename(r.filename);
     });
   }
 
@@ -87,39 +92,54 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
         Print req form
       </button>
 
-      <dialog ref={dialogRef} className="w-full max-w-md rounded-lg border border-zinc-200 bg-white p-0 shadow-xl backdrop:bg-zinc-900/40">
+      <dialog ref={dialogRef} className={`w-full ${pdfUrl ? "max-w-3xl" : "max-w-md"} rounded-lg border border-zinc-200 bg-white p-0 shadow-xl backdrop:bg-zinc-900/40`}>
         {open ? (
           <div className="flex flex-col">
             <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">
               <h2 className="text-sm font-semibold text-zinc-900">{label || "Requisition form"}</h2>
               <button type="button" onClick={close} aria-label="Close" className="rounded p-1 text-zinc-500 hover:bg-zinc-100">×</button>
             </div>
-            <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
-              <p className="mb-2 text-[11px] text-zinc-500">Only the variables below — clinic address/phone, labs@centnerhb.com, and Fasting=Yes are filled automatically. Amber = needs you (e.g. DOB).</p>
-              <div className="grid grid-cols-2 gap-2">
-                {shown.map((f) => (
-                  <label key={f.key} className="flex flex-col gap-0.5 text-[11px] text-zinc-600">
-                    {f.label}
-                    <input
-                      value={(fields[f.key] as string) ?? ""}
-                      onChange={(e) => set(f.key, e.target.value)}
-                      className={`rounded border px-2 py-1 text-[13px] text-zinc-900 ${
-                        missing.includes(f.key as string) && !(fields[f.key])
-                          ? "border-amber-400 bg-amber-50"
-                          : "border-zinc-300 bg-white"
-                      }`}
-                    />
-                  </label>
-                ))}
-              </div>
-              {err ? <p className="mt-2 rounded border border-rose-200 bg-rose-50 px-2 py-1.5 text-[12px] text-rose-700">{err}</p> : null}
-            </div>
-            <div className="flex items-center justify-end gap-2 border-t border-zinc-200 px-4 py-3">
-              <button type="button" onClick={close} className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50">Close</button>
-              <button type="button" onClick={generate} disabled={pending} className="rounded-md border border-indigo-600 bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
-                {pending ? "Working…" : "Generate & open"}
-              </button>
-            </div>
+            {pdfUrl ? (
+              <>
+                <iframe src={pdfUrl} title="Requisition preview" className="h-[72vh] w-full border-0 bg-zinc-100" />
+                <div className="flex items-center justify-between gap-2 border-t border-zinc-200 px-4 py-3">
+                  <button type="button" onClick={() => setPdfUrl(null)} className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50">← Back to edit</button>
+                  <div className="flex gap-2">
+                    <a href={pdfUrl} download={filename} className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50">Download</a>
+                    <button type="button" onClick={() => window.open(pdfUrl, "_blank")} className="rounded-md border border-indigo-600 bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700">Open / Print</button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
+                  <p className="mb-2 text-[11px] text-zinc-500">Only the variables below — clinic address/phone, labs@centnerhb.com, and Fasting=Yes are filled automatically. Amber = needs you (e.g. DOB). Entered DOB saves back to the tracker.</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {shown.map((f) => (
+                      <label key={f.key} className="flex flex-col gap-0.5 text-[11px] text-zinc-600">
+                        {f.label}
+                        <input
+                          value={(fields[f.key] as string) ?? ""}
+                          onChange={(e) => set(f.key, e.target.value)}
+                          className={`rounded border px-2 py-1 text-[13px] text-zinc-900 ${
+                            missing.includes(f.key as string) && !(fields[f.key])
+                              ? "border-amber-400 bg-amber-50"
+                              : "border-zinc-300 bg-white"
+                          }`}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  {err ? <p className="mt-2 rounded border border-rose-200 bg-rose-50 px-2 py-1.5 text-[12px] text-rose-700">{err}</p> : null}
+                </div>
+                <div className="flex items-center justify-end gap-2 border-t border-zinc-200 px-4 py-3">
+                  <button type="button" onClick={close} className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50">Close</button>
+                  <button type="button" onClick={generate} disabled={pending} className="rounded-md border border-indigo-600 bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
+                    {pending ? "Working…" : "Generate preview"}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         ) : null}
       </dialog>

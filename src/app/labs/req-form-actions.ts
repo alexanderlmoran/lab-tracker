@@ -22,13 +22,43 @@ export async function prepareReqForm(caseId: string) {
   };
 }
 
-/** Render the filled requisition PDF from the (staff-edited) fields. */
+/** MM/DD/YYYY → ISO YYYY-MM-DD, or null if not a full valid date. */
+function dobToIso(s: string | undefined): string | null {
+  const m = (s ?? "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  return `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+}
+
+/** Render the filled requisition PDF from the (staff-edited) fields, AND persist
+ *  the entered DOB back to the tracker so it's never re-typed (propagates to the
+ *  patient's other DOB-less cases too). Zenoti/PB write-back is a follow-up. */
 export async function generateReqForm(caseId: string, fields: ReqFormData) {
-  await requireSignedIn();
+  const user = await requireSignedIn();
   const db = getSupabaseAdmin();
-  const { data: c } = await db.from("lab_cases").select("lab_name").eq("id", caseId).maybeSingle();
+  const { data: c } = await db
+    .from("lab_cases")
+    .select("lab_name, patient_name, patient_dob")
+    .eq("id", caseId)
+    .maybeSingle();
   const spec = specForLab((c?.lab_name as string | null) ?? null);
   if (!spec) return { ok: false as const, error: "No requisition template for this lab yet." };
+
+  // Two-way: persist the entered DOB to the tracker (and the patient's other
+  // cases that lack one — don't clobber a different existing value).
+  const dobIso = dobToIso(fields.dob);
+  if (dobIso && dobIso !== (c?.patient_dob as string | null)) {
+    await db.from("lab_cases").update({ patient_dob: dobIso }).eq("id", caseId);
+    const name = c?.patient_name as string | undefined;
+    if (name) {
+      await db.from("lab_cases").update({ patient_dob: dobIso }).eq("patient_name", name).is("patient_dob", null);
+    }
+    await db.from("lab_events").insert({
+      case_id: caseId,
+      kind: "case_edited" as const,
+      actor: user.email ?? "staff",
+      note: `DOB set to ${fields.dob} via req form (propagated to this patient's DOB-less cases)`,
+    });
+  }
 
   const fill: ReqFormData = { ...fields };
   // Forms with Male/Female checkboxes get an X; Kennedy uses the plain `sex` text.
