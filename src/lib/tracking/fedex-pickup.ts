@@ -83,11 +83,15 @@ type PickupConfig = {
   contactName: string;
   contactPhone: string;
   street: string;
+  /** Optional second address line, e.g. "Suite A-1". */
+  street2?: string;
   city: string;
   state: string;
   zip: string;
   country: string;
   closeTime: string;
+  /** Optional driver instructions at the pickup location, e.g. "Downstairs, Reception". */
+  instructions?: string;
 };
 
 function readPickupConfig(): PickupConfig | { missing: string[] } {
@@ -96,15 +100,21 @@ function readPickupConfig(): PickupConfig | { missing: string[] } {
     ["contactName", process.env.FEDEX_PICKUP_CONTACT_NAME, true],
     ["contactPhone", process.env.FEDEX_PICKUP_CONTACT_PHONE, true],
     ["street", process.env.FEDEX_PICKUP_STREET, true],
+    ["street2", process.env.FEDEX_PICKUP_STREET2, false],
     ["city", process.env.FEDEX_PICKUP_CITY, true],
     ["state", process.env.FEDEX_PICKUP_STATE, true],
     ["zip", process.env.FEDEX_PICKUP_ZIP, true],
     ["country", process.env.FEDEX_PICKUP_COUNTRY ?? "US", false],
-    ["closeTime", process.env.FEDEX_PICKUP_CLOSE_TIME ?? "17:00:00", false],
+    // Default close 16:30 (4:30pm): Alex's preference so a late FedEx still
+    // leaves time to drive samples to a local FedEx before the clinic's 7pm close.
+    ["closeTime", process.env.FEDEX_PICKUP_CLOSE_TIME ?? "16:30:00", false],
+    ["instructions", process.env.FEDEX_PICKUP_INSTRUCTIONS, false],
   ];
   const missing = fields.filter(([, v, required]) => required && !v).map(([k]) => k);
   if (missing.length) return { missing };
-  const cfg = Object.fromEntries(fields.map(([k, v]) => [k, v])) as unknown as PickupConfig;
+  const cfg = Object.fromEntries(
+    fields.filter(([, v]) => v !== undefined).map(([k, v]) => [k, v]),
+  ) as unknown as PickupConfig;
   return cfg;
 }
 
@@ -185,13 +195,16 @@ export async function schedulePickup(input: SchedulePickupInput): Promise<Schedu
           phoneNumber: cfg.contactPhone,
         },
         address: {
-          streetLines: [cfg.street],
+          streetLines: [cfg.street, cfg.street2].filter(Boolean) as string[],
           city: cfg.city,
           stateOrProvinceCode: cfg.state,
           postalCode: cfg.zip,
           countryCode: cfg.country,
           residential: false,
         },
+        // Driver instructions at the door (e.g. "Downstairs, Reception"); omitted
+        // from the JSON when unset.
+        ...(cfg.instructions ? { deliveryInstructions: cfg.instructions } : {}),
       },
       // Alex's preference: ready 2:30pm, clinic close (customerCloseTime) 4:30pm.
       readyDateTimestamp: `${input.readyDate}T${readyTime}${tzOffset}`,
