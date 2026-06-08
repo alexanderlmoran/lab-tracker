@@ -28,6 +28,45 @@ export const REQ_FORM_SPECS: ReqFormSpec[] = [
       orderNumber: { x: 915, yTop: 1213, size: 28 },
     },
   },
+  {
+    labs: ["spectracell"],
+    label: "SpectraCell — Test Requisition",
+    templateKey: "spectracell.pdf",
+    orderNumber: "accession", // requisition # is assigned by SpectraCell (not stamped)
+    fields: {
+      // page is 1415×1870; calibrated via grid
+      lastName: { x: 55, yTop: 755, size: 28 },
+      firstName: { x: 445, yTop: 755, size: 28 },
+      mi: { x: 695, yTop: 755, size: 28 },
+      dob: { x: 55, yTop: 862, size: 26 },
+      sexMaleX: { x: 372, yTop: 908, size: 28 },
+      sexFemaleX: { x: 432, yTop: 908, size: 28 },
+      address: { x: 130, yTop: 908, size: 28 },
+      city: { x: 100, yTop: 958, size: 26 },
+      state: { x: 475, yTop: 958, size: 26 },
+      zip: { x: 655, yTop: 958, size: 26 },
+      phone: { x: 130, yTop: 1000, size: 26 },
+      email: { x: 145, yTop: 1095, size: 24, maxChars: 40 },
+      collectionDate: { x: 55, yTop: 602, size: 24 },
+    },
+  },
+  {
+    labs: ["kennedy", "krieger"],
+    label: "Kennedy Krieger — Requisition",
+    templateKey: "kennedy.pdf",
+    orderNumber: "manual", // Sample ID# comes from the kit — staff enters it
+    fields: {
+      // page is 1657×2236; first-pass positions (verify in preview)
+      lastName: { x: 130, yTop: 400, size: 26 },
+      firstName: { x: 490, yTop: 400, size: 26 },
+      mi: { x: 700, yTop: 400, size: 26 },
+      sex: { x: 790, yTop: 400, size: 26 },
+      dob: { x: 900, yTop: 400, size: 26 },
+      collectionDate: { x: 130, yTop: 485, size: 24 }, // Sample Date
+      orderNumber: { x: 490, yTop: 485, size: 24 }, // Sample ID#
+      orderingProvider: { x: 970, yTop: 530, size: 22 },
+    },
+  },
 ];
 
 export function specForLab(labName: string | null): ReqFormSpec | null {

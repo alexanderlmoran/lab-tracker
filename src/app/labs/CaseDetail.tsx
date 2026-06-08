@@ -20,6 +20,7 @@ import { FindResultButton } from "./FindResultButton";
 import { ManageLabsButton } from "./PatientLabManager";
 import { RefreshLabStatusButton } from "./RefreshLabStatusButton";
 import { RefreshTrackingButton } from "./RefreshTrackingButton";
+import { ReqFormButton } from "./ReqFormButton";
 import {
   archiveLabCase,
   attachTrackingFromScan,
@@ -711,6 +712,10 @@ export function CaseDetail({
             ⚠ {destWarning}
           </p>
         ) : null}
+        {/* Req-form auto-fill — renders only for labs that have a template */}
+        <div className="mt-2">
+          <ReqFormButton caseId={row.id} labName={row.lab_name} />
+        </div>
         {row.tracking_number && row.tracking_status ? (
           <div className="mt-2 flex items-center justify-between gap-3 rounded-md border border-zinc-200 bg-zinc-50 px-2.5 py-1.5">
             <p className="text-[11px] text-zinc-700">
