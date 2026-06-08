@@ -21,7 +21,8 @@ export type ReqField =
   | "phone"
   | "email"
   | "orderNumber" // Kennedy Sample ID# (manual) / DoctorsData client ref / Spectracell accession
-  | "orderingProvider";
+  | "orderingProvider"
+  | "fastingX"; // X on the Fasting=Yes box (Alex always selects Yes)
 
 /** Position of one field on the template. y is measured FROM THE TOP (more
  *  intuitive when eyeballing a scan); the engine converts to pdf-lib's

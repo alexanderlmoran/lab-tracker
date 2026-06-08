@@ -18,6 +18,7 @@ export async function prepareReqForm(caseId: string) {
     orderNumberMode: r.spec.orderNumber, // "manual" | "assign" | "accession"
     fields: r.data,
     missing: r.missing,
+    editableKeys: r.editableKeys,
   };
 }
 

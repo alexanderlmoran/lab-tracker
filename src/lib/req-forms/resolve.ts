@@ -43,6 +43,18 @@ export type ResolvedReqForm = {
   spec: ReqFormSpec;
   data: ReqFormData;
   missing: string[]; // fields we couldn't resolve — surfaced for staff to complete
+  editableKeys: string[]; // only the variable fields the dialog should show
+};
+
+// Fixed on every Centner req (Alex): patient address = the clinic (same as the
+// FedEx pickup), clinic phone, labs@ email, fasting always Yes.
+const CLINIC = {
+  address: "2333 Brickell Ave Ste A1",
+  city: "Miami",
+  state: "FL",
+  zip: "33129",
+  phone: "305-602-5260",
+  email: "labs@centnerhb.com",
 };
 
 export async function resolveReqForm(
@@ -79,7 +91,6 @@ export async function resolveReqForm(
   }
 
   const { first, last, mi } = splitName(c.patient_name as string);
-  const addr = parseAddress(c.patient_address as string | null);
 
   let orderNumber = opts.orderNumber ?? "";
   if (!orderNumber && spec.orderNumber === "assign") {
@@ -95,19 +106,29 @@ export async function resolveReqForm(
     lastName: last,
     mi,
     dob: fmtDate(dob),
+    sex: "",
     collectionDate: fmtDate(c.collection_date as string | null),
-    address: addr.address,
-    city: addr.city,
-    state: addr.state,
-    zip: addr.zip,
-    phone: phone ?? "",
-    email: email ?? "",
+    // Fixed defaults (clinic address/phone, labs@ email, fasting Yes).
+    address: CLINIC.address,
+    city: CLINIC.city,
+    state: CLINIC.state,
+    zip: CLINIC.zip,
+    phone: CLINIC.phone,
+    email: CLINIC.email,
+    fastingX: "X",
+    orderingProvider: "Virgilio Sanchez, MD",
     orderNumber,
   };
 
-  const missing: string[] = [];
-  if (!data.dob) missing.push("dob");
-  if (!data.collectionDate) missing.push("collectionDate");
-  if (spec.orderNumber === "manual" && !data.orderNumber) missing.push("orderNumber");
-  return { spec, data, missing };
+  // Only surface the per-patient variables for editing (Alex: the rest is fixed).
+  const editableKeys: string[] = [];
+  if (spec.fields.patientName) editableKeys.push("patientName");
+  if (spec.fields.lastName) editableKeys.push("lastName", "firstName", "mi");
+  editableKeys.push("dob", "sex", "collectionDate");
+  if (spec.fields.orderNumber) editableKeys.push("orderNumber");
+
+  const missing = editableKeys.filter(
+    (k) => !data[k as keyof ReqFormData] && (k === "dob" || (k === "orderNumber" && spec.orderNumber === "manual")),
+  );
+  return { spec, data, missing, editableKeys };
 }

@@ -48,6 +48,7 @@ export const REQ_FORM_SPECS: ReqFormSpec[] = [
       phone: { x: 130, yTop: 1000, size: 26 },
       email: { x: 145, yTop: 1095, size: 24, maxChars: 40 },
       collectionDate: { x: 55, yTop: 602, size: 24 },
+      fastingX: { x: 600, yTop: 615, size: 26 }, // X on "Fasting □Yes" (first-pass)
     },
   },
   {
@@ -65,6 +66,7 @@ export const REQ_FORM_SPECS: ReqFormSpec[] = [
       collectionDate: { x: 130, yTop: 485, size: 24 }, // Sample Date
       orderNumber: { x: 490, yTop: 485, size: 24 }, // Sample ID#
       orderingProvider: { x: 970, yTop: 530, size: 22 },
+      fastingX: { x: 915, yTop: 470, size: 24 }, // X on "FASTING □" (first-pass)
     },
   },
 ];

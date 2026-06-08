@@ -30,6 +30,7 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
   const [pending, start] = useTransition();
   const [fields, setFields] = useState<ReqFormData>({});
   const [missing, setMissing] = useState<string[]>([]);
+  const [editableKeys, setEditableKeys] = useState<string[]>([]);
   const [label, setLabel] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
@@ -46,6 +47,7 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
       setFields(r.fields);
       setMissing(r.missing);
       setLabel(r.label);
+      setEditableKeys(r.editableKeys);
     });
   }
   function close() {
@@ -69,8 +71,10 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
     });
   }
 
-  // show only fields that have a resolved value OR are commonly editable
-  const shown = FIELDS.filter((f) => f.key in fields || ["dob", "sex", "collectionDate", "orderNumber"].includes(f.key as string));
+  // show only the form's variable fields (the rest is fixed: clinic address,
+  // clinic phone, labs@ email, fasting Yes — all applied automatically).
+  const labelFor = (k: string) => FIELDS.find((f) => f.key === k)?.label ?? k;
+  const shown = editableKeys.map((k) => ({ key: k as keyof ReqFormData, label: labelFor(k) }));
 
   return (
     <>
@@ -91,7 +95,7 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
               <button type="button" onClick={close} aria-label="Close" className="rounded p-1 text-zinc-500 hover:bg-zinc-100">×</button>
             </div>
             <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
-              <p className="mb-2 text-[11px] text-zinc-500">Review & complete, then generate. Blank/missing fields are highlighted — fill any you can.</p>
+              <p className="mb-2 text-[11px] text-zinc-500">Only the variables below — clinic address/phone, labs@centnerhb.com, and Fasting=Yes are filled automatically. Amber = needs you (e.g. DOB).</p>
               <div className="grid grid-cols-2 gap-2">
                 {shown.map((f) => (
                   <label key={f.key} className="flex flex-col gap-0.5 text-[11px] text-zinc-600">
