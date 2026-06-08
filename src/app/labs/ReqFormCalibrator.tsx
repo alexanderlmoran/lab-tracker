@@ -60,7 +60,9 @@ export function ReqFormCalibrator({ caseId, onBack }: { caseId: string; onBack: 
 
     try {
       const pdfjs = await import("pdfjs-dist");
-      pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+      // Served raw from /public as .js (reliable text/javascript MIME for the
+      // module worker) and excluded from the auth proxy — see src/proxy.ts.
+      pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
       const doc = await pdfjs.getDocument({ data: b64ToBytes(r.templateBase64) }).promise;
       const page = await doc.getPage(1);
       const native = page.getViewport({ scale: 1 }); // width/height in PDF points
