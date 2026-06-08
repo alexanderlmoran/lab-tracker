@@ -60,13 +60,30 @@ async function sbGet<T>(path: string): Promise<T> {
   return (await res.body.json()) as T;
 }
 
-// First word of the lab name, lowercased, alpha only: "Access Custom" → "access",
-// "Vibrant · EBOO Waste" → "vibrant". PB titles are vendor-first so this is the
-// token we expect to see in a labrequest name.
-function labToken(labName: string | null): string {
-  if (!labName) return "";
-  const first = labName.trim().split(/[\s·—-]+/)[0] ?? "";
-  return first.toLowerCase().replace(/[^a-z]/g, "");
+// Tokens that, if present in a PB labrequest name, count as a vendor match. PB
+// titles are vendor-first but Centner staff also title by PANEL ("Gut Zoomer",
+// "EBOO waste", "Total Tox") or by alternate vendor spelling ("Doctors Data"),
+// so the bare first word misses real matches. We expand each vendor to its known
+// aliases. EBOO waste is a Vibrant-adjacent service titled without "vibrant".
+const VENDOR_ALIASES: Record<string, string[]> = {
+  vibrant: ["vibrant", "zoomer", "eboo", "total tox", "tickborne", "immunoglobulin", "neural", "gut "],
+  access: ["access"],
+  doctorsdata: ["doctorsdata", "doctors data", "doctor's data", "chelation"],
+  glycanage: ["glycanage"],
+  cyrex: ["cyrex"],
+  spectracell: ["spectracell", "spectra", "micronutrient", "telomere"],
+  genova: ["genova", "gi effects", "gdx"],
+  viome: ["viome"],
+  rgcc: ["rgcc", "maintrac"],
+};
+
+function labTokens(labName: string | null): string[] {
+  if (!labName) return [];
+  const ln = labName.toLowerCase();
+  const base = (ln.split(/[\s·—-]+/)[0] ?? "").replace(/[^a-z]/g, "");
+  const tokens = new Set<string>(VENDOR_ALIASES[base] ?? (base ? [base] : []));
+  if (ln.includes("eboo")) tokens.add("eboo"); // "Vibrant · EBOO Waste" → "EBOO waste" on PB
+  return [...tokens];
 }
 
 function daysApart(a: string | null, b: string | null): number | null {
@@ -77,6 +94,44 @@ function daysApart(a: string | null, b: string | null): number | null {
   return Math.abs(da - db) / 86_400_000;
 }
 
+const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+
+// Parse a messy case name into a surname + candidate first names. Parentheticals
+// like "JONATHAN (DAVID) CENTNER" carry an alternate first name the chart may use,
+// so we keep both ("jonathan","david"). Handles "Last, First" too.
+function parseName(full: string): { firsts: string[]; last: string } {
+  const parenFirsts = [...full.matchAll(/\(([^)]+)\)/g)].map((m) => norm(m[1])).filter(Boolean);
+  const bare = full.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+  let tokens: string[];
+  if (bare.includes(",")) {
+    const [last, rest] = bare.split(",");
+    tokens = [...(rest ?? "").trim().split(/\s+/), last.trim()];
+  } else {
+    tokens = bare.split(/\s+/);
+  }
+  tokens = tokens.map(norm).filter(Boolean);
+  const last = tokens.at(-1) ?? "";
+  const firsts = [...new Set([tokens[0] ?? "", ...parenFirsts].filter(Boolean))];
+  return { firsts, last };
+}
+
+type RosterRec = { id: string; first: string; last: string };
+
+// Find a PB record for a case name by scanning the labrequest roster — robust to
+// spelling slips ("Mercela"→"Marcela") and parentheticals the PB search endpoint
+// chokes on. Match = same surname AND a first name that matches exactly or by
+// initial (covers nicknames). Returns the id only if exactly one record matches.
+function rosterMatch(caseName: string, roster: RosterRec[]): string | null {
+  const { firsts, last } = parseName(caseName);
+  if (!last) return null;
+  const hits = roster.filter((r) => {
+    if (r.last !== last) return false;
+    return firsts.some((f) => f === r.first || (f && r.first && f[0] === r.first[0]));
+  });
+  const ids = [...new Set(hits.map((h) => h.id))];
+  return ids.length === 1 ? ids[0] : null;
+}
+
 type Verdict = "STRONG" | "LIKELY" | "MISSING" | "NO_MATCH";
 
 function classify(c: CompleteCase, lrs: PbLabRequest[]): { verdict: Verdict; hit?: PbLabRequest } {
@@ -85,13 +140,16 @@ function classify(c: CompleteCase, lrs: PbLabRequest[]): { verdict: Verdict; hit
     const hit = lrs.find((lr) => (lr.name ?? "").includes(acc));
     if (hit) return { verdict: "STRONG", hit };
   }
-  const token = labToken(c.lab_name);
+  const tokens = labTokens(c.lab_name);
   const likely = lrs.find((lr) => {
     const n = (lr.name ?? "").toLowerCase();
-    if (token && !n.includes(token)) return false;
+    if (tokens.length && !tokens.some((t) => n.includes(t))) return false;
     const d = daysApart(lr.dateOrdered ?? null, c.collection_date);
-    if (d !== null) return d <= 30;
-    return token !== ""; // vendor matched, no date to compare → still a likely hit
+    // Widened 30→90d: a PB labrequest's order date often lags the case's
+    // collection date (specialty turnaround, late charting) — matches the
+    // backfill engine's 90d window.
+    if (d !== null) return d <= 90;
+    return tokens.length > 0; // vendor matched, no date to compare → still a likely hit
   });
   if (likely) return { verdict: "LIKELY", hit: likely };
   return { verdict: "MISSING" };
@@ -113,6 +171,16 @@ async function main() {
   const allLrs = await listAllConsultantLabRequests(session, { limit: 2000 });
   console.log(`PB labrequests pulled: ${allLrs.length}\n`);
 
+  // Unique PB records seen across the roster — used as the name-match fallback.
+  const roster: RosterRec[] = [];
+  const seenRec = new Set<string>();
+  for (const lr of allLrs) {
+    const cr = lr.clientRecord;
+    if (!cr?.id || seenRec.has(cr.id)) continue;
+    seenRec.add(cr.id);
+    roster.push({ id: cr.id, first: norm(cr.profile?.firstName ?? ""), last: norm(cr.profile?.lastName ?? "") });
+  }
+
   const patientKey = (c: CompleteCase) => `${c.patient_name.trim().toLowerCase()}|${c.patient_dob ?? ""}`;
   const pbIdCache = new Map<string, string | null>();
   async function resolvePbId(c: CompleteCase): Promise<string | null> {
@@ -120,11 +188,12 @@ async function main() {
     if (pbIdCache.has(k)) return pbIdCache.get(k)!;
     let id: string | null = null;
     try {
-      const p = await findPbPatient(session, c.patient_name, c.patient_dob ?? undefined);
+      const p = await findPbPatient(session, c.patient_name.replace(/\([^)]*\)/g, " "), c.patient_dob ?? undefined);
       id = p?.id ?? null;
     } catch (e) {
       console.warn(`  ! PB search failed for ${c.patient_name}: ${e instanceof Error ? e.message : e}`);
     }
+    if (!id) id = rosterMatch(c.patient_name, roster); // spelling / parenthetical fallback
     pbIdCache.set(k, id);
     return id;
   }
