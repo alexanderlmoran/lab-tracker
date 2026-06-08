@@ -264,14 +264,17 @@ export async function getSystemHealth(): Promise<SystemHealth> {
   // 1) Portals — drive off consecutive_failures (existing ScrapersPanel
   //    convention: 1 = yellow, ≥2 = red) plus last-success staleness as a
   //    cron-liveness proxy (the portal probe runs ~daily).
+  const scraperRows = (scrapers.data ?? []) as Array<{
+    portal_key: string;
+    last_check_at: string | null;
+    last_success_at: string | null;
+    last_error: string | null;
+    consecutive_failures: number;
+  }>;
   {
-    const rows = (scrapers.data ?? []) as Array<{
-      portal_key: string;
-      last_check_at: string | null;
-      last_success_at: string | null;
-      last_error: string | null;
-      consecutive_failures: number;
-    }>;
+    // The zenoti-sync heartbeat lives in the same table but isn't a portal —
+    // it gets its own category below.
+    const rows = scraperRows.filter((r) => r.portal_key !== "zenoti-sync");
     const items: HealthItem[] = rows
       .map((r) => {
         let status: HealthStatus;
@@ -305,6 +308,35 @@ export async function getSystemHealth(): Promise<SystemHealth> {
           : `${healthy}/${items.length} portals healthy`,
       detail: "Daily login probe per portal. ≥2 failures = red.",
       items,
+    });
+  }
+
+  // 1b) Zenoti sync heartbeat — the sync hits /api/worker/cases every ~3 min, so
+  //     a stale last_success_at means it's stopped (e.g. a worker deploy left the
+  //     always-on machine stopped). Tight thresholds so it goes red fast.
+  {
+    const hb = scraperRows.find((r) => r.portal_key === "zenoti-sync") ?? null;
+    const age = ageHours(hb?.last_success_at);
+    const status: HealthStatus = !hb
+      ? "red"
+      : age > 1
+        ? "red"
+        : age > 0.25
+          ? "yellow"
+          : "green";
+    categories.push({
+      key: "zenoti_sync",
+      label: "Zenoti sync",
+      status,
+      headline: !hb
+        ? "Never synced — heartbeat missing"
+        : status === "green"
+          ? `Healthy · last sync ${formatAge(hb.last_success_at)}`
+          : `Stalled — last sync ${formatAge(hb.last_success_at)}`,
+      detail:
+        status === "red" && hb
+          ? "Sync hasn't run in >1h. Likely the always-on zenoti machine is stopped — `fly machine start <id>`."
+          : "Auto-creates cards from Zenoti lab appointments (every ~3 min).",
     });
   }
 

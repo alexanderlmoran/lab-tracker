@@ -375,6 +375,26 @@ export async function POST(request: Request) {
     }
   }
 
+  // Heartbeat: the Zenoti sync hits this route every cycle (even with nothing
+  // new), so a fresh `last_success_at` here = the sync is alive. The Health tab
+  // flags it red when stale, so a stopped sync (e.g. after a worker deploy left
+  // the always-on machine stopped) is visible immediately instead of silent.
+  await db
+    .from("lab_scraper_status")
+    .upsert(
+      {
+        portal_key: "zenoti-sync",
+        last_check_at: new Date().toISOString(),
+        last_success_at: new Date().toISOString(),
+        consecutive_failures: 0,
+        last_error: null,
+      },
+      { onConflict: "portal_key" },
+    )
+    .then(({ error }) => {
+      if (error) console.warn(`[cases] zenoti heartbeat failed: ${error.message}`);
+    });
+
   return NextResponse.json({
     ok: errors.length === 0,
     received: parsed.appointments.length,
