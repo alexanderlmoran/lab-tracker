@@ -113,6 +113,42 @@ export function isPickupConfigured(): boolean {
   return pickupApiCreds() != null && !("missing" in readPickupConfig());
 }
 
+/**
+ * READ-ONLY pickup-availability check. Confirms whether FedEx will authorize a
+ * pickup from the clinic address WITHOUT scheduling one (no truck). Use this to
+ * test credential/account authorization safely: a 200 means the project+account
+ * are pickup-authorized (so schedulePickup should work); a 403 FORBIDDEN /
+ * USER.UNAUTHORIZED means the FedEx project isn't approved for the Pickup
+ * product — a developer-portal gate, not a code bug.
+ * Note: availabilities uses SINGULAR `countryRelationship` (create uses plural).
+ */
+export async function checkPickupAvailability(opts: { readyDate?: string } = {}): Promise<{
+  ok: boolean;
+  status: number;
+  body: unknown;
+}> {
+  const cfg = readPickupConfig();
+  if ("missing" in cfg) {
+    throw new FedExError(`FedEx pickup not configured — set: ${cfg.missing.join(", ")}`);
+  }
+  const { token, base } = await getPickupToken();
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  const readyDate = opts.readyDate ?? today;
+  const body = {
+    pickupAddress: { postalCode: cfg.zip, countryCode: cfg.country },
+    pickupRequestType: [readyDate <= today ? "SAME_DAY" : "FUTURE_DAY"],
+    carriers: ["FDXE"],
+    countryRelationship: "DOMESTIC",
+  };
+  const res = await fetch(`${base}/pickup/v1/pickups/availabilities`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "x-locale": "en_US" },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => null);
+  return { ok: res.ok, status: res.status, body: json };
+}
+
 export async function schedulePickup(input: SchedulePickupInput): Promise<SchedulePickupResult> {
   const cfg = readPickupConfig();
   if ("missing" in cfg) {
@@ -124,16 +160,24 @@ export async function schedulePickup(input: SchedulePickupInput): Promise<Schedu
 
   const { token, base } = await getPickupToken();
 
-  // Body shape verified against the official Pickup Request API OpenAPI spec
-  // (Alex pulled it 2026-06-04): `countryRelationship` is SINGULAR, the ready
-  // timestamp needs a timezone offset, contact wants companyName, address wants
-  // `residential`. (The remaining SHIPMENT.USER.UNAUTHORIZED is a FedEx-side
-  // account/key authorization gate — see TASKS.md — not a body problem.)
+  // Body shape corrected 2026-06-08 against the official Pickup Request API
+  // Postman collection (Alex supplied it): `associatedAccountNumber` is `{value}`
+  // with NO `key` (an empty key breaks account auth → USER.UNAUTHORIZED);
+  // `countryRelationships` is PLURAL; `pickupDateType` is required; the canonical
+  // body also carries `pickupAddressType`, `packageLocation`, and top-level
+  // `packageCount`. NOTE: if this still returns FORBIDDEN/USER.UNAUTHORIZED the
+  // FedEx project simply isn't authorized for the Pickup product — a portal gate,
+  // not a body problem (see TASKS.md). Use checkPickupAvailability() to test that
+  // safely (read-only, no truck dispatched).
   const readyTime = input.readyTime ?? process.env.FEDEX_PICKUP_READY_TIME ?? "14:30:00";
   const tzOffset = process.env.FEDEX_PICKUP_UTC_OFFSET ?? "-04:00"; // Miami EDT; -05:00 in winter
+  // pickupDateType is required: SAME_DAY when ready today (clinic tz), else FUTURE_DAY.
+  const todayLocal = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  const pickupDateType = input.readyDate <= todayLocal ? "SAME_DAY" : "FUTURE_DAY";
   const body = {
-    associatedAccountNumber: { key: "", value: cfg.account },
+    associatedAccountNumber: { value: cfg.account },
     originDetail: {
+      pickupAddressType: "OTHER",
       pickupLocation: {
         contact: {
           personName: cfg.contactName,
@@ -152,12 +196,14 @@ export async function schedulePickup(input: SchedulePickupInput): Promise<Schedu
       // Alex's preference: ready 2:30pm, clinic close (customerCloseTime) 4:30pm.
       readyDateTimestamp: `${input.readyDate}T${readyTime}${tzOffset}`,
       customerCloseTime: cfg.closeTime,
-      earlyPickup: false,
+      pickupDateType,
+      packageLocation: process.env.FEDEX_PICKUP_PACKAGE_LOCATION ?? "FRONT",
     },
     totalWeight: { units: "LB", value: Math.max(1, input.packageCount ?? 1) },
+    packageCount: input.packageCount ?? 1,
     carrierCode: input.carrierCode ?? "FDXE",
     remarks: input.remarks ?? "Lab sample pickup",
-    countryRelationship: "DOMESTIC",
+    countryRelationships: "DOMESTIC",
   };
 
   const res = await fetch(`${base}/pickup/v1/pickups`, {
