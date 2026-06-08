@@ -16,6 +16,19 @@ import type { FieldOverrides } from "@/lib/req-forms/overrides";
 
 const TARGET_W = 760; // on-screen page width (px); native points scale to fit this
 
+// pdfjs MUST run as its own standalone bundle. Letting the app bundler (webpack/
+// turbopack) re-process pdfjs-dist throws "Object.defineProperty called on non-
+// object" (its internal bundle runtime collides with the host's). So we load the
+// self-hosted legacy build (public/pdfjs/, copied by the copy-pdf-worker script)
+// via a NATIVE dynamic import the bundler can't see and won't touch.
+type PdfjsApi = typeof import("pdfjs-dist");
+const nativeImport = new Function("u", "return import(u)") as (u: string) => Promise<unknown>;
+async function loadPdfjs(): Promise<PdfjsApi> {
+  const pdfjs = (await nativeImport("/pdfjs/pdf.min.js")) as PdfjsApi;
+  pdfjs.GlobalWorkerOptions.workerSrc = "/pdfjs/pdf.worker.min.js";
+  return pdfjs;
+}
+
 type Item = { field: string; text: string; x: number; yTop: number; size: number; page: number };
 
 function b64ToBytes(b64: string): Uint8Array {
@@ -58,15 +71,12 @@ export function ReqFormCalibrator({ caseId, onBack }: { caseId: string; onBack: 
     baseFields.current = r.fields;
     setItems(r.items.filter((it) => it.page === 0));
 
+    let phase = "load pdfjs";
     try {
-      // LEGACY build — the modern build (build/pdf.mjs) throws "Object.define-
-      // Property called on non-object" under the bundler. Legacy works (and its
-      // fake-worker fallback is self-sufficient if the worker can't load).
-      const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-      // Worker served raw from /public as .js (reliable text/javascript MIME)
-      // and excluded from the auth proxy — see src/proxy.ts.
-      pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
+      const pdfjs = await loadPdfjs();
+      phase = "parse pdf";
       const doc = await pdfjs.getDocument({ data: b64ToBytes(r.templateBase64) }).promise;
+      phase = "get page";
       const page = await doc.getPage(1);
       const native = page.getViewport({ scale: 1 }); // width/height in PDF points
       const s = TARGET_W / native.width;
@@ -80,12 +90,13 @@ export function ReqFormCalibrator({ caseId, onBack }: { caseId: string; onBack: 
       canvas.height = viewport.height;
       canvas.style.width = `${native.width * s}px`;
       canvas.style.height = `${native.height * s}px`;
+      phase = "render";
       await page.render({ canvas, canvasContext: ctx, viewport }).promise;
       setScale(s);
       setCssH(native.height * s);
       setStatus("ready");
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Failed to render the template.");
+      setErr(`[${phase}] ${e instanceof Error ? e.message : "Failed to render the template."}`);
       setStatus("error");
     }
   }, [caseId]);
