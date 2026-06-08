@@ -14,6 +14,25 @@ See also `docs/PLAYBOOK.md` (reuse index — read before building).
 4. **Kennedy Phase B** — our OWN patient-friendly report PDF from the KK raw PDF (skip BodyBio, save $125). Alex has resources for report-building; must be original/provider-paired/no patent infringement (see memory project-lab-tracker-kennedy-bodybio). Initial email to Centner = custom patient-friendly PDF.
 5. **FedEx pickup** — Chromium/Akamai bot-detection scrape of fedex.com OR finish the Create-Pickup API auth (account 20847088 not authorized). See FedEx section below.
 6. **System-wide smoke test + page/UI review** — run the full pipeline; review every page for: leftover enums, stale phase notes/comments, dead code; tighten the UI/client interface so staff can drive it with minimal explanation (clean, obvious, few clicks).
+
+   **Sub-agent findings 2026-06-08 (verified, ready to action):**
+   - 🐛 **REAL BUG (patient-safety, do first): `normalizeDob` diverged across scrapers** — access.ts/vibrant.ts require zero-padded `\d{2}/\d{2}/\d{4}`; cyrex/genova/spectracell use `\d{1,2}`+padStart. So `3/5/1990` matches on some portals but falls through to raw string on Access/Vibrant → DOB match silently fails. Fix: one `normalizeDob` (the padStart variant) in `worker/src/scrapers/base.ts`, import everywhere.
+   - **De-dup the PB-coverage classifier** (introduced this session): `src/lib/labs/pb-coverage.ts` ⟷ `worker/scripts/audit-pb-coverage.ts` are twins and `rosterMatch` already drifted. Make the worker script import the shared lib (or a shared module).
+   - **Other duplicated helpers** to centralize in `base.ts`: `normalizeName` (7 byte-identical copies), `matchRow`/row-matching (4+ copies — the safety-critical accession/name join).
+   - **Dead code to delete (all confirmed zero-ref):** `src/lib/lab-adapters/` module + Quest/LabCorp stubs + `refreshLabStatus` action + `RefreshLabStatusButton` (PLAYBOOK already blesses removal); `src/utils/supabase/client.ts` (`createSupabaseBrowserClient`); `api/worker/pb-login-probe` route (stale temp, PB block solved); `CountChips`, `HUD_ROLE_LABEL`, `columns.ts` {getWorkflowColumns, columnLabelForWorkflow, highestCompletedStep, getColumnForPatient}, `column-jump.ts isForwardJump`, `fedex.ts fedexApiBase`, `loadPatientTemplate`, `createLabCase` (singular), `requireAdmin` alias.
+   - **Stale "Phase 2/3" comments** now shipped: worker/src/recipes/catalog.ts, src/lib/scrapers/recipe-summary.ts, recipes/types.ts, settings/actions.ts — drop the "for now/Phase N" framing.
+   - **3 `catch {}` worth logging:** settings/actions.ts BCC aggregator (1003/1013/1029), gmail/sync.ts:176 (drops attachments silently), email/digests.ts:45.
+   - Repo is otherwise clean (zero `as any`, zero empty catches).
+
+   **UX findings 2026-06-08 (staff-clarity, verified):**
+   - Rename column **"Pending Upload" → "Needs your review"** (`columns.ts`) — the one lane owing a human action reads like the computer is busy.
+   - **Strip raw "step N"** from the By-patient bulk dropdown (`KanbanBoard.tsx`) + Inbox apply (`InboundRowActions.tsx`) — show the plain label only.
+   - Card step counter hard-coded **"/9"** (`CaseCard.tsx:219`) → use workflow total (Peptides shows "1/9").
+   - Main board card has **no inline "Advance →"** — the #1 daily task needs a modal dive; add a card-level control (reuse ColumnJumpDialog).
+   - **"ROF" never spelled out** anywhere (expand to "Review of Findings" or add to Legend).
+   - PDF-review modal's 4 buttons explained on hover only (wrong-patient-risk screen); **Archive sits under "Danger zone"** though it's routine/reversible — move it out.
+   - Empty columns show a bare **"—"** → friendly empty state ("All caught up"). Engine tab empty-state leaks `--lab=all`/"migration applied" dev-speak; "PB" unexpanded.
+   - Verify: is `CaseCard.tsx` orphaned (page renders LabKanbanBoard)? does `ActivityLog.tsx` print raw enums?
 7. **md/TASKS review** — keep this file + memory current so nothing's missed.
 8. **Auto-fill requisition forms from Zenoti/PB** (Alex 2026-06-08) — tie patient/order info (name, DOB, address, ordering provider, dx, collection date) from Zenoti + PB into the req-form auto-fill feature, prioritizing **DoctorsData, Kennedy Krieger, and Spectracell** req forms first. Builds on the queued "req-form PDF auto-fill" feature (template PDF + marked editable areas → "Print req form" button → populate → verify → print, via pdf-lib). Feeds the unified vision below.
 
