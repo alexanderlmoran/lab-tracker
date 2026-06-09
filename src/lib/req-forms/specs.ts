@@ -33,24 +33,24 @@ export const REQ_FORM_SPECS: ReqFormSpec[] = [
     label: "SpectraCell — Test Requisition",
     templateKey: "spectracell.pdf",
     orderNumber: "accession", // requisition # is assigned by SpectraCell (not stamped)
-    dateSep: " ", // form has MM/DD/YYYY divider boxes — space the digits so they clear the slashes
+    dateSep: "  ", // MM/DD/YYYY divider boxes — two spaces so digits clear the dividers
     fields: {
-      // page is 1415×1870; calibrated via grid
-      lastName: { x: 55, yTop: 755, size: 28 },
-      firstName: { x: 445, yTop: 755, size: 28 },
-      mi: { x: 695, yTop: 755, size: 28 },
-      dob: { x: 55, yTop: 862, size: 26 },
+      // page is 1415×1870; calibrated in-app
+      lastName: { x: 62, yTop: 774, size: 35 },
+      firstName: { x: 412, yTop: 770, size: 35 },
+      mi: { x: 655, yTop: 764, size: 35 },
+      dob: { x: 69, yTop: 852, size: 42 },
       // Gender □M □F sits up on the Date-of-Birth row, not the Address row
-      sexMaleX: { x: 372, yTop: 818, size: 28 },
-      sexFemaleX: { x: 422, yTop: 818, size: 28 },
-      address: { x: 130, yTop: 908, size: 26 },
-      city: { x: 100, yTop: 958, size: 26 },
-      state: { x: 475, yTop: 958, size: 26 },
-      zip: { x: 655, yTop: 958, size: 26 },
-      phone: { x: 130, yTop: 1000, size: 26 },
-      email: { x: 145, yTop: 1095, size: 24, maxChars: 40 },
-      collectionDate: { x: 55, yTop: 602, size: 24 },
-      fastingX: { x: 600, yTop: 615, size: 26 }, // X on "Fasting □Yes" (first-pass)
+      sexMaleX: { x: 363, yTop: 853, size: 28 },
+      sexFemaleX: { x: 411, yTop: 853, size: 28 },
+      address: { x: 129, yTop: 909, size: 35 },
+      city: { x: 116, yTop: 972, size: 35 },
+      state: { x: 425, yTop: 980, size: 35 },
+      zip: { x: 582, yTop: 974, size: 35 },
+      phone: { x: 137, yTop: 1045, size: 35 },
+      email: { x: 132, yTop: 1105, size: 35, maxChars: 40 },
+      collectionDate: { x: 81, yTop: 609, size: 42 },
+      fastingX: { x: 528, yTop: 851, size: 26 }, // X on "Fasting □Yes"
     },
   },
   {
