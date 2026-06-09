@@ -6,6 +6,7 @@ import { resolveReqForm } from "@/lib/req-forms/resolve";
 import { fillReqForm } from "@/lib/req-forms/fill";
 import { specForLab, REQ_FORM_SPECS } from "@/lib/req-forms/specs";
 import { loadOverrides, saveOverrides, mergeFields, type FieldOverrides, type CustomField } from "@/lib/req-forms/overrides";
+import { expandStampFields } from "@/lib/req-forms/derive";
 import type { ReqFormData, ReqField } from "@/lib/req-forms/types";
 
 const BUCKET = "req-form-templates";
@@ -14,9 +15,11 @@ const BUCKET = "req-form-templates";
 const SAMPLE: Partial<Record<ReqField, string>> = {
   patientName: "Patient Name", firstName: "First", lastName: "Last", mi: "A",
   dob: "01/15/1980", sex: "M", collectionDate: "06/08/2026", orderDate: "06/08/2026", orderNumber: "0000",
+  collectionMonth: "06", collectionDay: "08", collectionYear: "2026", collectionTime: "8:30",
+  dobMonth: "04", dobDay: "10", dobYear: "1979",
 };
 function calibText(field: ReqField, data: ReqFormData): string {
-  if (field === "sexMaleX" || field === "sexFemaleX" || field === "fastingX") return "X";
+  if (field.endsWith("X")) return "X"; // every checkbox field (sex/fasting/AM-PM/redraw) shows an X to place
   return data[field] || SAMPLE[field] || field;
 }
 
@@ -80,12 +83,9 @@ export async function generateReqForm(
     });
   }
 
-  const fill: ReqFormData = { ...fields };
-  // Forms with Male/Female checkboxes get an X; Kennedy uses the plain `sex` text.
-  if (fields.sex) {
-    fill.sexMaleX = /^m/i.test(fields.sex) ? "X" : "";
-    fill.sexFemaleX = /^f/i.test(fields.sex) ? "X" : "";
-  }
+  // Expand into checkbox X's + split MM/DD/YYYY date segments (re-derived from
+  // the staff-edited dob/collectionDate so they always match the typed values).
+  const fill = expandStampFields(fields);
   const bytes = await fillReqForm(spec, fill, customValues);
   return {
     ok: true as const,

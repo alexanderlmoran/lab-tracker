@@ -23,7 +23,22 @@ export type ReqField =
   | "email"
   | "orderNumber" // Kennedy Sample ID# (manual) / DoctorsData client ref / Spectracell accession
   | "orderingProvider"
-  | "fastingX"; // X on the Fasting=Yes box (Alex always selects Yes)
+  | "fastingX" // X on the Fasting=Yes box (Alex always selects Yes)
+  // Split date segments — forms (e.g. SpectraCell) with separate MM | DD | YYYY
+  // boxes; auto-derived from collectionDate / dob (see derive.ts).
+  | "collectionMonth"
+  | "collectionDay"
+  | "collectionYear"
+  | "dobMonth"
+  | "dobDay"
+  | "dobYear"
+  | "collectionTime"
+  | "collectionAmX" // X on the AM box
+  | "collectionPmX" // X on the PM box
+  | "fastingYesX" // X on Fasting=Yes (separate-box forms)
+  | "fastingNoX" // X on Fasting=No
+  | "redrawYesX" // X on "Is this a redraw? Yes"
+  | "redrawNoX"; // X on "Is this a redraw? No"
 
 /** Position of one field on the template. y is measured FROM THE TOP (more
  *  intuitive when eyeballing a scan); the engine converts to pdf-lib's

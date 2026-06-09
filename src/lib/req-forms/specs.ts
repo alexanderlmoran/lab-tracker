@@ -33,14 +33,17 @@ export const REQ_FORM_SPECS: ReqFormSpec[] = [
     label: "SpectraCell — Test Requisition",
     templateKey: "spectracell.pdf",
     orderNumber: "accession", // requisition # is assigned by SpectraCell (not stamped)
-    dateSep: "  ", // MM/DD/YYYY divider boxes — two spaces so digits clear the dividers
+    // Dates are stamped as separate MM | DD | YYYY segments (see derive.ts), so
+    // no single-string date / dateSep here — each segment lands in its own box.
     fields: {
       // page is 1415×1870; calibrated in-app
       lastName: { x: 62, yTop: 774, size: 35 },
       firstName: { x: 412, yTop: 770, size: 35 },
       mi: { x: 655, yTop: 764, size: 35 },
-      dob: { x: 69, yTop: 852, size: 42 },
-      // Gender □M □F sits up on the Date-of-Birth row, not the Address row
+      // Date of Birth — MM | DD | YYYY boxes (Gender □M □F sits on this row)
+      dobMonth: { x: 49, yTop: 852, size: 42 },
+      dobDay: { x: 130, yTop: 851, size: 42 },
+      dobYear: { x: 213, yTop: 848, size: 41 },
       sexMaleX: { x: 363, yTop: 853, size: 28 },
       sexFemaleX: { x: 411, yTop: 853, size: 28 },
       address: { x: 129, yTop: 909, size: 35 },
@@ -49,8 +52,18 @@ export const REQ_FORM_SPECS: ReqFormSpec[] = [
       zip: { x: 582, yTop: 974, size: 35 },
       phone: { x: 137, yTop: 1045, size: 35 },
       email: { x: 132, yTop: 1105, size: 35, maxChars: 40 },
-      collectionDate: { x: 81, yTop: 609, size: 42 },
-      fastingX: { x: 528, yTop: 851, size: 26 }, // X on "Fasting □Yes"
+      // Specimen Information — Collection Date MM | DD | YYYY, Time, AM/PM, Fasting
+      collectionMonth: { x: 53, yTop: 604, size: 39 },
+      collectionDay: { x: 130, yTop: 605, size: 39 },
+      collectionYear: { x: 217, yTop: 604, size: 36 },
+      collectionTime: { x: 357, yTop: 602, size: 27 },
+      collectionAmX: { x: 436, yTop: 611, size: 22 },
+      collectionPmX: { x: 488, yTop: 612, size: 22 },
+      fastingYesX: { x: 550, yTop: 612, size: 24 },
+      fastingNoX: { x: 629, yTop: 611, size: 23 },
+      // Billing — "Is this a redraw?" Yes/No
+      redrawYesX: { x: 261, yTop: 1205, size: 24 },
+      redrawNoX: { x: 200, yTop: 1206, size: 20 },
     },
   },
   {

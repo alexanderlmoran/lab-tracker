@@ -8,6 +8,7 @@ import "server-only";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { formatPersonName } from "@/lib/format";
 import { specForLab } from "./specs";
+import { expandStampFields } from "./derive";
 import type { ReqFormData, ReqFormSpec } from "./types";
 
 function splitName(full: string): { first: string; last: string; mi: string } {
@@ -139,5 +140,7 @@ export async function resolveReqForm(
   const missing = editableKeys.filter(
     (k) => !data[k as keyof ReqFormData] && (k === "dob" || (k === "orderNumber" && spec.orderNumber === "manual")),
   );
-  return { spec, data, missing, editableKeys };
+  // expand into checkbox X's + split date segments so the calibrator preview
+  // matches exactly what gets stamped.
+  return { spec, data: expandStampFields(data), missing, editableKeys };
 }

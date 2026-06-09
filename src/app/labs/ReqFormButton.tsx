@@ -4,6 +4,7 @@ import { useRef, useState, useTransition } from "react";
 import { specForLab } from "@/lib/req-forms/specs";
 import type { ReqFormData } from "@/lib/req-forms/types";
 import { prepareReqForm, generateReqForm } from "./req-form-actions";
+import { expandStampFields } from "@/lib/req-forms/derive";
 import { ReqFormCalibrator } from "./ReqFormCalibrator";
 
 // Editable fields shown in the dialog, in order. label + which forms care is
@@ -112,7 +113,7 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
         {open && calibrate ? (
           <ReqFormCalibrator
             caseId={caseId}
-            values={fields as Record<string, string | undefined>}
+            values={expandStampFields(fields) as Record<string, string | undefined>}
             customVals={customValues}
             onValueChange={(field, value, isCustom) => {
               if (isCustom) setCustomValues((v) => ({ ...v, [field]: value }));
