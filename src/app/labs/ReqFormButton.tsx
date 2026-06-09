@@ -119,7 +119,9 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
             </div>
             {pdfUrl ? (
               <>
-                <iframe src={pdfUrl} title="Requisition preview" className="h-[72vh] w-full border-0 bg-zinc-100" />
+                {/* key forces a fresh iframe each render — Chrome's embedded PDF
+                    viewer won't reliably reload when src swaps to a new blob URL. */}
+                <iframe key={pdfUrl} src={pdfUrl} title="Requisition preview" className="h-[72vh] w-full border-0 bg-zinc-100" />
                 <div className="flex items-center justify-between gap-2 border-t border-zinc-200 px-4 py-3">
                   <button type="button" onClick={() => setPdfUrl(null)} className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50">← Back to edit</button>
                   <div className="flex gap-2">

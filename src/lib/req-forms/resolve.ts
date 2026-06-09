@@ -6,6 +6,7 @@
 
 import "server-only";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
+import { formatPersonName } from "@/lib/format";
 import { specForLab } from "./specs";
 import type { ReqFormData, ReqFormSpec } from "./types";
 
@@ -90,7 +91,10 @@ export async function resolveReqForm(
     }
   }
 
-  const { first, last, mi } = splitName(c.patient_name as string);
+  // Title-case the name (stored values are often ALL-CAPS or lowercase) so the
+  // stamped form matches how the name reads everywhere else in the app.
+  const fullName = formatPersonName(c.patient_name as string);
+  const { first, last, mi } = splitName(fullName);
   const sep = spec.dateSep ?? "/"; // forms with MM/DD/YYYY divider boxes space the digits
   const collectionDate = fmtDate(c.collection_date as string | null, sep);
 
@@ -103,7 +107,7 @@ export async function resolveReqForm(
   }
 
   const data: ReqFormData = {
-    patientName: (c.patient_name as string) ?? "",
+    patientName: fullName,
     firstName: first,
     lastName: last,
     mi,
