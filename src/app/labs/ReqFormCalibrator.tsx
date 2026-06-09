@@ -45,11 +45,14 @@ export function ReqFormCalibrator({
   onBack,
   values,
   customVals,
+  onValueChange,
 }: {
   caseId: string;
   onBack: () => void;
   values?: Record<string, string | undefined>; // current dialog field values (your edits)
   customVals?: Record<string, string>; // current custom-field values
+  // edits made here flow back to the dialog/generate so the printed PDF matches
+  onValueChange?: (field: string, value: string, custom: boolean) => void;
 }) {
   // captured once at mount — the values shown when you clicked Calibrate
   const live = useRef({ values: values ?? {}, customVals: customVals ?? {} });
@@ -188,6 +191,13 @@ export function ReqFormCalibrator({
     update(sel.field, { size: Math.max(6, sel.size + delta) });
     setSaved(null);
   }
+  // Edit a field's displayed text right here — updates the form live AND lifts
+  // the value to the dialog so the generated PDF matches what you see.
+  function setText(it: Item, v: string) {
+    update(it.field, { text: v });
+    onValueChange?.(it.field, v, it.custom);
+    setSaved(null);
+  }
 
   // ── Add / delete a user-defined field ─────────────────────────────────────
   function addField() {
@@ -251,13 +261,22 @@ export function ReqFormCalibrator({
               {sel.custom ? (
                 <input
                   value={sel.label}
-                  onChange={(e) => update(sel.field, { label: e.target.value, text: e.target.value || "Field" })}
-                  placeholder="Field name"
-                  className="w-32 rounded border border-emerald-400 bg-emerald-50 px-1.5 py-0.5 text-[12px] text-zinc-900"
+                  onChange={(e) => update(sel.field, { label: e.target.value })}
+                  placeholder="Name"
+                  title="Field name (saved to this template)"
+                  className="w-24 rounded border border-emerald-400 bg-emerald-50 px-1.5 py-0.5 text-[12px] text-zinc-900"
                 />
               ) : (
                 <span className="rounded bg-indigo-100 px-1.5 py-0.5 font-medium text-indigo-700">{sel.field}</span>
               )}
+              {/* the actual text stamped on the form — edit it here, live */}
+              <input
+                value={sel.text}
+                onChange={(e) => setText(sel, e.target.value)}
+                placeholder="Text…"
+                title="Text printed on the form — add spaces, fix casing, etc."
+                className="w-44 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-[12px] text-zinc-900"
+              />
               <button type="button" onClick={() => resize(-1)} className="h-5 w-5 rounded border border-zinc-300 text-zinc-700 hover:bg-zinc-100">−</button>
               <span className="tabular-nums">{Math.round(sel.size)}pt</span>
               <button type="button" onClick={() => resize(1)} className="h-5 w-5 rounded border border-zinc-300 text-zinc-700 hover:bg-zinc-100">+</button>
@@ -266,7 +285,7 @@ export function ReqFormCalibrator({
               ) : null}
             </span>
           ) : (
-            <span className="text-[12px] text-zinc-400">Tap a field · drag to move · tap page to set start · or add a field →</span>
+            <span className="text-[12px] text-zinc-400">Tap a field · edit its text/size here · drag to move · tap page to set start · or add a field →</span>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -291,8 +310,9 @@ export function ReqFormCalibrator({
             >
               {items.map((it) => {
                 const active = it.field === selected;
+                const shownText = it.text || it.label || it.field; // custom fields show label until a value is typed
                 const fpx = it.size * scale;
-                const w = Math.max(8, it.text.length * it.size * 0.52 * scale);
+                const w = Math.max(8, shownText.length * it.size * 0.52 * scale);
                 // custom fields tint green so they're distinct from spec fields
                 const hue = it.custom ? "16,185,129" : "99,102,241";
                 return (
@@ -322,7 +342,7 @@ export function ReqFormCalibrator({
                       fill="#000"
                       style={{ userSelect: "none" }}
                     >
-                      {it.text}
+                      {shownText}
                     </text>
                   </g>
                 );

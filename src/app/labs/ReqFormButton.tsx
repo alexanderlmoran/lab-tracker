@@ -114,6 +114,10 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
             caseId={caseId}
             values={fields as Record<string, string | undefined>}
             customVals={customValues}
+            onValueChange={(field, value, isCustom) => {
+              if (isCustom) setCustomValues((v) => ({ ...v, [field]: value }));
+              else setFields((f) => ({ ...f, [field]: value }) as ReqFormData);
+            }}
             onBack={exitCalibrate}
           />
         ) : open ? (
