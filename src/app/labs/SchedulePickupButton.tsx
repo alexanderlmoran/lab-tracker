@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState, useTransition } from "react";
 import type { LabCase } from "@/lib/types";
 import { carrierForCase } from "@/lib/labs/carrier";
+import { formatPersonName } from "@/lib/format";
 import { scheduleFedexPickup } from "./tracking-actions";
 
 // Board-level "Schedule pickup" — books one FedEx pickup from the clinic for the
@@ -129,7 +130,7 @@ export function SchedulePickupButton({ cases }: { cases: LabCase[] }) {
                     {fedex.map((c) => (
                       <label key={c.id} className="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[12px] hover:bg-zinc-50">
                         <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} className="shrink-0" />
-                        <span className="truncate font-medium text-zinc-800">{c.patient_name}</span>
+                        <span className="truncate font-medium text-zinc-800">{formatPersonName(c.patient_name)}</span>
                         <span className="truncate text-zinc-500">{c.lab_name}</span>
                         <span className="ml-auto shrink-0 font-mono text-[10px] text-zinc-400">{c.tracking_number}</span>
                       </label>
