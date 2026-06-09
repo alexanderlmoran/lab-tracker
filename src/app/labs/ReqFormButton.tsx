@@ -110,7 +110,12 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
 
       <dialog ref={dialogRef} className={`w-full ${calibrate ? "max-w-4xl" : pdfUrl ? "max-w-3xl" : "max-w-md"} rounded-lg border border-zinc-200 bg-white p-0 shadow-xl backdrop:bg-zinc-900/40`}>
         {open && calibrate ? (
-          <ReqFormCalibrator caseId={caseId} onBack={exitCalibrate} />
+          <ReqFormCalibrator
+            caseId={caseId}
+            values={fields as Record<string, string | undefined>}
+            customVals={customValues}
+            onBack={exitCalibrate}
+          />
         ) : open ? (
           <div className="flex flex-col">
             <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">

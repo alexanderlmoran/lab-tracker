@@ -40,7 +40,19 @@ function b64ToBytes(b64: string): Uint8Array {
   return buf;
 }
 
-export function ReqFormCalibrator({ caseId, onBack }: { caseId: string; onBack: () => void }) {
+export function ReqFormCalibrator({
+  caseId,
+  onBack,
+  values,
+  customVals,
+}: {
+  caseId: string;
+  onBack: () => void;
+  values?: Record<string, string | undefined>; // current dialog field values (your edits)
+  customVals?: Record<string, string>; // current custom-field values
+}) {
+  // captured once at mount — the values shown when you clicked Calibrate
+  const live = useRef({ values: values ?? {}, customVals: customVals ?? {} });
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [err, setErr] = useState<string | null>(null);
   const [label, setLabel] = useState("");
@@ -71,7 +83,17 @@ export function ReqFormCalibrator({ caseId, onBack }: { caseId: string; onBack: 
     setLabel(r.label);
     setTemplateKey(r.templateKey);
     baseFields.current = r.fields;
-    setItems(r.items.filter((it) => it.page === 0));
+    // Show your actual edited values (spaced dates, real name, custom field text)
+    // so the overlay is a true preview — fall back to the resolved sample when a
+    // field is blank so it stays placeable.
+    const liveText = (it: { field: string; custom: boolean; text: string; label: string }) => {
+      const v = it.custom ? live.current.customVals[it.field] : live.current.values[it.field];
+      if (v != null && v.trim() !== "") return v;
+      return it.custom ? it.label : it.text;
+    };
+    setItems(
+      r.items.filter((it) => it.page === 0).map((it) => ({ ...it, text: liveText(it) })),
+    );
 
     let phase = "load pdfjs";
     try {
