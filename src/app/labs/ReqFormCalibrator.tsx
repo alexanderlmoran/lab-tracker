@@ -67,6 +67,9 @@ export function ReqFormCalibrator({
   const [selected, setSelected] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
+  // bumped to force-remount the text input (on field switch / clear) so its
+  // uncontrolled defaultValue refreshes — but NOT while typing, so the caret stays.
+  const [inputRev, setInputRev] = useState(0);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -204,6 +207,7 @@ export function ReqFormCalibrator({
   function clearText(it: Item) {
     update(it.field, { text: "" });
     onValueChange?.(it.field, "", it.custom);
+    setInputRev((r) => r + 1); // remount the uncontrolled input so it shows empty
     setSaved(null);
   }
 
@@ -277,9 +281,12 @@ export function ReqFormCalibrator({
               ) : (
                 <span className="rounded bg-indigo-100 px-1.5 py-0.5 font-medium text-indigo-700">{sel.field}</span>
               )}
-              {/* the actual text stamped on the form — edit it here, live */}
+              {/* the actual text stamped on the form — edit it here, live. UNCONTROLLED
+                  (defaultValue + key) so the browser owns the caret; remounts only on
+                  field-switch or clear, never while typing. */}
               <input
-                value={sel.text}
+                key={`${selected}-${inputRev}`}
+                defaultValue={sel.text}
                 onChange={(e) => setText(sel, e.target.value)}
                 onBlur={() => liftText(sel)}
                 placeholder="Text…"
