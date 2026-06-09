@@ -42,7 +42,10 @@ export type LabCatalogEntry = {
 
 export const LAB_CATALOG: LabCatalogEntry[] = [
   // ── Access ────────────────────────────────────────────────────────────
-  { name: "Access Blood Panel", provider: "Access", panel: "Blood Panel", turnaroundDaysMin: 5, turnaroundDaysMax: 7, partialExpected: true, aliases: ["access", "Labs - Access Blood Panel"] },
+  // Access returns results fast (next-day partials per real cases, e.g. collected
+  // 06/04 → results 06/05). Min=1 so the auto-scrape window opens right after
+  // collection instead of ~5 days late; max stays 7 for the complete panel.
+  { name: "Access Blood Panel", provider: "Access", panel: "Blood Panel", turnaroundDaysMin: 1, turnaroundDaysMax: 7, partialExpected: true, aliases: ["access", "Labs - Access Blood Panel"] },
 
   // ── CancerCheck ───────────────────────────────────────────────────────
   { name: "CancerCheck", provider: "CancerCheck", panel: null, turnaroundDaysMin: 28, turnaroundDaysMax: 42, aliases: ["cancer check", "Labs - CancerCheck"] },
