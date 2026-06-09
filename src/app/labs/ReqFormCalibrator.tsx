@@ -191,11 +191,19 @@ export function ReqFormCalibrator({
     update(sel.field, { size: Math.max(6, sel.size + delta) });
     setSaved(null);
   }
-  // Edit a field's displayed text right here — updates the form live AND lifts
-  // the value to the dialog so the generated PDF matches what you see.
+  // Edit a field's displayed text. Update LOCAL state only while typing (keeps the
+  // caret where it is — lifting to the parent on every keystroke makes the caret
+  // jump to the end). Push the value up to the dialog on blur instead.
   function setText(it: Item, v: string) {
     update(it.field, { text: v });
-    onValueChange?.(it.field, v, it.custom);
+    setSaved(null);
+  }
+  function liftText(it: Item) {
+    onValueChange?.(it.field, it.text, it.custom);
+  }
+  function clearText(it: Item) {
+    update(it.field, { text: "" });
+    onValueChange?.(it.field, "", it.custom);
     setSaved(null);
   }
 
@@ -273,10 +281,12 @@ export function ReqFormCalibrator({
               <input
                 value={sel.text}
                 onChange={(e) => setText(sel, e.target.value)}
+                onBlur={() => liftText(sel)}
                 placeholder="Text…"
                 title="Text printed on the form — add spaces, fix casing, etc."
                 className="w-44 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-[12px] text-zinc-900"
               />
+              <button type="button" onClick={() => clearText(sel)} title="Clear this field's text" className="rounded border border-zinc-300 px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-100">✕</button>
               <button type="button" onClick={() => resize(-1)} className="h-5 w-5 rounded border border-zinc-300 text-zinc-700 hover:bg-zinc-100">−</button>
               <span className="tabular-nums">{Math.round(sel.size)}pt</span>
               <button type="button" onClick={() => resize(1)} className="h-5 w-5 rounded border border-zinc-300 text-zinc-700 hover:bg-zinc-100">+</button>
