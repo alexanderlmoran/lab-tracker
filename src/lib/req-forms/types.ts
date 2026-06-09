@@ -14,6 +14,7 @@ export type ReqField =
   | "sexMaleX" // an "X" over the Male checkbox
   | "sexFemaleX" // an "X" over the Female checkbox
   | "collectionDate"
+  | "orderDate" // date of the order/requisition (DoctorsData), defaults to collection date
   | "address"
   | "city"
   | "state"
@@ -40,6 +41,9 @@ export type ReqFormSpec = {
   labs: string[];
   label: string; // display name
   templateKey: string; // object key in the req-form-templates storage bucket
+  /** Date separator for this form's date fields (default "/"). Forms with
+   *  pre-printed MM__DD__YYYY boxes use " " or "  " so digits clear the dividers. */
+  dateSep?: string;
   /** Whether the order/sample number is entered by staff (Kennedy) vs assigned. */
   orderNumber: "manual" | "assign" | "accession";
   fields: Partial<Record<ReqField, FieldPos>>;

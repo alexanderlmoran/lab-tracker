@@ -13,7 +13,7 @@ const BUCKET = "req-form-templates";
 // Representative text so even still-empty fields are draggable in the calibrator.
 const SAMPLE: Partial<Record<ReqField, string>> = {
   patientName: "Patient Name", firstName: "First", lastName: "Last", mi: "A",
-  dob: "01/15/1980", sex: "M", collectionDate: "06/08/2026", orderNumber: "0000",
+  dob: "01/15/1980", sex: "M", collectionDate: "06/08/2026", orderDate: "06/08/2026", orderNumber: "0000",
 };
 function calibText(field: ReqField, data: ReqFormData): string {
   if (field === "sexMaleX" || field === "sexFemaleX" || field === "fastingX") return "X";

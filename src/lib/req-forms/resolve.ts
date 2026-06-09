@@ -25,10 +25,10 @@ function splitName(full: string): { first: string; last: string; mi: string } {
   };
 }
 
-function fmtDate(iso: string | null | undefined): string {
+function fmtDate(iso: string | null | undefined, sep = "/"): string {
   if (!iso) return "";
   const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return m ? `${m[2]}/${m[3]}/${m[1]}` : iso;
+  return m ? `${m[2]}${sep}${m[3]}${sep}${m[1]}` : iso;
 }
 
 function parseAddress(addr: string | null): { address: string; city: string; state: string; zip: string } {
@@ -91,6 +91,8 @@ export async function resolveReqForm(
   }
 
   const { first, last, mi } = splitName(c.patient_name as string);
+  const sep = spec.dateSep ?? "/"; // forms with MM/DD/YYYY divider boxes space the digits
+  const collectionDate = fmtDate(c.collection_date as string | null, sep);
 
   let orderNumber = opts.orderNumber ?? "";
   if (!orderNumber && spec.orderNumber === "assign") {
@@ -105,9 +107,11 @@ export async function resolveReqForm(
     firstName: first,
     lastName: last,
     mi,
-    dob: fmtDate(dob),
+    dob: fmtDate(dob, sep),
     sex: "",
-    collectionDate: fmtDate(c.collection_date as string | null),
+    collectionDate,
+    // order/requisition date — defaults to the collection date, staff can edit
+    orderDate: collectionDate,
     // Fixed defaults (clinic address/phone, labs@ email, fasting Yes).
     address: CLINIC.address,
     city: CLINIC.city,
@@ -125,6 +129,7 @@ export async function resolveReqForm(
   if (spec.fields.patientName) editableKeys.push("patientName");
   if (spec.fields.lastName) editableKeys.push("lastName", "firstName", "mi");
   editableKeys.push("dob", "sex", "collectionDate");
+  if (spec.fields.orderDate) editableKeys.push("orderDate");
   if (spec.fields.orderNumber) editableKeys.push("orderNumber");
 
   const missing = editableKeys.filter(

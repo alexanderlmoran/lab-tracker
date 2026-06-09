@@ -11,21 +11,21 @@ export const REQ_FORM_SPECS: ReqFormSpec[] = [
     templateKey: "doctorsdata.pdf",
     orderNumber: "assign", // no lab order#; we assign one (tied to tracking #)
     fields: {
-      // Section 4 — Patient Information (page is 1576×2141; calibrated via grid)
-      patientName: { x: 250, yTop: 1310, size: 30 },
-      dob: { x: 1025, yTop: 1310, size: 28 },
-      sexMaleX: { x: 1290, yTop: 1310, size: 30 },
-      sexFemaleX: { x: 1435, yTop: 1310, size: 30 },
-      address: { x: 255, yTop: 1352, size: 28 },
-      city: { x: 165, yTop: 1397, size: 28 },
-      state: { x: 782, yTop: 1397, size: 28 },
-      zip: { x: 1300, yTop: 1397, size: 28 },
-      phone: { x: 440, yTop: 1442, size: 28 },
-      email: { x: 748, yTop: 1442, size: 24, maxChars: 38 },
+      // Section 4 — Patient Information (page is 1576×2141; calibrated in-app)
+      patientName: { x: 271, yTop: 1320, size: 31 },
+      dob: { x: 1059, yTop: 1315, size: 30 },
+      sexMaleX: { x: 1273, yTop: 1315, size: 30 },
+      sexFemaleX: { x: 1358, yTop: 1314, size: 30 },
+      address: { x: 323, yTop: 1352, size: 28 },
+      city: { x: 209, yTop: 1395, size: 31 },
+      state: { x: 813, yTop: 1384, size: 31 },
+      zip: { x: 1370, yTop: 1379, size: 31 },
+      phone: { x: 410, yTop: 1428, size: 31 },
+      email: { x: 811, yTop: 1420, size: 28, maxChars: 38 },
       // Section 3 — Collection Information
-      collectionDate: { x: 1035, yTop: 308, size: 26 },
-      // Section 3 — Client Reference (our assigned ref)
-      orderNumber: { x: 915, yTop: 1213, size: 28 },
+      collectionDate: { x: 1141, yTop: 335, size: 34 },
+      // Section 3 — order/requisition date (was the assigned client ref)
+      orderDate: { x: 616, yTop: 929, size: 23 },
     },
   },
   {
@@ -33,6 +33,7 @@ export const REQ_FORM_SPECS: ReqFormSpec[] = [
     label: "SpectraCell — Test Requisition",
     templateKey: "spectracell.pdf",
     orderNumber: "accession", // requisition # is assigned by SpectraCell (not stamped)
+    dateSep: " ", // form has MM/DD/YYYY divider boxes — space the digits so they clear the slashes
     fields: {
       // page is 1415×1870; calibrated via grid
       lastName: { x: 55, yTop: 755, size: 28 },
@@ -58,16 +59,16 @@ export const REQ_FORM_SPECS: ReqFormSpec[] = [
     templateKey: "kennedy.pdf",
     orderNumber: "manual", // Sample ID# comes from the kit — staff enters it
     fields: {
-      // page is 1657×2236; first-pass positions (verify in preview)
-      lastName: { x: 130, yTop: 400, size: 26 },
-      firstName: { x: 490, yTop: 400, size: 26 },
-      mi: { x: 700, yTop: 400, size: 26 },
-      sex: { x: 790, yTop: 400, size: 26 },
-      dob: { x: 900, yTop: 400, size: 26 },
-      collectionDate: { x: 130, yTop: 485, size: 24 }, // Sample Date
-      orderNumber: { x: 490, yTop: 485, size: 24 }, // Sample ID#
-      orderingProvider: { x: 970, yTop: 530, size: 22 },
-      fastingX: { x: 915, yTop: 470, size: 24 }, // X on "FASTING □" (first-pass)
+      // page is 1657×2236; calibrated in-app
+      lastName: { x: 185, yTop: 454, size: 40 },
+      firstName: { x: 583, yTop: 455, size: 40 },
+      mi: { x: 997, yTop: 448, size: 40 },
+      sex: { x: 869, yTop: 451, size: 40 },
+      dob: { x: 1098, yTop: 448, size: 34 },
+      collectionDate: { x: 231, yTop: 552, size: 40 }, // Sample Date
+      orderNumber: { x: 637, yTop: 555, size: 40 }, // Sample ID#
+      orderingProvider: { x: 1141, yTop: 579, size: 29 },
+      fastingX: { x: 936, yTop: 541, size: 32 }, // X on "FASTING □"
     },
   },
 ];
