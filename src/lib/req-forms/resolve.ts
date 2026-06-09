@@ -127,7 +127,27 @@ export async function resolveReqForm(
     fastingX: "X",
     orderingProvider: "Virgilio Sanchez, MD",
     orderNumber,
+    // Specimen defaults: not a redraw, morning (fasting) draw. Redraw stays a
+    // manual override — "redraw" means a re-collection, not just a repeat order.
+    redrawNoX: "X",
+    collectionAmX: "X",
   };
+
+  // "Has patient been drawn for this test before?" — auto from tracker history:
+  // any prior case for this patient that maps to the SAME req-form template.
+  // (PB / Zenoti history can feed this too once wired.)
+  if (spec.fields.drawnBeforeYesX || spec.fields.drawnBeforeNoX) {
+    let q = db.from("lab_cases").select("id, lab_name").neq("id", caseId);
+    q = c.patient_email
+      ? q.eq("patient_email", c.patient_email)
+      : q.eq("patient_name", c.patient_name as string);
+    const { data: priors } = await q;
+    const drawnBefore = (priors ?? []).some(
+      (p) => specForLab((p.lab_name as string | null) ?? null)?.templateKey === spec.templateKey,
+    );
+    data.drawnBeforeYesX = drawnBefore ? "X" : "";
+    data.drawnBeforeNoX = drawnBefore ? "" : "X";
+  }
 
   // Only surface the per-patient variables for editing (Alex: the rest is fixed).
   const editableKeys: string[] = [];

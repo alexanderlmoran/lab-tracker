@@ -46,6 +46,10 @@ export const REQ_FORM_SPECS: ReqFormSpec[] = [
       dobYear: { x: 213, yTop: 848, size: 41 },
       sexMaleX: { x: 363, yTop: 853, size: 28 },
       sexFemaleX: { x: 411, yTop: 853, size: 28 },
+      // "Has patient been drawn for a Micronutrient test before?" Yes/No
+      // (auto from tracker history) — coords first-pass, fine-tune in calibrator
+      drawnBeforeYesX: { x: 472, yTop: 851, size: 22 },
+      drawnBeforeNoX: { x: 528, yTop: 851, size: 22 },
       address: { x: 129, yTop: 909, size: 35 },
       city: { x: 116, yTop: 972, size: 35 },
       state: { x: 425, yTop: 980, size: 35 },

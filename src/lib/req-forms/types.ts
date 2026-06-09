@@ -38,7 +38,9 @@ export type ReqField =
   | "fastingYesX" // X on Fasting=Yes (separate-box forms)
   | "fastingNoX" // X on Fasting=No
   | "redrawYesX" // X on "Is this a redraw? Yes"
-  | "redrawNoX"; // X on "Is this a redraw? No"
+  | "redrawNoX" // X on "Is this a redraw? No"
+  | "drawnBeforeYesX" // "Has patient been drawn for a Micronutrient test before? Yes" — auto from tracker history
+  | "drawnBeforeNoX"; // ... No
 
 /** Position of one field on the template. y is measured FROM THE TOP (more
  *  intuitive when eyeballing a scan); the engine converts to pdf-lib's
