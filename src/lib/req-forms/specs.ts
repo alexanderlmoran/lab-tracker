@@ -80,10 +80,10 @@ export const REQ_FORM_SPECS: ReqFormSpec[] = [
       lastName: { x: 185, yTop: 454, size: 40 },
       firstName: { x: 583, yTop: 455, size: 40 },
       mi: { x: 997, yTop: 448, size: 40 },
-      sex: { x: 869, yTop: 451, size: 40 },
+      sex: { x: 850, yTop: 456, size: 40 },
       dob: { x: 1098, yTop: 448, size: 34 },
-      collectionDate: { x: 231, yTop: 552, size: 40 }, // Sample Date
-      orderNumber: { x: 637, yTop: 555, size: 40 }, // Sample ID#
+      collectionDate: { x: 212, yTop: 557, size: 40 }, // Sample Date
+      orderNumber: { x: 605, yTop: 564, size: 40 }, // Sample ID# (staff enters from kit)
       orderingProvider: { x: 1141, yTop: 579, size: 29 },
       fastingX: { x: 936, yTop: 541, size: 32 }, // X on "FASTING □"
     },

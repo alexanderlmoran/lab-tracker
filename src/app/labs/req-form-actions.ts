@@ -83,6 +83,25 @@ export async function generateReqForm(
     });
   }
 
+  // Same two-way persistence for sex (M/F) — enter it once, prefilled forever.
+  // Normalized to M/F; tolerant of patient_sex not being migrated yet.
+  const sexNorm = fields.sex ? (/^m/i.test(fields.sex) ? "M" : /^f/i.test(fields.sex) ? "F" : "") : "";
+  if (sexNorm) {
+    const { error: sexErr } = await db.from("lab_cases").update({ patient_sex: sexNorm }).eq("id", caseId);
+    if (!sexErr) {
+      const name = c?.patient_name as string | undefined;
+      if (name) {
+        await db.from("lab_cases").update({ patient_sex: sexNorm }).eq("patient_name", name).is("patient_sex", null);
+      }
+      await db.from("lab_events").insert({
+        case_id: caseId,
+        kind: "case_edited" as const,
+        actor: user.email ?? "staff",
+        note: `Sex set to ${sexNorm} via req form (propagated to this patient's other cases)`,
+      });
+    }
+  }
+
   // Expand into checkbox X's + split MM/DD/YYYY date segments (re-derived from
   // the staff-edited dob/collectionDate so they always match the typed values).
   const fill = expandStampFields(fields);

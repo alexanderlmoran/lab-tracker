@@ -96,6 +96,10 @@ export async function resolveReqForm(
   // stamped form matches how the name reads everywhere else in the app.
   const fullName = formatPersonName(c.patient_name as string);
   const { first, last, mi } = splitName(fullName);
+  // Prefill sex from a prior entry (persisted by generateReqForm). Separate query
+  // so a not-yet-migrated patient_sex column degrades to blank, never an error.
+  const { data: sx } = await db.from("lab_cases").select("patient_sex").eq("id", caseId).maybeSingle();
+  const sexPrefill = ((sx as { patient_sex?: string } | null)?.patient_sex ?? "").trim();
   const sep = spec.dateSep ?? "/"; // forms with MM/DD/YYYY divider boxes space the digits
   const collectionDate = fmtDate(c.collection_date as string | null, sep);
 
@@ -113,7 +117,7 @@ export async function resolveReqForm(
     lastName: last,
     mi,
     dob: fmtDate(dob, sep),
-    sex: "",
+    sex: sexPrefill,
     collectionDate,
     // order/requisition date — defaults to the collection date, staff can edit
     orderDate: collectionDate,
