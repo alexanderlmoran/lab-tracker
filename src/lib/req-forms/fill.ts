@@ -10,7 +10,11 @@ import type { ReqFormSpec, ReqFormData } from "./types";
 
 const BUCKET = "req-form-templates";
 
-export async function fillReqForm(spec: ReqFormSpec, data: ReqFormData): Promise<Uint8Array> {
+export async function fillReqForm(
+  spec: ReqFormSpec,
+  data: ReqFormData,
+  customValues: Record<string, string> = {},
+): Promise<Uint8Array> {
   const db = getSupabaseAdmin();
   const { data: file, error } = await db.storage.from(BUCKET).download(spec.templateKey);
   if (error || !file) {
@@ -21,23 +25,28 @@ export async function fillReqForm(spec: ReqFormSpec, data: ReqFormData): Promise
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const pages = pdf.getPages();
 
+  const stamp = (val: string, x: number, yTop: number, size: number, pageIdx: number) => {
+    const page = pages[pageIdx];
+    if (!page) return;
+    page.drawText(val, { x, y: page.getSize().height - yTop, size, font, color: rgb(0, 0, 0) });
+  };
+
   // Live calibrator overrides win over the static spec, field-by-field.
-  const fields = mergeFields(spec.fields, await loadOverrides(spec.templateKey));
+  const ov = await loadOverrides(spec.templateKey);
+  const fields = mergeFields(spec.fields, ov.fields);
   for (const [field, pos] of Object.entries(fields)) {
     if (!pos) continue;
     let val = data[field as keyof ReqFormData];
     if (val == null || val === "") continue;
     if (pos.maxChars && val.length > pos.maxChars) val = val.slice(0, pos.maxChars);
-    const page = pages[pos.page ?? 0];
-    if (!page) continue;
-    const { height } = page.getSize();
-    page.drawText(String(val), {
-      x: pos.x,
-      y: height - pos.yTop, // yTop is from the top of the page
-      size: pos.size ?? 26,
-      font,
-      color: rgb(0, 0, 0), // black
-    });
+    stamp(String(val), pos.x, pos.yTop, pos.size ?? 26, pos.page ?? 0);
+  }
+
+  // User-added custom fields — value typed per-case in the dialog.
+  for (const cf of ov.custom) {
+    const val = customValues[cf.key];
+    if (val == null || val === "") continue;
+    stamp(String(val), cf.x, cf.yTop, cf.size ?? 26, cf.page ?? 0);
   }
   return pdf.save();
 }

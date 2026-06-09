@@ -38,6 +38,8 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [filename, setFilename] = useState("req-form.pdf");
   const [calibrate, setCalibrate] = useState(false);
+  const [custom, setCustom] = useState<Array<{ key: string; label: string }>>([]);
+  const [customValues, setCustomValues] = useState<Record<string, string>>({});
 
   // Only render the button if this lab has a req-form template.
   if (!specForLab(labName)) return null;
@@ -53,6 +55,7 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
       setMissing(r.missing);
       setLabel(r.label);
       setEditableKeys(r.editableKeys);
+      setCustom(r.custom);
     });
   }
   function close() {
@@ -65,10 +68,19 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
   function set(key: keyof ReqFormData, v: string) {
     setFields((f) => ({ ...f, [key]: v }));
   }
+  // Returning from the calibrator: refresh the custom-field list (new fields may
+  // have been added) without clobbering the values already typed.
+  function exitCalibrate() {
+    setCalibrate(false);
+    start(async () => {
+      const r = await prepareReqForm(caseId);
+      if (r.ok) setCustom(r.custom);
+    });
+  }
   function generate() {
     setErr(null);
     start(async () => {
-      const r = await generateReqForm(caseId, fields);
+      const r = await generateReqForm(caseId, fields, customValues);
       if (!r.ok) return setErr(r.error);
       // base64 → blob → embedded preview (like the PDF review modal)
       const bin = atob(r.pdfBase64);
@@ -98,7 +110,7 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
 
       <dialog ref={dialogRef} className={`w-full ${calibrate ? "max-w-4xl" : pdfUrl ? "max-w-3xl" : "max-w-md"} rounded-lg border border-zinc-200 bg-white p-0 shadow-xl backdrop:bg-zinc-900/40`}>
         {open && calibrate ? (
-          <ReqFormCalibrator caseId={caseId} onBack={() => setCalibrate(false)} />
+          <ReqFormCalibrator caseId={caseId} onBack={exitCalibrate} />
         ) : open ? (
           <div className="flex flex-col">
             <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">
@@ -136,6 +148,23 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
                       </label>
                     ))}
                   </div>
+                  {custom.length ? (
+                    <div className="mt-3 border-t border-zinc-200 pt-2">
+                      <p className="mb-1 text-[11px] font-medium text-emerald-700">Your added fields</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {custom.map((cf) => (
+                          <label key={cf.key} className="flex flex-col gap-0.5 text-[11px] text-zinc-600">
+                            {cf.label}
+                            <input
+                              value={customValues[cf.key] ?? ""}
+                              onChange={(e) => setCustomValues((v) => ({ ...v, [cf.key]: e.target.value }))}
+                              className="rounded border border-emerald-300 bg-emerald-50/40 px-2 py-1 text-[13px] text-zinc-900"
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                   {err ? <p className="mt-2 rounded border border-rose-200 bg-rose-50 px-2 py-1.5 text-[12px] text-rose-700">{err}</p> : null}
                 </div>
                 <div className="flex items-center justify-between gap-2 border-t border-zinc-200 px-4 py-3">

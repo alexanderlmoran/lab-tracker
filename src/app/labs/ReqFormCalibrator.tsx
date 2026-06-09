@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { loadReqFormCalibration, saveReqFormPositions } from "./req-form-actions";
-import type { FieldOverrides } from "@/lib/req-forms/overrides";
+import type { FieldOverrides, CustomField } from "@/lib/req-forms/overrides";
 
 const TARGET_W = 760; // on-screen page width (px); native points scale to fit this
 
@@ -29,7 +29,9 @@ async function loadPdfjs(): Promise<PdfjsApi> {
   return pdfjs;
 }
 
-type Item = { field: string; text: string; x: number; yTop: number; size: number; page: number };
+// custom items are user-added fields (label editable, deletable); known items
+// are the spec's fields (label fixed, value resolved from the case).
+type Item = { field: string; text: string; x: number; yTop: number; size: number; page: number; custom: boolean; label: string };
 
 function b64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64);
@@ -165,30 +167,54 @@ export function ReqFormCalibrator({ caseId, onBack }: { caseId: string; onBack: 
     setSaved(null);
   }
 
-  // Merge edits back over the full field map (preserves page / maxChars).
-  function buildOverrides(): FieldOverrides {
-    const out: FieldOverrides = { ...baseFields.current };
+  // ── Add / delete a user-defined field ─────────────────────────────────────
+  function addField() {
+    if (scale <= 0) return;
+    const key = `c_${crypto.randomUUID().slice(0, 8)}`;
+    const it: Item = {
+      field: key, custom: true, label: "New field", text: "New field",
+      x: (cssW * 0.28) / scale, yTop: (cssH * 0.22) / scale, size: 30, page: 0,
+    };
+    setItems((arr) => [...arr, it]);
+    setSelected(key);
+    setSaved(null);
+  }
+  function deleteField(field: string) {
+    setItems((arr) => arr.filter((it) => it.field !== field));
+    setSelected(null);
+    setSaved(null);
+  }
+
+  // Split edits into spec-field position overrides + custom field definitions.
+  function buildOverrides(): { fields: FieldOverrides; custom: CustomField[] } {
+    const fields: FieldOverrides = { ...baseFields.current };
+    const custom: CustomField[] = [];
     for (const it of items) {
-      const k = it.field as keyof FieldOverrides;
-      out[k] = { ...out[k], x: Math.round(it.x), yTop: Math.round(it.yTop), size: Math.round(it.size) };
+      const pos = { x: Math.round(it.x), yTop: Math.round(it.yTop), size: Math.round(it.size) };
+      if (it.custom) {
+        custom.push({ key: it.field, label: it.label.trim() || "Field", page: it.page, ...pos });
+      } else {
+        fields[it.field as keyof FieldOverrides] = { ...fields[it.field as keyof FieldOverrides], ...pos };
+      }
     }
-    return out;
+    return { fields, custom };
   }
 
   async function save() {
     setSaving(true);
     setSaved(null);
-    const r = await saveReqFormPositions(templateKey, buildOverrides());
+    const { fields, custom } = buildOverrides();
+    const r = await saveReqFormPositions(templateKey, fields, custom);
     setSaving(false);
     setSaved(r.ok ? "Saved — live on the next preview." : `Error: ${r.error}`);
   }
   async function copyJson() {
     await navigator.clipboard.writeText(JSON.stringify(buildOverrides(), null, 2));
-    setSaved("Copied spec JSON to clipboard.");
+    setSaved("Copied overrides JSON to clipboard.");
   }
   async function reset() {
     setSaving(true);
-    await saveReqFormPositions(templateKey, {}); // clear overrides → back to specs.ts
+    await saveReqFormPositions(templateKey, {}, []); // clear overrides → back to specs.ts
     setSaving(false);
     await load();
   }
@@ -200,16 +226,31 @@ export function ReqFormCalibrator({ caseId, onBack }: { caseId: string; onBack: 
           <span className="text-sm font-semibold text-zinc-900">Calibrate · {label}</span>
           {sel ? (
             <span className="flex items-center gap-1.5 text-[12px] text-zinc-600">
-              <span className="rounded bg-indigo-100 px-1.5 py-0.5 font-medium text-indigo-700">{sel.field}</span>
+              {sel.custom ? (
+                <input
+                  value={sel.label}
+                  onChange={(e) => update(sel.field, { label: e.target.value, text: e.target.value || "Field" })}
+                  placeholder="Field name"
+                  className="w-32 rounded border border-emerald-400 bg-emerald-50 px-1.5 py-0.5 text-[12px] text-zinc-900"
+                />
+              ) : (
+                <span className="rounded bg-indigo-100 px-1.5 py-0.5 font-medium text-indigo-700">{sel.field}</span>
+              )}
               <button type="button" onClick={() => resize(-1)} className="h-5 w-5 rounded border border-zinc-300 text-zinc-700 hover:bg-zinc-100">−</button>
               <span className="tabular-nums">{Math.round(sel.size)}pt</span>
               <button type="button" onClick={() => resize(1)} className="h-5 w-5 rounded border border-zinc-300 text-zinc-700 hover:bg-zinc-100">+</button>
+              {sel.custom ? (
+                <button type="button" onClick={() => deleteField(sel.field)} className="ml-1 rounded border border-rose-300 px-1.5 py-0.5 text-rose-600 hover:bg-rose-50">Delete</button>
+              ) : null}
             </span>
           ) : (
-            <span className="text-[12px] text-zinc-400">Tap a field to select · drag to move · tap the page to set its start</span>
+            <span className="text-[12px] text-zinc-400">Tap a field · drag to move · tap page to set start · or add a field →</span>
           )}
         </div>
-        <button type="button" onClick={onBack} className="rounded p-1 text-zinc-500 hover:bg-zinc-100" aria-label="Back">×</button>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={addField} disabled={status !== "ready"} className="rounded-md border border-emerald-500 bg-emerald-50 px-2.5 py-1 text-[12px] font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50" title="Add a field you position and type yourself">+ Add field</button>
+          <button type="button" onClick={onBack} className="rounded p-1 text-zinc-500 hover:bg-zinc-100" aria-label="Back">×</button>
+        </div>
       </div>
 
       <div className="max-h-[68vh] overflow-auto bg-zinc-100 p-3">
@@ -230,6 +271,8 @@ export function ReqFormCalibrator({ caseId, onBack }: { caseId: string; onBack: 
                 const active = it.field === selected;
                 const fpx = it.size * scale;
                 const w = Math.max(8, it.text.length * it.size * 0.52 * scale);
+                // custom fields tint green so they're distinct from spec fields
+                const hue = it.custom ? "16,185,129" : "99,102,241";
                 return (
                   <g
                     key={it.field}
@@ -244,8 +287,8 @@ export function ReqFormCalibrator({ caseId, onBack }: { caseId: string; onBack: 
                       y={it.yTop * scale - fpx * 0.72}
                       width={w + 2}
                       height={fpx * 0.92}
-                      fill={active ? "rgba(99,102,241,0.16)" : "transparent"}
-                      stroke={active ? "#6366f1" : "rgba(99,102,241,0.35)"}
+                      fill={active ? `rgba(${hue},0.16)` : "transparent"}
+                      stroke={active ? `rgb(${hue})` : `rgba(${hue},0.35)`}
                       strokeWidth={active ? 1 : 0.5}
                       rx={2}
                     />

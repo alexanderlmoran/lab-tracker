@@ -5,7 +5,7 @@ import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { resolveReqForm } from "@/lib/req-forms/resolve";
 import { fillReqForm } from "@/lib/req-forms/fill";
 import { specForLab, REQ_FORM_SPECS } from "@/lib/req-forms/specs";
-import { loadOverrides, saveOverrides, mergeFields, type FieldOverrides } from "@/lib/req-forms/overrides";
+import { loadOverrides, saveOverrides, mergeFields, type FieldOverrides, type CustomField } from "@/lib/req-forms/overrides";
 import type { ReqFormData, ReqField } from "@/lib/req-forms/types";
 
 const BUCKET = "req-form-templates";
@@ -25,6 +25,7 @@ export async function prepareReqForm(caseId: string) {
   await requireSignedIn();
   const r = await resolveReqForm(caseId);
   if (!r) return { ok: false as const, error: "No requisition template for this lab yet." };
+  const ov = await loadOverrides(r.spec.templateKey);
   return {
     ok: true as const,
     label: r.spec.label,
@@ -32,6 +33,8 @@ export async function prepareReqForm(caseId: string) {
     fields: r.data,
     missing: r.missing,
     editableKeys: r.editableKeys,
+    // user-added fields the dialog renders as extra editable inputs
+    custom: ov.custom.map((c) => ({ key: c.key, label: c.label })),
   };
 }
 
@@ -45,7 +48,11 @@ function dobToIso(s: string | undefined): string | null {
 /** Render the filled requisition PDF from the (staff-edited) fields, AND persist
  *  the entered DOB back to the tracker so it's never re-typed (propagates to the
  *  patient's other DOB-less cases too). Zenoti/PB write-back is a follow-up. */
-export async function generateReqForm(caseId: string, fields: ReqFormData) {
+export async function generateReqForm(
+  caseId: string,
+  fields: ReqFormData,
+  customValues: Record<string, string> = {},
+) {
   const user = await requireSignedIn();
   const db = getSupabaseAdmin();
   const { data: c } = await db
@@ -79,7 +86,7 @@ export async function generateReqForm(caseId: string, fields: ReqFormData) {
     fill.sexMaleX = /^m/i.test(fields.sex) ? "X" : "";
     fill.sexFemaleX = /^f/i.test(fields.sex) ? "X" : "";
   }
-  const bytes = await fillReqForm(spec, fill);
+  const bytes = await fillReqForm(spec, fill, customValues);
   return {
     ok: true as const,
     pdfBase64: Buffer.from(bytes).toString("base64"),
@@ -102,36 +109,56 @@ export async function loadReqFormCalibration(caseId: string) {
     return { ok: false as const, error: `Template "${r.spec.templateKey}" not found: ${error?.message ?? "missing"}` };
   }
   const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
-  const fields = mergeFields(r.spec.fields, await loadOverrides(r.spec.templateKey));
+  const ov = await loadOverrides(r.spec.templateKey);
+  const fields = mergeFields(r.spec.fields, ov.fields);
 
-  // [field, pos, sample-text] for every positioned field — the calibrator stamps
-  // these as draggable SVG text over the rendered page.
-  const items = Object.entries(fields).map(([field, pos]) => ({
-    field: field as ReqField,
-    text: calibText(field as ReqField, r.data),
-    x: pos!.x,
-    yTop: pos!.yTop,
-    size: pos!.size ?? 26,
-    page: pos!.page ?? 0,
-  }));
+  // Draggable items: every positioned spec field (sample text) + every custom
+  // field the user added (shown by its label). The calibrator stamps these as
+  // SVG text over the rendered page.
+  const items = [
+    ...Object.entries(fields).map(([field, pos]) => ({
+      field: field as string,
+      text: calibText(field as ReqField, r.data),
+      x: pos!.x,
+      yTop: pos!.yTop,
+      size: pos!.size ?? 26,
+      page: pos!.page ?? 0,
+      custom: false,
+      label: "",
+    })),
+    ...ov.custom.map((c) => ({
+      field: c.key,
+      text: c.label,
+      x: c.x,
+      yTop: c.yTop,
+      size: c.size,
+      page: c.page ?? 0,
+      custom: true,
+      label: c.label,
+    })),
+  ];
 
   return {
     ok: true as const,
     label: r.spec.label,
     templateKey: r.spec.templateKey,
     templateBase64: base64,
-    fields, // full map, preserved on save (page / maxChars etc.)
+    fields: ov.fields, // saved position overrides, preserved on next save
     items,
   };
 }
 
-/** Persist calibrated positions for a template (validated against known specs).
- *  Lives instantly: fillReqForm merges these over the spec on the next render. */
-export async function saveReqFormPositions(templateKey: string, fields: FieldOverrides) {
+/** Persist calibrated positions + custom fields for a template (validated against
+ *  known specs). Lives instantly: fillReqForm merges these over the spec next render. */
+export async function saveReqFormPositions(
+  templateKey: string,
+  fields: FieldOverrides,
+  custom: CustomField[] = [],
+) {
   await requireSignedIn();
   if (!REQ_FORM_SPECS.some((s) => s.templateKey === templateKey)) {
     return { ok: false as const, error: `Unknown template "${templateKey}".` };
   }
-  await saveOverrides(templateKey, fields);
+  await saveOverrides(templateKey, { fields, custom });
   return { ok: true as const };
 }
