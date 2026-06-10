@@ -59,15 +59,20 @@ export const COLUMN_LABEL: Record<ColumnKey, string> = {
   completed: "Completed",
 };
 
+// Step names read in the same vocabulary as the board columns they feed, so
+// the checklist and the lane a card sits in agree (e.g. step 3 → "Partial
+// Uploaded" lane, step 6/7 → the "ROF" lanes). Keep the column word first
+// ("Sample sent", "Partial uploaded", "ROF scheduled") and any email/where
+// detail after, matching COLUMN_LABEL above.
 const STEP_LABELS: Record<StepNumber, string> = {
   1: "Sample sent to lab",
   2: "Partial results received",
   3: "Partial uploaded → Email 2",
   4: "Complete results received",
   5: "Complete uploaded → Email 3",
-  6: "Patient scheduled in Zenoti",
-  7: "ROF confirmed → Email 4",
-  8: "Patient emailed protocol",
+  6: "ROF scheduled in Zenoti",
+  7: "ROF done → Email 4",
+  8: "Protocol emailed to patient",
   9: "ROF Allison email sent (she will proofread)",
 };
 

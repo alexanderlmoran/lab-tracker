@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { LabEvent } from "@/lib/types";
+import { humanizeEvent, isMajorEvent } from "@/lib/labs/humanize-event";
 import { listLabEvents } from "./actions";
 
 function fmtTs(iso: string) {
@@ -10,51 +11,6 @@ function fmtTs(iso: string) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(
     d.getHours(),
   )}:${pad(d.getMinutes())}`;
-}
-
-function describe(ev: LabEvent): string {
-  switch (ev.kind) {
-    case "case_created":
-      return "Case created";
-    case "case_edited": {
-      const changes = (ev.meta as { changes?: Record<string, unknown> } | null)
-        ?.changes;
-      const fields = changes ? Object.keys(changes) : [];
-      return fields.length
-        ? `Edited: ${fields.join(", ")}`
-        : "Case edited";
-    }
-    case "case_archived":
-      return "Case archived";
-    case "case_unarchived":
-      return "Case unarchived";
-    case "step_toggled":
-      return `Step ${ev.step ?? "?"} ${ev.completed ? "completed" : "uncompleted"}`;
-    case "email_sent":
-      return "Email sent";
-    case "email_failed":
-      return "Email failed";
-    case "email_skipped":
-      return "Email skipped";
-    case "contact_attempted":
-      return "Contact attempted";
-    case "contact_reached":
-      return "Patient reached";
-    case "audit_approve":
-      return "PDF approved → PB upload queued";
-    case "audit_disapprove_wrong_pdf":
-      return "PDF rejected (wrong patient / corrupt) — scraper will re-match";
-    case "audit_disapprove_upload_failed":
-      return "PB upload failed";
-    case "audit_retry_upload":
-      return "Retry requested — PB upload re-queued";
-    case "audit_manual_override":
-      return "Manual override";
-    case "audit_accession_edited":
-      return "Accession # edited";
-    default:
-      return ev.kind;
-  }
 }
 
 export function ActivityLog({
@@ -68,6 +24,10 @@ export function ActivityLog({
   const [events, setEvents] = useState<LabEvent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  // Signal/noise: the log defaults to MAJOR events only so routine polls and
+  // skips don't bury the steps/edits staff care about. The minor events are
+  // one click away, not gone.
+  const [showMinor, setShowMinor] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,6 +44,11 @@ export function ActivityLog({
     };
   }, [caseId]);
 
+  const major = useMemo(
+    () => (events ?? []).filter(isMajorEvent),
+    [events],
+  );
+
   if (error) {
     return (
       <p className="text-xs text-red-600" role="alert">
@@ -98,9 +63,12 @@ export function ActivityLog({
     return <p className="text-xs text-zinc-500">No activity yet.</p>;
   }
 
+  const minorCount = events.length - major.length;
+  // Apply the signal/noise filter first, then the compact top-5 collapse.
+  const filtered = showMinor ? events : major;
   const showCompact = compact && !expanded;
-  const visible = showCompact ? events.slice(0, 5) : events;
-  const hidden = events.length - visible.length;
+  const visible = showCompact ? filtered.slice(0, 5) : filtered;
+  const hidden = filtered.length - visible.length;
 
   return (
     <div className="flex min-h-0 flex-col">
@@ -115,7 +83,7 @@ export function ActivityLog({
               {fmtTs(ev.created_at)}
             </span>
             <span className="min-w-0 flex-1 text-zinc-900">
-              {describe(ev)}
+              {humanizeEvent(ev).text}
               {ev.note ? (
                 <span className="ml-1 text-zinc-500">— {ev.note}</span>
               ) : null}
@@ -126,6 +94,9 @@ export function ActivityLog({
           </li>
         ))}
       </ul>
+      {filtered.length === 0 ? (
+        <p className="py-1.5 text-xs text-zinc-500">No major activity yet.</p>
+      ) : null}
       {compact && hidden > 0 && !expanded ? (
         <button
           type="button"
@@ -142,6 +113,17 @@ export function ActivityLog({
           className="mt-1 self-start text-[11px] text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline"
         >
           Show fewer
+        </button>
+      ) : null}
+      {minorCount > 0 ? (
+        <button
+          type="button"
+          onClick={() => setShowMinor((v) => !v)}
+          className="mt-1 self-start text-[11px] text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline"
+        >
+          {showMinor
+            ? "Hide minor activity"
+            : `Show minor activity (${minorCount})`}
         </button>
       ) : null}
     </div>
