@@ -107,6 +107,10 @@ export function ManageLabsButton({
   const [bulkAccession, setBulkAccession] = useState("");
   const [bulkCollection, setBulkCollection] = useState("");
   const [markSent, setMarkSent] = useState(false);
+  // A long-tenured patient can accumulate dozens of labs across many draw days;
+  // `groupFilter` narrows the grid (and every bulk action) to one collection
+  // date so a fresh shipment isn't lost in the history. "" = show all.
+  const [groupFilter, setGroupFilter] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [saving, startSave] = useTransition();
@@ -124,6 +128,33 @@ export function ManageLabsButton({
     [rows],
   );
 
+  // Distinct collection dates ("collection groups") present in this patient's
+  // labs, newest first; rows with no date collapse into one "— no date —"
+  // bucket. Drives the date filter (only shown when there's >1 group).
+  const NO_DATE = "__none__";
+  const groups = useMemo(() => {
+    const seen = new Set<string>();
+    for (const r of rows) seen.add(r.collection.trim() || NO_DATE);
+    return [...seen].sort((a, b) =>
+      a === NO_DATE ? 1 : b === NO_DATE ? -1 : b.localeCompare(a),
+    );
+  }, [rows]);
+  // The filter actually in force: ignore a stale group that no longer exists
+  // (its last lab was deleted, or a date edit moved every row out of it) so the
+  // grid falls back to "all" instead of stranding the operator on an empty view
+  // — derived during render, no effect needed.
+  const effectiveGroup = groupFilter && groups.includes(groupFilter) ? groupFilter : "";
+  // Rows shown after the date filter. Everything downstream (the grid, apply-to-
+  // all, the bulk actions) operates on these so a filtered view can't touch a
+  // lab the operator can't see.
+  const visibleRows = useMemo(
+    () =>
+      effectiveGroup
+        ? rows.filter((r) => (r.collection.trim() || NO_DATE) === effectiveGroup)
+        : rows,
+    [rows, effectiveGroup],
+  );
+
   // Seed editable state each time the dialog opens, so a re-open after a save
   // reflects the refreshed rows (no stale edits linger). Uses preloaded cases
   // when given, else fetches the patient's labs by email.
@@ -137,6 +168,7 @@ export function ManageLabsButton({
     setBulkAccession("");
     setBulkCollection("");
     setMarkSent(false);
+    setGroupFilter("");
     setSelected(new Set());
     setError(null);
     setOpen(true);
@@ -230,10 +262,13 @@ export function ManageLabsButton({
     const a = bulkAccession.trim();
     const c = bulkCollection.trim();
     // Scope to the checked rows when any are selected (the family case —
-    // stamp avva's accession on avva's panels, not her sibling's); otherwise
-    // apply to every row. New labs only get stamped when nothing is scoped.
-    const scoped = selected.size > 0;
-    const hit = (r: RowEdit) => !scoped || selected.has(r.caseId);
+    // stamp avva's accession on avva's panels, not her sibling's); else to the
+    // rows currently visible under the date filter. New labs only get stamped
+    // when nothing is scoped (no selection and no active date filter).
+    const scoped = selected.size > 0 || Boolean(effectiveGroup);
+    const visibleIds = new Set(visibleRows.map((r) => r.caseId));
+    const hit = (r: RowEdit) =>
+      selected.size > 0 ? selected.has(r.caseId) : visibleIds.has(r.caseId);
     if (t) {
       setRows((rs) => rs.map((r) => (hit(r) ? { ...r, tracking: t } : r)));
       if (!scoped) setNewLabs((ns) => ns.map((n) => ({ ...n, tracking: t })));
@@ -322,13 +357,28 @@ export function ManageLabsButton({
   const sentTargets = useMemo(() => {
     const ids = new Set(trackingAdvance);
     if (markSent) {
+      // Scope to selected rows, else to the rows visible under the date filter.
+      const visibleIds = new Set(visibleRows.map((r) => r.caseId));
       for (const r of rows) {
-        if (!r.step1Done && (selected.size === 0 || selected.has(r.caseId))) ids.add(r.caseId);
+        const inScope = selected.size > 0 ? selected.has(r.caseId) : visibleIds.has(r.caseId);
+        if (!r.step1Done && inScope) ids.add(r.caseId);
       }
     }
     return [...ids];
-  }, [markSent, rows, selected, trackingAdvance]);
+  }, [markSent, rows, visibleRows, selected, trackingAdvance]);
   const dirty = fieldUpdates.length > 0 || pendingNewLabs.length > 0 || sentTargets.length > 0;
+
+  // The in-scope rows the "Mark all sample sent" bulk action would advance:
+  // not-yet-sent rows in the current selection (or the date-filtered view).
+  const sampleSentScope = useMemo(() => {
+    const visibleIds = new Set(visibleRows.map((r) => r.caseId));
+    return rows
+      .filter((r) => {
+        const inScope = selected.size > 0 ? selected.has(r.caseId) : visibleIds.has(r.caseId);
+        return inScope && !r.step1Done;
+      })
+      .map((r) => r.caseId);
+  }, [rows, visibleRows, selected]);
 
   function onSaveAll() {
     setError(null);
@@ -406,6 +456,27 @@ export function ManageLabsButton({
     });
   }
 
+  // Bulk action: advance the in-scope, not-yet-sent rows to step 1 (Sample
+  // sent) and write immediately — no Save round-trip, no patient emails (step 1
+  // never fires email; those are step 5/6). The dialog stays open so the
+  // operator can keep editing tracking / accession after stamping sent.
+  function markAllSampleSent() {
+    if (sampleSentScope.length === 0) return;
+    setError(null);
+    startSave(async () => {
+      const r = await bulkSetStepCompleted({ caseIds: sampleSentScope, step: 1, completed: true });
+      if (!r.ok) {
+        setError(r.error ?? "Could not mark sample-sent");
+        return;
+      }
+      // Reflect locally so the rows drop out of scope without a reload.
+      setRows((rs) =>
+        rs.map((row) => (sampleSentScope.includes(row.caseId) ? { ...row, step1Done: true } : row)),
+      );
+      router.refresh();
+    });
+  }
+
   return (
     <>
       <button
@@ -431,21 +502,48 @@ export function ManageLabsButton({
       >
         {open ? (
           <div className="flex max-h-[90dvh] flex-col">
-            <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3">
+            <div className="flex items-center justify-between gap-3 border-b border-zinc-200 px-5 py-3">
               <div>
                 <h2 className="text-sm font-semibold text-zinc-900">Manage labs — {patientName}</h2>
                 <p className="text-[11px] text-zinc-500">
-                  {rows.length} lab{rows.length === 1 ? "" : "s"} · {patientEmail}
+                  {rows.length} lab{rows.length === 1 ? "" : "s"}
+                  {effectiveGroup ? ` · ${visibleRows.length} shown` : ""} · {patientEmail}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={closeDialog}
-                aria-label="Close"
-                className="rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
-              >
-                ×
-              </button>
+              <div className="flex items-center gap-2">
+                {/* Collection-group filter — only when there's more than one draw
+                    day to choose between (otherwise it's noise). */}
+                {groups.length > 1 ? (
+                  <label className="flex items-center gap-1.5 text-[11px] text-zinc-600">
+                    <span>Collected</span>
+                    <select
+                      value={groupFilter}
+                      onChange={(e) => setGroupFilter(e.target.value)}
+                      className="rounded border border-zinc-300 bg-white px-1.5 py-1 text-[12px] text-zinc-900 focus:border-indigo-400 focus:outline-none"
+                    >
+                      <option value="">All dates ({rows.length})</option>
+                      {groups.map((g) => {
+                        const count = rows.filter(
+                          (r) => (r.collection.trim() || NO_DATE) === g,
+                        ).length;
+                        return (
+                          <option key={g} value={g}>
+                            {g === NO_DATE ? "— no date —" : g} ({count})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </label>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={closeDialog}
+                  aria-label="Close"
+                  className="rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
+                >
+                  ×
+                </button>
+              </div>
             </div>
 
             <div className="overflow-y-auto px-5 py-4">
@@ -461,7 +559,11 @@ export function ManageLabsButton({
                 }`}
               >
                 <span className="text-[11px] font-medium text-zinc-600">
-                  {selected.size > 0 ? `Apply to ${selected.size} selected:` : "Apply to all:"}
+                  {selected.size > 0
+                    ? `Apply to ${selected.size} selected:`
+                    : effectiveGroup
+                      ? `Apply to ${visibleRows.length} shown:`
+                      : "Apply to all:"}
                 </span>
                 <label className="flex flex-col gap-0.5">
                   <span className="text-[10px] text-zinc-500">Collected</span>
@@ -517,7 +619,7 @@ export function ManageLabsButton({
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((r) => (
+                    {visibleRows.map((r) => (
                       <tr
                         key={r.caseId}
                         className={`border-t border-zinc-100 align-top ${
@@ -736,8 +838,9 @@ export function ManageLabsButton({
                   checked={markSent}
                   onChange={(e) => setMarkSent(e.target.checked)}
                 />
-                Also mark {selected.size > 0 ? "selected" : "all"} as{" "}
-                <span className="font-medium">Sample sent</span> (no emails)
+                Also mark{" "}
+                {selected.size > 0 ? "selected" : effectiveGroup ? "shown" : "all"} as{" "}
+                <span className="font-medium">Sample sent</span> (no emails) on Save
               </label>
 
               {error ? (
@@ -747,20 +850,34 @@ export function ManageLabsButton({
               ) : null}
             </div>
 
-            <div className="flex items-center justify-end gap-2 border-t border-zinc-200 px-5 py-3">
+            {/* Action bar — 3-colored-button pattern (matches PdfReviewModal):
+                neutral Cancel, sky "mark sample sent" bulk action, emerald
+                primary Save-all. */}
+            <div className="flex items-center justify-end gap-2 border-t border-zinc-200 bg-zinc-50 px-5 py-3">
               <button
                 type="button"
                 onClick={closeDialog}
                 disabled={saving}
-                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
+                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-[13px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
               >
                 Cancel
               </button>
               <button
                 type="button"
+                onClick={markAllSampleSent}
+                disabled={saving || sampleSentScope.length === 0}
+                title="Tick step 1 (Sample sent) on these labs now — writes immediately, no patient emails"
+                className="rounded-md border border-sky-300 bg-white px-3 py-1.5 text-[13px] font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-50"
+              >
+                Mark{" "}
+                {selected.size > 0 ? "selected" : effectiveGroup ? "shown" : "all"} as Sample sent
+                {sampleSentScope.length > 0 ? ` (${sampleSentScope.length})` : ""} (no emails)
+              </button>
+              <button
+                type="button"
                 onClick={onSaveAll}
                 disabled={saving || !dirty}
-                className="rounded-md border border-indigo-600 bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                className="rounded-md bg-emerald-600 px-4 py-1.5 text-[13px] font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
               >
                 {saving
                   ? "Saving…"
