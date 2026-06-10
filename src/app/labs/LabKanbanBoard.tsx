@@ -199,9 +199,10 @@ function LabCard({
   );
 }
 
-// Merged "elongated" card for same-accession duplicate siblings co-located in a
-// column (merge-dupes view). Shows the shared ACC# + every sibling's tracking #.
-// Clicking opens the lead case; the review actions cascade across the whole
+// Merged "elongated" card for a same-accession order whose cards are folded
+// into one (merge-dupes view), even when those cards span multiple columns.
+// Shows the shared ACC# + every sibling's tracking #. Clicking opens the
+// most-advanced member; the review + step actions cascade across the whole
 // group (siblings move together), so resolving from here resolves all.
 function MergedDupCard({
   rows,
@@ -212,7 +213,9 @@ function MergedDupCard({
   onOpen: (row: LabCase, autoReview?: boolean) => void;
   hasPendingPdf: boolean;
 }) {
-  const lead = rows[0];
+  // rows arrive in column order (leftmost first); open the most-advanced one so
+  // the dialog reflects where the order actually is.
+  const lead = rows[rows.length - 1];
   const trackings = rows.map((r) => r.tracking_number).filter(Boolean) as string[];
   return (
     <button
@@ -371,22 +374,75 @@ export function LabKanbanBoard({
   const [autoReview, setAutoReview] = useState(false);
   const [mergeDupes, setMergeDupes] = useState(false);
 
-  // When merge-dupes is on, collapse same-accession siblings that sit in the
-  // SAME column into one merged card; everything else renders as its own card
-  // (so all other patients stay visible). Preserves column order.
-  function unitsFor(colRows: LabCase[]): LabCase[][] {
-    if (!mergeDupes) return colRows.map((r) => [r]);
-    const order: string[] = [];
-    const groups = new Map<string, LabCase[]>();
-    for (const r of colRows) {
-      const key = dupKey(r) ?? `single:${r.id}`;
-      if (!groups.has(key)) {
-        groups.set(key, []);
-        order.push(key);
+  // Board-wide merged-group plan. A same-accession group is ONE physical order
+  // split across cards; when those cards land in DIFFERENT columns (only one
+  // advanced) the old per-column collapse left a "ghost" sibling card behind
+  // (backlog #4). So we plan groups across the whole board: each group renders
+  // a single merged card in its LEAD column (where the most-advanced member
+  // sits) and is SUPPRESSED everywhere else. Built only when merge-dupes is on.
+  const mergePlan = useMemo(() => {
+    // leadColByKey: which column gets the merged card. memberIdsByKey: every
+    // card in the group (across columns). suppressedIds: sibling cards that
+    // should NOT render as their own card (they're folded into the merged one).
+    const groupsByKey = new Map<string, LabCase[]>();
+    if (mergeDupes) {
+      for (const col of LAB_BOARD_COLUMN_ORDER) {
+        for (const r of grouped[col]) {
+          const key = dupKey(r);
+          if (!key) continue;
+          const arr = groupsByKey.get(key) ?? [];
+          arr.push(r);
+          groupsByKey.set(key, arr);
+        }
       }
-      groups.get(key)!.push(r);
     }
-    return order.map((k) => groups.get(k)!);
+    const leadColByKey = new Map<string, ColumnKey>();
+    const membersByKey = new Map<string, LabCase[]>();
+    const suppressedIds = new Set<string>();
+    for (const [key, members] of groupsByKey) {
+      if (members.length < 2) continue;
+      // Lead column = the furthest-right (most-advanced) column any member sits
+      // in, so a merged order shows up where its progress actually is.
+      let leadCol = getColumnFor(members[0]);
+      let leadIdx = LAB_BOARD_COLUMN_ORDER.indexOf(leadCol);
+      for (const m of members) {
+        const c = getColumnFor(m);
+        const i = LAB_BOARD_COLUMN_ORDER.indexOf(c);
+        if (i > leadIdx) {
+          leadIdx = i;
+          leadCol = c;
+        }
+      }
+      leadColByKey.set(key, leadCol);
+      membersByKey.set(key, members);
+      for (const m of members) suppressedIds.add(m.id);
+    }
+    return { leadColByKey, membersByKey, suppressedIds };
+  }, [mergeDupes, grouped]);
+
+  // Units to render in a column: the column's own cards, EXCEPT cards folded
+  // into a merged group (suppressed everywhere but their lead column), PLUS the
+  // merged cards whose lead column is this one. Without merge-dupes, one unit
+  // per card (unchanged behavior).
+  function unitsFor(col: ColumnKey): LabCase[][] {
+    if (!mergeDupes) return grouped[col].map((r) => [r]);
+    const out: LabCase[][] = [];
+    const emitted = new Set<string>(); // group keys already rendered this column
+    for (const r of grouped[col]) {
+      const key = dupKey(r);
+      // A merged-group member: render the merged unit once, anchored to the
+      // FIRST member that sits in this group's lead column (so the order shows
+      // up where its progress is). Every member is suppressed as its own card.
+      if (key && mergePlan.suppressedIds.has(r.id)) {
+        if (mergePlan.leadColByKey.get(key) === col && !emitted.has(key)) {
+          out.push(mergePlan.membersByKey.get(key)!);
+          emitted.add(key);
+        }
+        continue;
+      }
+      out.push([r]);
+    }
+    return out;
   }
 
   function openLabDetail(row: LabCase, review = false) {
@@ -421,7 +477,7 @@ export function LabKanbanBoard({
                 ? "border-purple-400 bg-purple-100 text-purple-800"
                 : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50"
             }`}
-            title="Collapse same-accession duplicate cards (same patient + ACC#) within a column into one merged card; all other cards stay as-is"
+            title="Collapse same-accession duplicate cards (same patient + ACC#) into one merged card — even across columns; the merged card sits in the order's most-advanced column. All other cards stay as-is."
           >
             {mergeDupes ? "Merging dupes ✓" : "⊕ Merge dupes"}
           </button>
@@ -429,13 +485,16 @@ export function LabKanbanBoard({
       ) : null}
       <div className="flex flex-row flex-nowrap gap-1.5 pb-2 lg:flex-1 lg:min-h-0">
         {LAB_BOARD_COLUMN_ORDER.map((col) => {
-          const colRows = grouped[col];
+          // Units actually rendered here. With merge-dupes a group's cards
+          // collapse into one merged card in the group's lead column, so the
+          // count reflects rendered units (not raw rows) — no ghost left behind.
+          const units = unitsFor(col);
           return (
-            <StaticColumn key={col} col={col} count={colRows.length}>
-              {colRows.length === 0 ? (
+            <StaticColumn key={col} col={col} count={units.length}>
+              {units.length === 0 ? (
                 <p className="px-2 py-3 text-[11px] text-zinc-400">—</p>
               ) : (
-                unitsFor(colRows).map((unit) =>
+                units.map((unit) =>
                   unit.length > 1 ? (
                     <MergedDupCard
                       key={`merged:${dupKey(unit[0]) ?? unit[0].id}`}

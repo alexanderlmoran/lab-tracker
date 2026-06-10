@@ -47,29 +47,65 @@ async function refreshSession(): Promise<void> {
   log(`logged in — ${n} cookies → ${STORAGE}`);
 }
 
-async function pushToTracker(appts: LabAppointment[]): Promise<void> {
-  if (appts.length === 0) return;
+type SyncedDateCensus = { date: string; allAppointmentIds: string[] };
+
+async function pushToTracker(
+  appts: LabAppointment[],
+  syncedDates: SyncedDateCensus[],
+): Promise<void> {
+  const active = appts.filter((a) => !a.cancelled);
+  const cancelledAppointmentIds = appts
+    .filter((a) => a.cancelled)
+    .map((a) => a.zenotiAppointmentId);
+  // Even with zero appointments to upsert/cancel, we still POST so the route's
+  // reconciliation pass can clean up appointments hard-deleted upstream (the
+  // census below covers a COMPLETE day, so absent IDs are presumed deleted).
   const res = await request(`${BASE}/api/worker/cases`, {
     method: "POST",
     headers: { authorization: `Bearer ${SECRET}`, "content-type": "application/json" },
-    body: JSON.stringify({ appointments: appts }),
+    body: JSON.stringify({ appointments: active, cancelledAppointmentIds, syncedDates }),
   });
   const text = await res.body.text();
   if (res.statusCode !== 200) {
     throw new Error(`tracker rejected ${res.statusCode}: ${text.slice(0, 300)}`);
   }
-  const json = JSON.parse(text) as { received: number; created: number; existing: number; errors: unknown[] };
-  log(`tracker: received=${json.received} created=${json.created} existing=${json.existing} errors=${json.errors.length}`);
+  const json = JSON.parse(text) as {
+    received: number;
+    created: number;
+    existing: number;
+    cancelledReceived?: number;
+    cancelledDeleted?: number;
+    reconciledDeleted?: number;
+    errors: unknown[];
+  };
+  log(
+    `tracker: received=${json.received} created=${json.created} existing=${json.existing}` +
+      ` cancelled=${json.cancelledDeleted ?? 0} reconciled=${json.reconciledDeleted ?? 0}` +
+      ` errors=${json.errors.length}`,
+  );
 }
 
 async function syncOnce(): Promise<void> {
   const all: LabAppointment[] = [];
+  const syncedDates: SyncedDateCensus[] = [];
   for (let i = 0; i <= DAYS_AHEAD; i++) {
     const date = addDays(today(), i);
-    const appts = await fetchZenotiLabAppointments({ storagePath: STORAGE, date });
+    // includeCancelled so cancellations soft-delete their case AND so the
+    // census reflects every lab appointment Zenoti still knows about for the
+    // day. Any tracker case on this date whose ID is absent from the census
+    // was hard-deleted in Zenoti and gets reconciled away by the route.
+    const appts = await fetchZenotiLabAppointments({
+      storagePath: STORAGE,
+      date,
+      includeCancelled: true,
+    });
     all.push(...appts);
+    syncedDates.push({
+      date,
+      allAppointmentIds: appts.map((a) => a.zenotiAppointmentId),
+    });
   }
-  await pushToTracker(all);
+  await pushToTracker(all, syncedDates);
 }
 
 async function main() {

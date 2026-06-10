@@ -771,6 +771,10 @@ const StepToggleInput = z.object({
   // only ever sent via the explicit Send-email button. Used when staff
   // backfills a case that was completed outside the app.
   cascadePrior: z.boolean().optional(),
+  // When set, apply the SAME toggle to every same-accession sibling (one
+  // physical order split across cards) so they move columns together instead
+  // of orphaning one card behind. Mirrors the approve/already-on-PB cascade.
+  cascadeSiblings: z.boolean().optional(),
 });
 
 export async function setStepCompleted(input: {
@@ -779,13 +783,31 @@ export async function setStepCompleted(input: {
   completed: boolean;
   note?: string;
   cascadePrior?: boolean;
+  cascadeSiblings?: boolean;
 }): Promise<ActionResult> {
   const user = await requireSignedIn();
   const parsed = StepToggleInput.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }
-  const { caseId, step, completed, note, cascadePrior } = parsed.data;
+  const { caseId, step, completed, note, cascadePrior, cascadeSiblings } = parsed.data;
+
+  // Move the whole same-accession group together. Resolve the lead card first
+  // (this call), then replay the identical toggle on each sibling WITHOUT
+  // re-cascading siblings (avoids loops) so every card's own side-effects
+  // (expected dates, tracking arm, Nadia/Allison) still run consistently.
+  if (cascadeSiblings) {
+    const { accessionSiblingIds } = await import("@/lib/labs/siblings");
+    const ids = await accessionSiblingIds(caseId);
+    const siblingIds = ids.filter((id) => id !== caseId);
+    const lead = await setStepCompleted({ caseId, step, completed, note, cascadePrior });
+    if (!lead.ok) return lead;
+    for (const sibId of siblingIds) {
+      const r = await setStepCompleted({ caseId: sibId, step, completed, note, cascadePrior });
+      if (!r.ok) return r;
+    }
+    return { ok: true };
+  }
   const stepNum = step as StepNumber;
   const dbCol = STEP_TO_DB_COL[stepNum];
 

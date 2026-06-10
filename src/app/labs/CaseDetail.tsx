@@ -890,7 +890,7 @@ export function CaseDetail({
             />
           </div>
         </div>
-        <StepChecklist initial={row} />
+        <StepChecklist initial={row} siblingCount={dupSiblings?.length ?? 0} />
       </section>
 
       {/* Emails + Activity — side by side on lg+, each compact (latest 5

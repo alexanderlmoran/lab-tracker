@@ -27,12 +27,24 @@ const DB_COL: Record<StepNumber, keyof LabCase> = {
   9: "step9_sales_followup",
 };
 
-export function StepChecklist({ initial }: { initial: LabCase }) {
+export function StepChecklist({
+  initial,
+  siblingCount = 0,
+}: {
+  initial: LabCase;
+  /** Number of same-accession sibling cards (one physical order split across
+   *  cards), excluding this one. When >0, staff can opt to move the whole
+   *  group together so a step toggle doesn't orphan a sibling. */
+  siblingCount?: number;
+}) {
   const [c, setC] = useState<LabCase>(initial);
   const [pendingStep, setPendingStep] = useState<StepNumber | null>(null);
   const [archiving, setArchiving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
+  // Default ON: same-accession siblings are one order, so the common intent is
+  // to move them together (backlog #3 — moving one card left the others behind).
+  const [moveSiblings, setMoveSiblings] = useState(true);
   const emailDialogRef = useRef<EmailConfirmHandle | null>(null);
   const workflow = getCaseWorkflow(c);
   const stepsToShow = getWorkflowSteps(workflow);
@@ -91,6 +103,10 @@ export function StepChecklist({ initial }: { initial: LabCase }) {
         step,
         completed: next,
         cascadePrior: next,
+        // Move the whole same-order group together when staff opted in (and
+        // there's actually a sibling to move). The board revalidates so the
+        // siblings reflect the new column without a manual reopen.
+        cascadeSiblings: moveSiblings && siblingCount > 0,
       });
       setPendingStep(null);
       if (!res.ok) {
@@ -263,6 +279,17 @@ export function StepChecklist({ initial }: { initial: LabCase }) {
           )}
         </div>
       </div>
+      {siblingCount > 0 ? (
+        <label className="mt-1 flex items-center gap-2 px-2 text-[11px] text-purple-800">
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5 rounded border-purple-300"
+            checked={moveSiblings}
+            onChange={(e) => setMoveSiblings(e.target.checked)}
+          />
+          Move all {siblingCount + 1} same-order cards together
+        </label>
+      ) : null}
       <StageRow
         label="Completed — archived to the Completed lane"
         checked={Boolean(c.archived_at)}
