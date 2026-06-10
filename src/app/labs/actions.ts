@@ -1345,6 +1345,67 @@ export async function listLabCases(opts: {
   return (data ?? []) as LabCase[];
 }
 
+/**
+ * The in-app records portal (backlog #22): EVERY non-deleted lab case — active
+ * AND archived — so staff can look up "what labs has this patient had, and
+ * where is each one" without opening PracticeBetter or Zenoti.
+ *
+ * Returns a flat list ordered newest-first by collection_date (the clinically
+ * meaningful date), falling back to created_at when a case has no draw date.
+ * The page groups by patient; we keep the action flat (one query, one shape) so
+ * filtering stays in PostgREST. Reuses the same q/lab/since filter handling as
+ * `listLabCases` — deliberately one source of truth for those clauses.
+ *
+ * SCOPE: this covers only cases that already live in `lab_cases`. The full
+ * #22 ask ("ALL labs by ALL patients June 2025 → now") needs a historical
+ * backfill of orders that never became a tracker case — see PHASE 2 note below.
+ */
+export async function listRecordsCases(opts?: {
+  filters?: LabCaseFilters;
+}): Promise<LabCase[]> {
+  await requireSignedIn();
+  const db = getSupabaseAdmin();
+  // Active + archived = everything except soft-deleted. No archived/deleted
+  // predicate beyond excluding deleted_at, so one query spans both lanes.
+  let filtered = db.from("lab_cases").select("*").is("deleted_at", null);
+
+  const q = opts?.filters?.q?.trim();
+  if (q) {
+    const pattern = `*${escapePostgrestPattern(q)}*`;
+    filtered = filtered.or(
+      [
+        `patient_name.ilike.${pattern}`,
+        `patient_email.ilike.${pattern}`,
+        `tracking_number.ilike.${pattern}`,
+        `lab_name.ilike.${pattern}`,
+      ].join(","),
+    );
+  }
+
+  const lab = opts?.filters?.lab?.trim();
+  if (lab) {
+    const base = lab.split("·")[0].trim().replace(/[%_\\]/g, (m) => `\\${m}`);
+    filtered = filtered.ilike("lab_name", `${base}%`);
+  }
+
+  const sinceDays = opts?.filters?.sinceDays;
+  if (typeof sinceDays === "number" && sinceDays > 0) {
+    const cutoff = new Date(Date.now() - sinceDays * 86400000)
+      .toISOString()
+      .slice(0, 10);
+    filtered = filtered.gte("collection_date", cutoff);
+  }
+
+  // collection_date is the clinical anchor; nulls sort last so undated cases
+  // don't crowd the top. created_at is the page-side tiebreaker.
+  const { data, error } = await filtered.order("collection_date", {
+    ascending: false,
+    nullsFirst: false,
+  });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as LabCase[];
+}
+
 /** Distinct lab names across non-deleted cases — for the filter dropdown. */
 /** Effective catalog for the New/Edit case combobox. Merges editable DB rows
  * over the code catalog. Client-side fallback to the code catalog if this
