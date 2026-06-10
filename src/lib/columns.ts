@@ -41,7 +41,7 @@ export const LAB_BOARD_COLUMN_ORDER: ColumnKey[] = [
 ];
 
 export const COLUMN_LABEL: Record<ColumnKey, string> = {
-  untouched: "TODO",
+  untouched: "TO DO",
   // Sample drawn + return label printed, packed and waiting at the clinic for
   // the carrier. A card rests here until FedEx scans it (step 1 auto-ticks on
   // the pickup/in-transit scan). This is the ONLY set the pickup dialog books.
@@ -283,7 +283,7 @@ export const PATIENT_COLUMN_ORDER: PatientColumnKey[] = [
 ];
 
 export const PATIENT_COLUMN_LABEL: Record<PatientColumnKey, string> = {
-  p_new: "TODO",
+  p_new: "TO DO",
   p_at_lab: "At Lab",
   p_results: "Results",
   p_done: "Done",

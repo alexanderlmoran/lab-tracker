@@ -6,41 +6,60 @@ to where the relevant code likely lives — verify before trusting.
 
 ---
 
-## ✅ Build status — 2026-06-09 (parallel-workflow sweep + pickup work)
+## ✅ Build status — last verified 2026-06-10
 
-Implemented via 10 worktree-isolated agents, cherry-picked onto `main` (tsc +
-full build green on the combined tree). Commits listed per item.
+Most of the backlog shipped via the 2026-06-09 parallel-workflow sweep + pickup
+work + the 2026-06-10 duplicate-cleanup pass. All on `main` and pushed (tsc +
+full build green). This block is the source of truth for **what's left**.
 
-**Done (code complete, no decision needed):**
-- #2, #24 — Ready-to-Ship lane, New→TODO, pickup books only ready cards, +
-  card step ladder (Ready-to-ship / Completed stages). _(60a828e, 02b0a24, f83f39b)_
-- #9 — step labels speak the column vocabulary; #10 — activity log humanized +
-  major/minor toggle (`humanize-event.ts`). _(7c1dee3)_
-- #18, #19 — Manage-labs date-group filter + bulk "Sample sent (no emails)" /
-  Save-all (3-button footer). _(632efc2)_
-- #6 — per-card "Search for lab to post" probe on stuck Pending-Upload;
-  #21 — complete-upload staff notification. _(136e4ce)_ ⚠ live-verify the email/probe.
-- #7 — req form pulls the entered order# (`lab_external_ref`) for all modes;
-  calibrator now in Settings → Req forms. _(a6bee6e)_ ⚠ live-verify in app.
-- #23 — edit DOB on the card → saves to the patient (propagates to all cases +
-  seed). #5 — Zenoti exposes no DOB; precise TODO left for a guest-detail lookup. _(fd81090)_
-- #3, #4 — manual step toggles move same-order siblings together; merge-dupes
-  collapses cross-column (no ghost). #1 — Zenoti delete reconcile fixed in the
-  PROD loop (`zenoti-auto-loop.ts`). _(7ac9d5b)_ ⚠ #1 needs live Zenoti verify.
-- #12 — Nadia email reflects the GROUP's outstanding labs; #15 — inbox unread
-  badge + main-board new-email banner. _(b1e6534)_ ⚠ live inbox proof.
-- #16, #17 — group a patient's labs by collection date; Merge patients /
-  Merge by date in the by-patient action bar. _(4c260a4)_
-- #20 — Access partials: staged re-checks (day 2 / 4-7 / 14) gate the scrape feed. _(367b8ea)_ ⚠ live-verify.
-- #22 — Records portal **phase 1**: `/labs/records` over existing cases. _(42375e5)_
+### ✅ DONE & usable in the app now (no further action)
+- **#2, #24** — Ready-to-Ship lane, "New" column renamed **"TO DO"**, pickup
+  books only ready cards, card step ladder. _(60a828e, 02b0a24, f83f39b)_
+- **#3, #4** — same-order cards move together on a step toggle; merge-dupes
+  collapses cross-column (no ghost) and is ON by default; plus a real
+  **Settings → Duplicates** cleanup tool for genuine duplicate ROWS (keeper-
+  picker, soft-delete, verified live — 21 real dup groups). _(7ac9d5b, 19b1902, 971151d)_
+- **#9** step wording, **#10** activity-log humanize + major/minor toggle. _(7c1dee3)_
+- **#16, #17** group-by-date + Merge patients / Merge by date. _(4c260a4)_
+- **#18, #19** Manage-labs date filter + bulk actions (Save just saves now). _(632efc2, a72dfda)_
+- **#23** edit DOB on the card → saves to the patient. _(fd81090)_
 
-**Needs an owner decision (flagged, not guessed):**
-- #11 — auto-send patient *tracker* emails on step moves: still button-gated by
-  design (the `auto_send_emails` flag defaults true on all historical cases, so
-  flipping it would blast old patients). Decide before wiring.
-- #13, #14 — Kennedy→BodyBio + labs@centnerhb.com: code wired; need live inbox proof.
-- #22 phase 2 — historical backfill (pre-tracker PB/Zenoti orders, Jun 2025→): source TBD.
-- Records role-gating (currently visible to all roles).
+### 🔌 BUILT — needs a DEPLOY and/or LIVE verification before trusting
+- **#1 Zenoti delete sync** — fix is in the **worker** (`zenoti-auto-loop.ts`)
+  + the route. ⚠ **Needs `fly deploy`** (worker code is NOT on Vercel) **then
+  watch a real Zenoti deletion** reconcile. Remember the gotcha: `fly deploy`
+  leaves the always-on zenoti machine stopped → `fly machine start <id>`. Also
+  built: dup-appointment **prevention** in the route (re-points re-created appts). _(7ac9d5b, 19b1902)_
+- **#6 / #21** per-card "search for lab to post" + complete-upload email — ⚠ live test. _(136e4ce)_
+- **#7 req form** order# pull + calibrator in Settings — ⚠ test in app; the vague
+  "redraw + some other things" was NOT addressed (needs a concrete repro). _(a6bee6e)_
+- **#12 Nadia** group-outstanding + **#15** inbox badge/banner — ⚠ live inbox proof. _(b1e6534)_
+- **#20 Access** staged re-checks (day 2 / 4-7 / 14) — ⚠ exercised only by the live hourly scrape. _(367b8ea)_
+
+### 🟡 NEEDS A DECISION before I build
+- **#11** auto-send patient *tracker* emails on step moves — still button-gated
+  by design; `auto_send_emails` defaults true on every historical case, so
+  flipping it would blast old patients. Your call on the rule before I wire it.
+- **#13, #14** Kennedy→BodyBio + labs@centnerhb.com daily — code paths exist; need
+  a live inbox check + decision on how aggressive the auto-post should be.
+- **Records role-gating** — `/labs/records` is visible to all roles; gate to admin?
+
+### ⛔ NOT YET BUILT (still TO DO)
+- **#8** — rename the **"Partial Uploaded"** column → "Pending Upload" + add a
+  lab-search inside it. **Skipped on purpose: ambiguous** — there's ALREADY a
+  "Pending Upload" lane AND a "Partial Uploaded" lane, so a blind rename would
+  collide. Needs you to clarify what you want the two lanes to be.
+- **#5** — AUTO-capture DOB from Zenoti. Confirmed Zenoti's appointment payload
+  has no DOB; needs a guest-detail endpoint (a fresh HAR capture). The manual
+  edit path (#23) is the interim.
+- **#22 phase 2** — historical backfill of ALL labs Jun 2025→now (pre-tracker
+  PB/Zenoti orders that never became a case). Phase 1 (`/labs/records` over
+  existing cases) is live; phase 2 needs a data source decision (CSV import vs a
+  PB/Zenoti history reader).
+
+### 🧹 Operational (not code) — your click
+- **Remove the 21 duplicate rows** in Settings → Duplicates (soft-delete, recoverable).
+- The **IV-charting WIP** is still uncommitted in the working tree (not pushed).
 
 ---
 
