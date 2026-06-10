@@ -75,9 +75,11 @@ const inputCls =
 /**
  * "Manage labs" — a per-patient grid for editing tracking #, accession, and
  * collection date across all of a patient's labs at once, stamping one tracking
- * # / collection date across them ("shipped together"), adding more labs without
- * re-typing patient info, and (optionally) marking them all sample-sent — in one
- * Save. Collapses the ~6-clicks-per-card edit loop into a single screen.
+ * # / collection date across them ("shipped together"), and adding more labs
+ * without re-typing patient info — in one Save. Save writes only what changed
+ * and never marks anything sent (adding a tracking # leaves the card in "Ready
+ * to ship"); the separate blue button marks the in-scope labs Sample sent.
+ * Collapses the ~6-clicks-per-card edit loop into a single screen.
  */
 export function ManageLabsButton({
   patientName,
@@ -106,7 +108,6 @@ export function ManageLabsButton({
   const [bulkTracking, setBulkTracking] = useState("");
   const [bulkAccession, setBulkAccession] = useState("");
   const [bulkCollection, setBulkCollection] = useState("");
-  const [markSent, setMarkSent] = useState(false);
   // A long-tenured patient can accumulate dozens of labs across many draw days;
   // `groupFilter` narrows the grid (and every bulk action) to one collection
   // date so a fresh shipment isn't lost in the history. "" = show all.
@@ -167,7 +168,6 @@ export function ManageLabsButton({
     setBulkTracking("");
     setBulkAccession("");
     setBulkCollection("");
-    setMarkSent(false);
     setGroupFilter("");
     setSelected(new Set());
     setError(null);
@@ -344,29 +344,11 @@ export function ManageLabsButton({
     [rows],
   );
   const pendingNewLabs = useMemo(() => newLabs.filter((n) => n.labName.trim().length > 0), [newLabs]);
-  // Adding a tracking # to a not-yet-sent lab means the sample shipped → tick
-  // step 1 (Sample sent), mirroring the barcode-scan-at-intake behavior. The
-  // explicit "mark sample sent" checkbox covers rows without tracking.
-  const trackingAdvance = useMemo(
-    () =>
-      rows
-        .filter((r) => !r.step1Done && !r.origTracking.trim() && r.tracking.trim().length > 0)
-        .map((r) => r.caseId),
-    [rows],
-  );
-  const sentTargets = useMemo(() => {
-    const ids = new Set(trackingAdvance);
-    if (markSent) {
-      // Scope to selected rows, else to the rows visible under the date filter.
-      const visibleIds = new Set(visibleRows.map((r) => r.caseId));
-      for (const r of rows) {
-        const inScope = selected.size > 0 ? selected.has(r.caseId) : visibleIds.has(r.caseId);
-        if (!r.step1Done && inScope) ids.add(r.caseId);
-      }
-    }
-    return [...ids];
-  }, [markSent, rows, visibleRows, selected, trackingAdvance]);
-  const dirty = fieldUpdates.length > 0 || pendingNewLabs.length > 0 || sentTargets.length > 0;
+  // Save writes ONLY what changed — tracking #, accession, collection date, and
+  // any new labs. It never ticks step 1: entering a tracking # leaves the card
+  // in "Ready to ship" (decoupled, backlog #2 — step 1 ticks on the FedEx scan
+  // or via the explicit blue "Mark sample sent" button below, never on Save).
+  const dirty = fieldUpdates.length > 0 || pendingNewLabs.length > 0;
 
   // The in-scope rows the "Mark all sample sent" bulk action would advance:
   // not-yet-sent rows in the current selection (or the date-filtered view).
@@ -439,14 +421,6 @@ export function ManageLabsButton({
         const r = await createLabCases(fd);
         if (!r.ok) {
           setError(r.error ?? "Could not add labs");
-          return;
-        }
-      }
-
-      if (sentTargets.length > 0) {
-        const r = await bulkSetStepCompleted({ caseIds: sentTargets, step: 1, completed: true });
-        if (!r.ok) {
-          setError(r.error ?? "Could not mark sample-sent");
           return;
         }
       }
@@ -832,17 +806,6 @@ export function ManageLabsButton({
                 </button>
               )}
 
-              <label className="mt-3 flex items-center gap-2 text-[12px] text-zinc-700">
-                <input
-                  type="checkbox"
-                  checked={markSent}
-                  onChange={(e) => setMarkSent(e.target.checked)}
-                />
-                Also mark{" "}
-                {selected.size > 0 ? "selected" : effectiveGroup ? "shown" : "all"} as{" "}
-                <span className="font-medium">Sample sent</span> (no emails) on Save
-              </label>
-
               {error ? (
                 <p className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700">
                   {error}
@@ -869,23 +832,21 @@ export function ManageLabsButton({
                 title="Tick step 1 (Sample sent) on these labs now — writes immediately, no patient emails"
                 className="rounded-md border border-sky-300 bg-white px-3 py-1.5 text-[13px] font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-50"
               >
-                Mark{" "}
-                {selected.size > 0 ? "selected" : effectiveGroup ? "shown" : "all"} as Sample sent
-                {sampleSentScope.length > 0 ? ` (${sampleSentScope.length})` : ""} (no emails)
+                Mark {selected.size > 0 ? "selected" : effectiveGroup ? "shown" : "all"} sent
+                {sampleSentScope.length > 0 ? ` (${sampleSentScope.length})` : ""} · no email
               </button>
               <button
                 type="button"
                 onClick={onSaveAll}
                 disabled={saving || !dirty}
+                title="Save tracking #, accession, collection date and any new labs. Does not mark anything sent."
                 className="rounded-md bg-emerald-600 px-4 py-1.5 text-[13px] font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
               >
                 {saving
                   ? "Saving…"
-                  : `Save all${
-                      fieldUpdates.length + pendingNewLabs.length + (sentTargets.length ? 1 : 0) > 0
-                        ? ` (${fieldUpdates.length + pendingNewLabs.length}${
-                            sentTargets.length ? " +sent" : ""
-                          })`
+                  : `Save${
+                      fieldUpdates.length + pendingNewLabs.length > 0
+                        ? ` (${fieldUpdates.length + pendingNewLabs.length})`
                         : ""
                     }`}
               </button>
