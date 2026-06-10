@@ -569,7 +569,7 @@ export function LabKanbanBoard({
           <span className="text-[10px] uppercase tracking-wide text-zinc-400">Merge view</span>
           {(
             [
-              ["dupes", "Dupes", "Collapse a same-accession order (Vibrant Zoomer panels) into one card across columns."],
+              ["dupes", "By accession", "Collapse a same-accession order (Vibrant Zoomer panels) into one card across columns."],
               ["patient", "By patient", "Collapse each patient's cards within a column into one card."],
               ["date", "By date", "Collapse each patient's cards within a column by collection date."],
             ] as const
