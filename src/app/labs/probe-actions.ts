@@ -22,6 +22,9 @@ export type ProbeResult = {
   labKey: string;
   name: string;
   found: ProbeCandidate[];
+  /** When called with `stage: true`, how many PDFs were pulled + staged onto
+   * the case for review. 0 = nothing staged (not found, or ambiguous). */
+  staged: number;
   errors: Array<{ caseId: string; message: string }>;
 };
 
@@ -30,16 +33,22 @@ export type ProbeResult = {
  * worker's POST /probe/:lab?name= so staff can proactively verify + clear
  * accession-less cards. Returns the candidate result(s) WITHOUT posting; an
  * empty `found` doubles as a "not ready in the portal yet" signal.
+ *
+ * With `stage: true` (backlog #6 "search for lab to post"), the worker doesn't
+ * just check — it PULLS the found PDF and stages it onto this case for review
+ * (same postResultReady path the scheduled scrape uses), so a stuck Pending-
+ * Upload card gets its review PDF in one click. `staged` reports how many landed.
  */
 export async function probeCaseResult(input: {
   caseId: string;
+  stage?: boolean;
 }): Promise<ActionResult<ProbeResult>> {
   await requireSignedIn();
 
   const db = getSupabaseAdmin();
   const { data: caseRow } = await db
     .from("lab_cases")
-    .select("id, patient_name, patient_dob, lab_name")
+    .select("id, patient_name, patient_dob, lab_name, lab_external_ref")
     .eq("id", input.caseId)
     .maybeSingle();
   if (!caseRow) return { ok: false, error: "Case not found" };
@@ -58,6 +67,10 @@ export async function probeCaseResult(input: {
 
   const params = new URLSearchParams({ name: String(caseRow.patient_name ?? "") });
   if (caseRow.patient_dob) params.set("dob", String(caseRow.patient_dob));
+  if (input.stage) {
+    params.set("stageCaseId", input.caseId);
+    if (caseRow.lab_external_ref) params.set("acc", String(caseRow.lab_external_ref));
+  }
   const url = `${base}/probe/${encodeURIComponent(labKey)}?${params.toString()}`;
 
   try {
@@ -76,6 +89,11 @@ export async function probeCaseResult(input: {
       return { ok: false, error: `worker: ${msg}` };
     }
     const data = (json ?? {}) as Partial<ProbeResult>;
+    if (input.stage && (data.staged ?? 0) > 0) {
+      // A PDF landed in the review step — refresh the board/card so it shows.
+      revalidatePath("/labs");
+      revalidatePath(`/labs/${input.caseId}`);
+    }
     return {
       ok: true,
       data: {
@@ -83,6 +101,7 @@ export async function probeCaseResult(input: {
         labKey,
         name: data.name ?? String(caseRow.patient_name ?? ""),
         found: data.found ?? [],
+        staged: data.staged ?? 0,
         errors: data.errors ?? [],
       },
     };

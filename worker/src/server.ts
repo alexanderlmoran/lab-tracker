@@ -294,7 +294,10 @@ app.post<{ Params: { lab: string } }>("/post-test/:lab", async (req, reply) => {
 // staff can verify + clear accession-less cards proactively. Scrapes the portal
 // for the name and returns the candidate result (ref + date + pdf size) WITHOUT
 // posting. Unlike /run, this isn't gated on the case being in the open-cases feed.
-app.post<{ Params: { lab: string }; Querystring: { name?: string; dob?: string } }>(
+app.post<{
+  Params: { lab: string };
+  Querystring: { name?: string; dob?: string; stageCaseId?: string; acc?: string };
+}>(
   "/probe/:lab",
   async (req, reply) => {
     if ((req.headers.authorization ?? "") !== `Bearer ${SECRET}`) {
@@ -303,6 +306,14 @@ app.post<{ Params: { lab: string }; Querystring: { name?: string; dob?: string }
     const labKey = req.params.lab.toLowerCase();
     const name = (req.query?.name ?? "").trim();
     if (!name) return reply.code(400).send({ ok: false, error: "name query param required" });
+    // When stageCaseId is set, the caller (backlog #6 "search for lab to post")
+    // wants the found PDF PULLED + STAGED onto the case for review, not just a
+    // ready/not-ready check — so we must download it (skip the no-download
+    // probeByName fast path) and post it through the same postResultReady path
+    // /run uses. `acc` (the card's accession) disambiguates when the patient
+    // has several results.
+    const stageCaseId = (req.query?.stageCaseId ?? "").trim();
+    const acc = (req.query?.acc ?? "").trim();
 
     const scraper = (await resolveScrapers())[labKey];
     if (!scraper) return reply.code(404).send({ ok: false, error: `unknown lab: ${labKey}` });
@@ -310,7 +321,9 @@ app.post<{ Params: { lab: string }; Querystring: { name?: string; dob?: string }
     // Fast path: scrapers that implement probeByName list candidates by name
     // WITHOUT downloading any PDF — so aged results (invisible to the inbox)
     // surface in seconds instead of pulling every report. Access uses this.
-    if (scraper.probeByName) {
+    // Skipped when staging — staging needs the actual PDF, so fall through to
+    // the full scraper run below.
+    if (scraper.probeByName && !stageCaseId) {
       const browser = await chromium.launch({ headless: true });
       try {
         const cands = await scraper.probeByName(browser, name, req.query?.dob || null);
@@ -358,7 +371,40 @@ app.post<{ Params: { lab: string }; Querystring: { name?: string; dob?: string }
     const browser = await chromium.launch({ headless: true });
     try {
       const run = await scraper.run(browser, [probeCase]);
-      return reply.send({
+
+      // Stage the found PDF onto the real case so it lands in the review-PDF
+      // step (same path as /run). Pick the report whose accession matches the
+      // card's `acc`; if none match but exactly one report was found, take it
+      // (covers accession-format mismatches — the name-probe is authoritative).
+      // Multiple non-matching reports → ambiguous, stage nothing.
+      let staged = 0;
+      const stageErrors: Array<{ caseId: string; message: string }> = [];
+      if (stageCaseId) {
+        const norm = (v: string | null | undefined) => (v ?? "").toLowerCase().replace(/\s+/g, "").trim();
+        const withPdf = run.found.filter((f) => f.pdfBase64);
+        const matched = acc ? withPdf.filter((f) => norm(f.labExternalRef) === norm(acc)) : [];
+        const toStage = matched.length > 0 ? matched : withPdf.length === 1 ? withPdf : [];
+        for (const f of toStage) {
+          try {
+            await postResultReady({
+              caseId: stageCaseId,
+              labExternalRef: f.labExternalRef ?? (acc || null),
+              pdfBase64: f.pdfBase64,
+              pdfFilename: f.pdfFilename,
+              resultIssuedAt: f.resultIssuedAt,
+              source: `manual-probe:${labKey}`,
+            });
+            staged += 1;
+          } catch (err) {
+            stageErrors.push({
+              caseId: stageCaseId,
+              message: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+      }
+
+      return {
         ok: true,
         lab: scraper.labName,
         name,
@@ -368,8 +414,9 @@ app.post<{ Params: { lab: string }; Querystring: { name?: string; dob?: string }
           pdfFilename: f.pdfFilename,
           resultIssuedAt: f.resultIssuedAt,
         })),
-        errors: run.errors,
-      });
+        staged,
+        errors: [...run.errors, ...stageErrors],
+      };
     } finally {
       await browser.close();
     }

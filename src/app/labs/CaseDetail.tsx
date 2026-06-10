@@ -842,6 +842,7 @@ export function CaseDetail({
               labName={row.lab_name}
               idleLabel="Search for lab to post (review PDF)"
               busyLabel="Searching portal…"
+              stageOnFind
             />
           </div>
         </section>

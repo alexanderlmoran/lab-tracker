@@ -27,16 +27,21 @@ export function FindResultButton({
   labName,
   idleLabel = "Find result",
   busyLabel = "Searching…",
+  stageOnFind = false,
 }: {
   caseId: string;
   labName: string;
   idleLabel?: string;
   busyLabel?: string;
+  /** Pending-Upload context (#6): pull the found PDF and STAGE it for review in
+   * one click, instead of only listing the accession. */
+  stageOnFind?: boolean;
 }) {
   const router = useRouter();
   const [probing, startProbe] = useTransition();
   const [setting, startSet] = useTransition();
   const [result, setResult] = useState<ProbeResult | null>(null);
+  const [staged, setStaged] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // No scraper for this lab → nothing to probe; don't render the button.
@@ -45,13 +50,18 @@ export function FindResultButton({
   function onProbe() {
     setError(null);
     setResult(null);
+    setStaged(null);
     startProbe(async () => {
-      const r = await probeCaseResult({ caseId });
+      const r = await probeCaseResult({ caseId, stage: stageOnFind });
       if (!r.ok) {
         setError(r.error ?? "Probe failed");
         return;
       }
       setResult(r.data ?? null);
+      if (stageOnFind && (r.data?.staged ?? 0) > 0) {
+        setStaged(r.data!.staged);
+        router.refresh(); // staged PDF now shows in the review step
+      }
     });
   }
 
@@ -84,7 +94,30 @@ export function FindResultButton({
 
       {error ? <span className="text-[11px] text-red-600">{error}</span> : null}
 
-      {result ? (
+      {staged && staged > 0 ? (
+        <span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[11px] text-emerald-700">
+          Pulled the result PDF — it&rsquo;s now in the review step below (Approve to post to PB).
+        </span>
+      ) : null}
+
+      {result && !(staged && staged > 0) && stageOnFind ? (
+        withRef.length > 0 ? (
+          <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+            Found {withRef.length} result{withRef.length === 1 ? "" : "s"} on {result.lab} but
+            couldn&rsquo;t match the card&rsquo;s accession to auto-stage
+            {withRef.some((f) => f.pdfBytes) ? "" : " (no downloadable PDF)"}:{" "}
+            {withRef.map((f) => f.ref).join(", ")}.
+            {result.errors.length > 0 ? ` (${result.errors.map((e) => e.message).join("; ")})` : ""}
+          </span>
+        ) : (
+          <span className="text-[11px] text-zinc-500">
+            No result in the portal yet — not ready.
+            {result.errors.length > 0 ? ` (${result.errors.map((e) => e.message).join("; ")})` : ""}
+          </span>
+        )
+      ) : null}
+
+      {result && !stageOnFind ? (
         withRef.length > 0 ? (
           <span className="flex flex-col gap-1 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1.5">
             <span className="text-[11px] text-zinc-600">
