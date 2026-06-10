@@ -110,7 +110,13 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!kase.lab_external_ref) {
+  // Set — or CORRECT — the accession from the staged report. A manual name-probe
+  // stages the real portal report even when the card's accession was wrong
+  // (Vinay Mittal: card had 2606086632, portal had a different #) — adopt the
+  // report's accession so future auto-pulls match and the record is right.
+  // Scheduled scrapes match by the existing accession, so they never differ
+  // here; this only fixes a genuinely mismatched one.
+  if (kase.lab_external_ref !== parsed.labExternalRef) {
     await db
       .from("lab_cases")
       .update({ lab_external_ref: parsed.labExternalRef })

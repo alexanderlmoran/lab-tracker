@@ -159,51 +159,44 @@ export function StepChecklist({
     label,
     hint,
     checked,
-    tone,
     pending,
     onChange,
   }: {
     label: string;
     hint?: string;
     checked: boolean;
-    tone: "ready" | "done";
     pending?: boolean;
+    /** Provided → an interactive step (Completed toggles archive). Omitted →
+     *  read-only "auto" stage (Ready to ship, derived from the tracking #). */
     onChange?: (next: boolean) => void;
   }) {
     const interactive = Boolean(onChange);
-    const dot = checked
-      ? tone === "ready"
-        ? "border-orange-400 bg-orange-400"
-        : "border-emerald-500 bg-emerald-500"
-      : "border-zinc-300 bg-transparent";
-    const inner = (
-      <>
-        <span aria-hidden className={`h-2.5 w-2.5 shrink-0 rounded-full border ${dot}`} />
-        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-zinc-700" title={label}>
-          {label}
-          {hint ? <span className="font-normal text-zinc-400"> — {hint}</span> : null}
-        </span>
-        <span className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-zinc-500">
-          {interactive ? "stage" : "auto"}
-        </span>
-      </>
-    );
-    // A clearly-bordered row so the bracketing stages (Ready to ship / Completed)
-    // read as real rungs of the ladder, not faint asides.
-    const cls =
-      "flex w-full items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1.5 text-left";
-    return interactive ? (
-      <button
-        type="button"
-        onClick={() => onChange?.(!checked)}
-        disabled={pending}
-        className={`${cls} hover:bg-zinc-100 disabled:opacity-60`}
-        title={checked ? "Archived — click to restore to the board" : "Archive this case to the Completed lane"}
-      >
-        {inner}
-      </button>
-    ) : (
-      <div className={cls}>{inner}</div>
+    // Render exactly like the numbered steps (checkbox + label) so Ready to ship
+    // and Completed read as real rungs of the ladder — not "auto" asides. Ready
+    // to ship is a disabled (auto) checkbox; Completed is a live archive toggle.
+    return (
+      <div className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-zinc-50">
+        <label
+          className={`flex min-w-0 flex-1 items-center gap-2 ${interactive ? "cursor-pointer" : ""}`}
+        >
+          <input
+            type="checkbox"
+            className="h-4 w-4 shrink-0 rounded border-zinc-300"
+            checked={checked}
+            disabled={!interactive || pending}
+            onChange={(e) => onChange?.(e.target.checked)}
+          />
+          <span
+            className={`min-w-0 flex-1 truncate text-[13px] text-zinc-900 ${
+              checked ? "line-through decoration-zinc-400" : ""
+            }`}
+            title={label}
+          >
+            {label}
+            {hint ? <span className="ml-1 text-[10px] text-zinc-500">{hint}</span> : null}
+          </span>
+        </label>
+      </div>
     );
   }
 
@@ -278,9 +271,8 @@ export function StepChecklist({
     <>
       {workflow === "default" ? (
         <StageRow
-          tone="ready"
-          label="Ready to ship"
-          hint={c.tracking_number ? "tracking # attached, waiting for carrier" : "add a tracking # to reach this"}
+          label="Ready to Ship"
+          hint={c.tracking_number ? "(auto · tracking # attached)" : "(auto · add a tracking #)"}
           checked={Boolean(c.tracking_number)}
         />
       ) : null}
@@ -306,9 +298,8 @@ export function StepChecklist({
         </label>
       ) : null}
       <StageRow
-        tone="done"
-        label="Completed"
-        hint={c.archived_at ? "archived — click to restore" : "click to archive to the Completed lane"}
+        label="10. Completed"
+        hint={c.archived_at ? "(archived — click to restore)" : "(archive to the Completed lane)"}
         checked={Boolean(c.archived_at)}
         pending={archiving}
         onChange={onToggleCompleted}
