@@ -28,13 +28,14 @@ export type RenderedEmail = {
 // subjects now live in template-data.ts so they're DB-overridable from
 // /labs/settings → Email templates.
 export const INTERNAL_SUBJECT: Record<
-  "nadia_all_received" | "rof_allison" | "stale_digest" | "rof_reminder",
+  "nadia_all_received" | "rof_allison" | "stale_digest" | "rof_reminder" | "complete_upload",
   string
 > = {
   nadia_all_received: "All labs received — please confirm scheduling outreach",
   rof_allison: "ROF booked — please proofread",
   stale_digest: "Lab Tracker — daily stale-case digest",
   rof_reminder: "Lab Tracker — ROF scheduling reminder",
+  complete_upload: "Lab Tracker — complete result uploaded to PracticeBetter",
 };
 
 // Back-compat alias for src/lib/email/internal.ts which imports `SUBJECT`.

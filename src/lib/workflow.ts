@@ -11,6 +11,7 @@
 import crypto from "node:crypto";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { sendAllisonRofReview, sendNadiaAllReceived } from "@/lib/email/internal";
+import { sendCompleteUploadNotice } from "@/lib/email/digests";
 import type { LabCase } from "@/lib/types";
 
 async function fetchActiveSiblings(
@@ -88,6 +89,63 @@ export async function maybeFireNadiaAllReceived(
       },
     })),
   );
+}
+
+/**
+ * Backlog #21 — "complete upload notification." Call after step 5
+ * (complete_uploaded) is set true for `caseId`. Sends ONE internal staff
+ * notice that the result is now on PracticeBetter. Deduped on a per-case
+ * `complete_upload_notified` lab_event flag (no schema change — same trick
+ * the RoF-reminder cooldown uses) so the multiple step-5 flip paths and the
+ * same-accession sibling cascade can each call it without double-notifying.
+ * Best-effort: never blocks the underlying upload.
+ */
+export async function notifyCompleteUpload(
+  caseId: string,
+  actor: string,
+  opts?: { pbLabRequestId?: string | null },
+): Promise<void> {
+  const db = getSupabaseAdmin();
+  const { data: row } = await db
+    .from("lab_cases")
+    .select("*")
+    .eq("id", caseId)
+    .maybeSingle();
+  if (!row) return;
+  const self = row as LabCase;
+  if (!self.step5_complete_uploaded) return;
+  if (self.archived_at || self.deleted_at) return;
+
+  // Dedupe: bail if we've already notified for this case.
+  const { data: prior } = await db
+    .from("lab_events")
+    .select("id, meta")
+    .eq("case_id", caseId)
+    .eq("kind", "case_edited")
+    .limit(50);
+  const alreadyNotified = (prior ?? []).some(
+    (e) => (e as { meta: { complete_upload_notified?: boolean } | null }).meta?.complete_upload_notified,
+  );
+  if (alreadyNotified) return;
+
+  const result = await sendCompleteUploadNotice({
+    patientCase: self,
+    pbLabRequestId: opts?.pbLabRequestId ?? null,
+  });
+
+  await db.from("lab_events").insert({
+    case_id: caseId,
+    kind: "case_edited",
+    actor,
+    meta: {
+      complete_upload_notified: true,
+      ok: result.ok,
+      ...(result.ok ? {} : { error: result.error }),
+    },
+    note: result.ok
+      ? "Complete-upload notification emailed"
+      : `Complete-upload notification failed: ${result.error}`,
+  });
 }
 
 /** Call after step 6 (rof_scheduled) is set true for `caseId`. */

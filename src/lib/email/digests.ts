@@ -96,6 +96,50 @@ async function dispatchInternal(args: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// #21 — Complete-upload notification
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * One-off internal notification fired the moment a case's complete result
+ * lands on PracticeBetter (step 5). Unlike the cron digests this is an
+ * event-driven notice — `notifyCompleteUpload` in `@/lib/workflow` is the
+ * single gate that calls this from every step-5 flip path (worker upload,
+ * manual email, "already on PB"). Reuses the same internal dispatch as the
+ * digests so routing/test-redirect behaves identically.
+ */
+export async function sendCompleteUploadNotice(args: {
+  patientCase: LabCase;
+  /** PB labrequest id when the upload went through the worker, for the receipt. */
+  pbLabRequestId?: string | null;
+}): Promise<DispatchResult> {
+  const c = args.patientCase;
+  const recipient = await digestRecipient();
+  const base = process.env.NEXT_PUBLIC_APP_URL ?? "https://labs";
+  const caseUrl = `${base}/labs/${c.id}`;
+  const ref = args.pbLabRequestId
+    ? `<p style="margin:0 0 8px;color:#71717a;font-size:12px;">PB labrequest ${escapeHtml(args.pbLabRequestId)}</p>`
+    : "";
+
+  const html = `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#18181b;">
+<h2 style="margin:0 0 4px;font-size:16px;">Complete result uploaded</h2>
+<p style="margin:0 0 6px;color:#52525b;font-size:13px;">${escapeHtml(c.patient_name)}'s ${escapeHtml(labLabel(c))} result is now on PracticeBetter.</p>
+${ref}<p style="margin:12px 0 0;font-size:13px;"><a href="${caseUrl}" style="color:#4338ca;">Open the case →</a></p>
+</body></html>`;
+  const text =
+    `Complete result uploaded\n\n` +
+    `${c.patient_name} — ${labLabel(c)} is now on PracticeBetter.\n` +
+    (args.pbLabRequestId ? `PB labrequest ${args.pbLabRequestId}\n` : "") +
+    `\nOpen the case: ${caseUrl}\n`;
+
+  return dispatchInternal({
+    to: recipient,
+    subject: INTERNAL_SUBJECT.complete_upload,
+    html,
+    text,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // #5 — Daily stale-case digest
 // ─────────────────────────────────────────────────────────────────────────
 

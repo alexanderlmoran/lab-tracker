@@ -15,13 +15,23 @@ function kb(bytes: number): string {
  * card has none. Shows candidate(s) returned by the worker; clicking one writes
  * its accession onto the case (which clears it out of the accession-less state).
  * Only renders for labs the worker can actually scrape.
+ *
+ * Backlog #6: the same probe doubles as a manual "search for a lab to post"
+ * trigger for a stuck Pending-Upload card whose accession is already known but
+ * whose PDF the worker hasn't staged yet. Pass `idleLabel` to relabel the
+ * button for that context (e.g. "Search for lab to post (review PDF)") — the
+ * machinery is identical, only the copy differs.
  */
 export function FindResultButton({
   caseId,
   labName,
+  idleLabel = "Find result",
+  busyLabel = "Searching…",
 }: {
   caseId: string;
   labName: string;
+  idleLabel?: string;
+  busyLabel?: string;
 }) {
   const router = useRouter();
   const [probing, startProbe] = useTransition();
@@ -69,7 +79,7 @@ export function FindResultButton({
         className="self-start rounded-md border border-indigo-300 bg-white px-2 py-0.5 text-[11px] font-medium text-indigo-700 hover:bg-indigo-50 disabled:opacity-60"
         title="Search the lab portal for this patient's result by name (no accession needed)"
       >
-        {probing ? "Searching…" : "Find result"}
+        {probing ? busyLabel : idleLabel}
       </button>
 
       {error ? <span className="text-[11px] text-red-600">{error}</span> : null}

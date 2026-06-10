@@ -5,6 +5,7 @@ import { z } from "zod";
 import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { accessionSiblingIds } from "@/lib/labs/siblings";
+import { notifyCompleteUpload } from "@/lib/workflow";
 import type { ActionResult } from "@/lib/types";
 
 // ── Types exposed to the modal client component ──────────────────────
@@ -402,6 +403,12 @@ export async function markAlreadyUploaded(
       });
     }
     revalidatePath(`/labs/${id}`);
+    // Backlog #21 — staff notification on the complete upload (deduped inside).
+    try {
+      await notifyCompleteUpload(id, user.email ?? "staff");
+    } catch (err) {
+      console.error("[pdf-actions] complete-upload notify failed", err);
+    }
   }
   revalidatePath("/labs");
   return { ok: true };

@@ -818,6 +818,35 @@ export function CaseDetail({
         </section>
       ) : null}
 
+      {/* Backlog #6 — stuck Pending-Upload card with no PDF staged yet. The
+       *  worker "continuously searches" but never lands one (e.g. the accession
+       *  is set but the portal hasn't published, or the scrape keeps missing).
+       *  Give staff a manual probe to search the portal for a result to post —
+       *  same machinery as the accession-less "Find result", relabeled. Gated
+       *  on pending_upload + no staged PDF + not still loading so it only shows
+       *  when there's nothing to Review yet. */}
+      {currentCol === "pending_upload" && !pendingPdf && !reviewLoading ? (
+        <section className="rounded-md border border-indigo-200 bg-indigo-50 px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-indigo-900">
+                No result staged yet
+              </h3>
+              <p className="mt-0.5 text-[11.5px] text-indigo-800">
+                The worker hasn&apos;t attached a PDF to post yet. Search the lab
+                portal now for this patient&apos;s result to review.
+              </p>
+            </div>
+            <FindResultButton
+              caseId={row.id}
+              labName={row.lab_name}
+              idleLabel="Search for lab to post (review PDF)"
+              busyLabel="Searching portal…"
+            />
+          </div>
+        </section>
+      ) : null}
+
       {reviewOpen && pendingPdf ? (
         <PdfReviewModal
           pdf={pendingPdf}

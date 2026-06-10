@@ -12,7 +12,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
-import { maybeFireNadiaAllReceived } from "@/lib/workflow";
+import { maybeFireNadiaAllReceived, notifyCompleteUpload } from "@/lib/workflow";
 import { accessionSiblingIds } from "@/lib/labs/siblings";
 
 export const dynamic = "force-dynamic";
@@ -128,6 +128,16 @@ export async function POST(request: Request) {
       await maybeFireNadiaAllReceived(job.case_id, "worker:pb-upload");
     } catch (err) {
       console.error("[pb-upload/result] nadia trigger failed", err);
+    }
+
+    // Backlog #21 — notify staff that the complete result landed on PB.
+    // Best-effort; the upload is already recorded.
+    try {
+      await notifyCompleteUpload(job.case_id, "worker:pb-upload", {
+        pbLabRequestId: parsed.pbLabRequestId,
+      });
+    } catch (err) {
+      console.error("[pb-upload/result] complete-upload notify failed", err);
     }
 
     return NextResponse.json({ ok: true });

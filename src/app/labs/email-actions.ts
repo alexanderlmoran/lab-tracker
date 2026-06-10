@@ -7,7 +7,7 @@ import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { renderEmail } from "@/lib/email/render";
 import { EMAIL_TO_STEP } from "@/lib/email/step-map";
-import { maybeFireNadiaAllReceived } from "@/lib/workflow";
+import { maybeFireNadiaAllReceived, notifyCompleteUpload } from "@/lib/workflow";
 import type { ActionResult, EmailKind, EmailLog, LabCase } from "@/lib/types";
 
 async function fireDownstream(kind: EmailKind, caseId: string, actor: string) {
@@ -18,6 +18,13 @@ async function fireDownstream(kind: EmailKind, caseId: string, actor: string) {
     await maybeFireNadiaAllReceived(caseId, actor);
   } catch (err) {
     console.error("[workflow] nadia trigger failed", err);
+  }
+  // Backlog #21 — staff notification on the complete upload. Deduped inside,
+  // so the worker-upload path firing it too won't double-send.
+  try {
+    await notifyCompleteUpload(caseId, actor);
+  } catch (err) {
+    console.error("[workflow] complete-upload notify failed", err);
   }
 }
 
