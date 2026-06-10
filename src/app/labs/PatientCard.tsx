@@ -9,6 +9,7 @@ import {
   expectedCountdown,
   getCaseStaleness,
   getColumnFor,
+  groupByDate,
   type PatientGroup,
 } from "@/lib/columns";
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
@@ -218,6 +219,7 @@ export function PatientCard({
 }) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [activeRow, setActiveRow] = useState<LabCase | null>(null);
+  const [byDate, setByDate] = useState(false);
 
   function openLabDetail(row: LabCase) {
     setActiveRow(row);
@@ -259,6 +261,26 @@ export function PatientCard({
     return !acc || c.updated_at > acc ? c.updated_at : acc;
   }, "");
 
+  // Patients commonly draw 2–7 labs in one sitting (often one box). Offer a
+  // by-collection-date view (#16) when there's actually >1 dated batch to
+  // separate — otherwise the flat list is already the clearer read.
+  const dateGroups = groupByDate(group.cases);
+  const datedBuckets = dateGroups.filter((d) => d.date !== null).length;
+  const canGroupByDate = group.cases.length > 1 && datedBuckets > 1;
+  const showByDate = byDate && canGroupByDate;
+
+  function renderLabRow(c: LabCase) {
+    return (
+      <LabRow
+        key={c.id}
+        row={c}
+        onOpen={openLabDetail}
+        isLaggard={c.id === laggardId && group.cases.length > 1}
+        counts={counts?.[c.id] ?? ZERO_COUNTS}
+      />
+    );
+  }
+
   return (
     <>
       <div className="rounded-md border border-zinc-200 bg-white p-1.5 shadow-sm transition-shadow hover:shadow">
@@ -274,6 +296,20 @@ export function PatientCard({
               {group.cases.length} lab{group.cases.length === 1 ? "" : "s"}
             </span>
           </Link>
+          {canGroupByDate ? (
+            <button
+              type="button"
+              onClick={() => setByDate((v) => !v)}
+              className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${
+                showByDate
+                  ? "border-blue-300 bg-blue-50 text-blue-700"
+                  : "border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50"
+              }`}
+              title="Group this patient's labs by collection date (one box = one date)"
+            >
+              {showByDate ? "By date ✓" : "By date"}
+            </button>
+          ) : null}
           <ManageLabsButton
             patientName={group.patientName}
             patientEmail={group.patientEmail}
@@ -281,17 +317,25 @@ export function PatientCard({
           />
         </div>
 
-        <div className="flex flex-col gap-0.5">
-          {group.cases.map((c) => (
-            <LabRow
-              key={c.id}
-              row={c}
-              onOpen={openLabDetail}
-              isLaggard={c.id === laggardId && group.cases.length > 1}
-              counts={counts?.[c.id] ?? ZERO_COUNTS}
-            />
-          ))}
-        </div>
+        {showByDate ? (
+          <div className="flex flex-col gap-1.5">
+            {dateGroups.map((d) => (
+              <div key={d.date ?? "undated"} className="flex flex-col gap-0.5">
+                <p className="px-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-400">
+                  {d.date ? `Drawn ${formatShortDate(d.date)}` : "No draw date"}
+                  <span className="ml-1 tabular-nums text-zinc-300">
+                    ·&nbsp;{d.cases.length}
+                  </span>
+                </p>
+                {d.cases.map(renderLabRow)}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-0.5">
+            {group.cases.map(renderLabRow)}
+          </div>
+        )}
 
         {lastUpdated ? (
           <p className="mt-1 text-[9.5px] text-zinc-400">

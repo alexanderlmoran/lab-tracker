@@ -11,7 +11,14 @@ import {
   type PatientGroup,
 } from "@/lib/columns";
 import { PatientCard } from "./PatientCard";
-import { bulkArchive, bulkDelete, bulkSetStepCompleted } from "./actions";
+import {
+  bulkArchive,
+  bulkDelete,
+  bulkSetStepCompleted,
+  mergeCasesByDate,
+  mergePatients,
+} from "./actions";
+import { formatPersonName } from "@/lib/format";
 import type { CardCounts } from "./card-counts";
 
 const BULK_STEP_OPTIONS: Array<{ step: 1 | 4 | 5 | 6 | 7; label: string }> = [
@@ -181,6 +188,65 @@ export function KanbanBoard({
     });
   }
 
+  // The selected cases, plus the distinct patient identities among them — used
+  // to seed the merge prompts so staff don't retype an email/name.
+  const selectedRows = rows.filter((r) => selected.has(r.id));
+  function distinctIdentities() {
+    const seen = new Map<string, { email: string; name: string }>();
+    for (const r of selectedRows) {
+      const key = r.patient_email.trim().toLowerCase();
+      if (!seen.has(key))
+        seen.set(key, { email: r.patient_email, name: r.patient_name });
+    }
+    return [...seen.values()];
+  }
+
+  // #17 Merge patients: reassign every selected case onto ONE identity so
+  // duplicate/misspelled patients collapse into a single group. Defaults the
+  // canonical email to the first selected patient; staff confirm/override.
+  function onMergePatients() {
+    if (selected.size === 0) return;
+    const ids = distinctIdentities();
+    if (ids.length < 2) {
+      alert("Select cases from two or more different patients to merge them.");
+      return;
+    }
+    const list = ids.map((i) => `• ${formatPersonName(i.name)} <${i.email}>`).join("\n");
+    const email = prompt(
+      `Merge ${selected.size} case(s) from ${ids.length} patients into ONE.\n\n${list}\n\nKeep which email? (everything is reassigned to it)`,
+      ids[0].email,
+    );
+    if (!email) return;
+    const match = ids.find((i) => i.email.toLowerCase() === email.trim().toLowerCase());
+    const name = (match?.name ?? ids[0].name).trim();
+    startBulk(async () => {
+      const r = await mergePatients({ caseIds: [...selected], email: email.trim(), name });
+      if (!r.ok) alert(r.error);
+      exitSelectMode();
+    });
+  }
+
+  // #17 Merge by date: stamp one collection_date across the selected cases so
+  // they read as a single drawn-together batch (patients do 2–7 at a time).
+  function onMergeByDate() {
+    if (selected.size === 0) return;
+    const seed =
+      selectedRows.find((r) => r.collection_date)?.collection_date ?? "";
+    const date = prompt(
+      `Set ONE collection date (YYYY-MM-DD) on ${selected.size} selected case(s) so they group as a single draw:`,
+      seed,
+    );
+    if (!date) return;
+    startBulk(async () => {
+      const r = await mergeCasesByDate({
+        caseIds: [...selected],
+        collectionDate: date.trim(),
+      });
+      if (!r.ok) alert(r.error);
+      exitSelectMode();
+    });
+  }
+
   const groups = groupByPatient(rows);
   const grouped: Record<PatientColumnKey, PatientGroup[]> = {
     p_new: [],
@@ -279,6 +345,22 @@ export function KanbanBoard({
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            onClick={onMergePatients}
+            className="rounded-full border border-purple-300 bg-white px-3 py-1 text-xs font-medium text-purple-700 hover:bg-purple-50"
+            title="Reassign the selected cases onto one patient (collapses duplicate/misspelled patients)"
+          >
+            Merge patients
+          </button>
+          <button
+            type="button"
+            onClick={onMergeByDate}
+            className="rounded-full border border-purple-300 bg-white px-3 py-1 text-xs font-medium text-purple-700 hover:bg-purple-50"
+            title="Stamp one collection date on the selected cases so they group as a single draw"
+          >
+            Merge by date
+          </button>
           <button
             type="button"
             onClick={onBulkArchive}

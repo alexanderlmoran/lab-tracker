@@ -761,6 +761,85 @@ export async function bulkDelete(input: {
   return { ok: true, data: { count: parsed.data.caseIds.length } };
 }
 
+const MergePatientsInput = z.object({
+  caseIds: z.array(z.string().uuid()).min(1).max(200),
+  // Canonical identity every merged case is reassigned onto.
+  email: z.string().trim().email().max(200),
+  name: z.string().trim().min(1).max(200),
+});
+
+/**
+ * Merge several patients into one (#17). Staff pick the cases (e.g. the same
+ * person split across two spellings or two emails) plus the canonical
+ * name/email; every selected case is reassigned onto that identity so they
+ * collapse into a single patient group on the By-patient board.
+ *
+ * Identity-only: never touches lab/step/tracking state. Reuses the same
+ * lab_cases update + per-case `case_edited` audit pattern as
+ * `updatePatientAcrossCases` (which reassigns by old email) rather than
+ * forking it — this variant targets an explicit case-id set instead.
+ */
+export async function mergePatients(input: {
+  caseIds: string[];
+  email: string;
+  name: string;
+}): Promise<ActionResult<{ count: number }>> {
+  const user = await requireSignedIn();
+  const parsed = MergePatientsInput.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+  const { caseIds, email, name } = parsed.data;
+  const db = getSupabaseAdmin();
+
+  const { error } = await db
+    .from("lab_cases")
+    .update({ patient_email: email, patient_name: name })
+    .in("id", caseIds);
+  if (error) return { ok: false, error: error.message };
+
+  await db.from("lab_events").insert(
+    caseIds.map((id) => ({
+      case_id: id,
+      kind: "case_edited" as const,
+      actor: user.email ?? "admin",
+      meta: { merged_patient: { email, name }, bulk: true },
+      note: `Merged into patient "${name}" <${email}>`,
+    })),
+  );
+
+  revalidatePath("/labs");
+  return { ok: true, data: { count: caseIds.length } };
+}
+
+const MergeByDateInput = z.object({
+  caseIds: z.array(z.string().uuid()).min(1).max(200),
+  collectionDate: z.string().trim().regex(ISO_DATE, "Use YYYY-MM-DD"),
+});
+
+/**
+ * Merge selected cases onto one collection date (#17) — patients draw 2–7
+ * labs in one sitting (often one box), so stamping a shared collection_date
+ * makes them group as a single dated batch (see `groupByDate`). Thin wrapper
+ * over `bulkUpdatePatientCases` so the date write + audit logging stay in one
+ * place; we don't reimplement the per-row diff/event logic here.
+ */
+export async function mergeCasesByDate(input: {
+  caseIds: string[];
+  collectionDate: string;
+}): Promise<ActionResult<{ updated: number }>> {
+  const parsed = MergeByDateInput.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+  return bulkUpdatePatientCases({
+    updates: parsed.data.caseIds.map((caseId) => ({
+      caseId,
+      collectionDate: parsed.data.collectionDate,
+    })),
+  });
+}
+
 const StepToggleInput = z.object({
   caseId: z.string().uuid(),
   step: z.number().int().min(1).max(9),

@@ -359,6 +359,46 @@ export function groupByPatient(rows: LabCase[]): PatientGroup[] {
   return [...map.values()];
 }
 
+export type DateGroup = {
+  /** ISO collection_date, or null for the "no date yet" bucket. */
+  date: string | null;
+  cases: LabCase[];
+};
+
+/**
+ * Group a patient's cases by collection DATE — patients commonly draw 2–7
+ * labs in one sitting (often one shipped box), so a shared collection_date is
+ * the de facto "this batch went out together" key. Cases with no date land in
+ * a single trailing `null` bucket. Dated buckets are sorted newest-first;
+ * within a bucket, lab_name then panel (matching `groupByPatient`'s order).
+ *
+ * Shared so the By-patient card (#16) and merge-by-date (#17) reason about the
+ * same batches — don't reimplement date bucketing elsewhere.
+ */
+export function groupByDate(cases: LabCase[]): DateGroup[] {
+  const map = new Map<string, LabCase[]>();
+  for (const c of cases) {
+    const key = c.collection_date ?? "";
+    const arr = map.get(key) ?? [];
+    arr.push(c);
+    map.set(key, arr);
+  }
+  const dated: DateGroup[] = [];
+  let undated: DateGroup | null = null;
+  for (const [key, arr] of map) {
+    arr.sort((a, b) => {
+      const labCmp = (a.lab_name || "").localeCompare(b.lab_name || "");
+      if (labCmp !== 0) return labCmp;
+      return (a.lab_panel || "").localeCompare(b.lab_panel || "");
+    });
+    if (key === "") undated = { date: null, cases: arr };
+    else dated.push({ date: key, cases: arr });
+  }
+  // Newest draw first; the dateless bucket always trails.
+  dated.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+  return undated ? [...dated, undated] : dated;
+}
+
 export function isEmailStep(step: StepNumber): step is 1 | 3 | 5 | 7 {
   return step === 1 || step === 3 || step === 5 || step === 7;
 }
