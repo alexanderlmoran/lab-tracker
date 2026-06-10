@@ -37,6 +37,7 @@ import {
 import { useRouter } from "next/navigation";
 import { getLabDestination, trackingDestinationWarning } from "@/lib/labs/catalog";
 import { labelForCase } from "@/lib/labs/label";
+import { probeKeyForLab } from "@/lib/scrapers/normalize-lab";
 import { getAdapterFor } from "@/lib/lab-adapters";
 
 function DeleteCaseButton({ caseId }: { caseId: string }) {
@@ -833,28 +834,49 @@ export function CaseDetail({
       {(currentCol === "pending_upload" || currentCol === "sample_sent") &&
       !pendingPdf &&
       !reviewLoading ? (
-        <section className="rounded-md border border-indigo-200 bg-indigo-50 px-4 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="min-w-0">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-indigo-900">
-                No result staged yet
-              </h3>
-              <p className="mt-0.5 text-[11.5px] text-indigo-800">
-                {currentCol === "sample_sent"
-                  ? "Sample's at the lab — if the portal already has a result, pull it now to review (early results land before the predicted window)."
-                  : "The worker hasn't attached a PDF to post yet. Search the lab portal now for this patient's result to review."}
-              </p>
-            </div>
-            <FindResultButton
-              caseId={row.id}
-              labName={row.lab_name}
-              idleLabel="Search for lab to post (review PDF)"
-              busyLabel="Searching portal…"
-              stageOnFind
-              onStaged={() => loadPendingPdf(true)}
-            />
-          </div>
-        </section>
+        (() => {
+          // Only labs with a portal scraper can be auto-pulled. For the rest
+          // (Kennedy Krieger, MembersPanel, Custom, Mitoswab, Peptides…) there's
+          // nothing to "search" — don't imply a portal pull; tell staff it's
+          // a manual upload/post.
+          const hasScraper = Boolean(probeKeyForLab(row.lab_name));
+          return (
+            <section
+              className={`rounded-md border px-4 py-3 ${
+                hasScraper ? "border-indigo-200 bg-indigo-50" : "border-zinc-200 bg-zinc-50"
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <h3
+                    className={`text-xs font-semibold uppercase tracking-wide ${
+                      hasScraper ? "text-indigo-900" : "text-zinc-700"
+                    }`}
+                  >
+                    {hasScraper ? "No result staged yet" : "No auto-scraper for this lab"}
+                  </h3>
+                  <p className={`mt-0.5 text-[11.5px] ${hasScraper ? "text-indigo-800" : "text-zinc-600"}`}>
+                    {!hasScraper
+                      ? `${row.lab_name} has no portal scraper — its result can't be auto-pulled. Post it manually (from the lab's email/portal) once it's in.`
+                      : currentCol === "sample_sent"
+                        ? "Sample's at the lab — if the portal already has a result, pull it now to review (early results land before the predicted window)."
+                        : "The worker hasn't attached a PDF to post yet. Search the lab portal now for this patient's result to review."}
+                  </p>
+                </div>
+                {hasScraper ? (
+                  <FindResultButton
+                    caseId={row.id}
+                    labName={row.lab_name}
+                    idleLabel="Search for lab to post (review PDF)"
+                    busyLabel="Searching portal…"
+                    stageOnFind
+                    onStaged={() => loadPendingPdf(true)}
+                  />
+                ) : null}
+              </div>
+            </section>
+          );
+        })()
       ) : null}
 
       {reviewOpen && pendingPdf ? (
