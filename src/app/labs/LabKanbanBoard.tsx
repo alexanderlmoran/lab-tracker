@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import type { LabCase } from "@/lib/types";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import type { LabCase, StepNumber } from "@/lib/types";
 import {
   COLUMN_LABEL,
   LAB_BOARD_COLUMN_ORDER,
@@ -12,8 +12,10 @@ import {
   getCaseStaleness,
   getColumnFor,
 } from "@/lib/columns";
+import { planColumnJump } from "@/lib/column-jump";
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { labelForCase } from "@/lib/labs/label";
+import { archiveLabCase, setStepCompleted } from "./actions";
 import { CaseDetail } from "./CaseDetail";
 import { formatPersonName, formatShortDate } from "@/lib/format";
 import {
@@ -138,8 +140,13 @@ function LabCard({
   return (
     <button
       type="button"
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData("text/plain", row.id);
+        e.dataTransfer.effectAllowed = "move";
+      }}
       onClick={() => onOpen(row, hasPendingPdf)}
-      className={`flex w-full flex-col gap-1 rounded-md border p-1.5 text-left shadow-sm transition-shadow hover:shadow ${
+      className={`flex w-full cursor-grab flex-col gap-1 rounded-md border p-1.5 text-left shadow-sm transition-shadow hover:shadow active:cursor-grabbing ${
         hasPendingPdf
           ? "border-amber-400 bg-amber-50"
           : probablyReady
@@ -323,18 +330,46 @@ function StaticColumn({
   col,
   count,
   children,
+  isDropOver,
+  onCardDrop,
+  onColDragOver,
 }: {
   col: ColumnKey;
   count: number;
   children: React.ReactNode;
+  /** This column is the current drag target — highlight it. */
+  isDropOver?: boolean;
+  /** A card was dropped on this column. */
+  onCardDrop?: (caseId: string, col: ColumnKey) => void;
+  /** Drag entered (col) / left (null) this column. */
+  onColDragOver?: (col: ColumnKey | null) => void;
 }) {
   // Pending Upload is the one lane that owes a human action (Approve → PB). Make
   // it pop when it has cases so it can't hide among the 9 equal-width columns.
   const needsAction = col === "pending_upload" && count > 0;
   return (
     <section
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        onColDragOver?.(col);
+      }}
+      onDragLeave={(e) => {
+        // Only clear when leaving the column itself, not when moving between its cards.
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onColDragOver?.(null);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        onColDragOver?.(null);
+        const id = e.dataTransfer.getData("text/plain");
+        if (id) onCardDrop?.(id, col);
+      }}
       className={`kanban-col flex min-w-0 flex-1 basis-0 flex-col p-1.5 lg:min-h-0 ${
-        needsAction ? "rounded-md bg-amber-50/50 ring-1 ring-amber-300" : ""
+        isDropOver
+          ? "rounded-md ring-2 ring-indigo-400"
+          : needsAction
+            ? "rounded-md bg-amber-50/50 ring-1 ring-amber-300"
+            : ""
       }`}
       data-col={col}
     >
@@ -440,6 +475,48 @@ export function LabKanbanBoard({
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [activeRow, setActiveRow] = useState<LabCase | null>(null);
   const [autoReview, setAutoReview] = useState(false);
+  const router = useRouter();
+  const [, startMove] = useTransition();
+  const [dragOverCol, setDragOverCol] = useState<ColumnKey | null>(null);
+
+  // Drag a card onto a column to move it there. Applies the column's defining
+  // step(s) (planColumnJump → setStepCompleted with cascadePrior), or archives
+  // for "Completed". Derived lanes (TODO / Ready to ship / Pending Upload) can't
+  // be set by a move — they follow from tracking/results — so we no-op those.
+  // A confirm guards the move since some steps fire emails (5 Nadia, 6 Allison).
+  function handleDropCase(caseId: string, targetCol: ColumnKey) {
+    const row = rows.find((r) => r.id === caseId);
+    if (!row || getColumnFor(row) === targetCol) return;
+    if (targetCol === "untouched" || targetCol === "ready_to_ship" || targetCol === "pending_upload") {
+      window.alert(
+        `"${COLUMN_LABEL[targetCol]}" is set automatically (from the tracking # / results), not by moving a card here.`,
+      );
+      return;
+    }
+    if (
+      !window.confirm(
+        `Move ${formatPersonName(row.patient_name)} — ${labelForCase(row)} to "${COLUMN_LABEL[targetCol]}"?`,
+      )
+    ) {
+      return;
+    }
+    startMove(async () => {
+      let res;
+      if (targetCol === "completed") {
+        res = await archiveLabCase(caseId);
+      } else {
+        const plan = planColumnJump(row, targetCol);
+        if (plan.length === 0) return;
+        const maxStep = Math.max(...plan.map((p) => p.step)) as StepNumber;
+        res = await setStepCompleted({ caseId, step: maxStep, completed: true, cascadePrior: true });
+      }
+      if (res && !res.ok) {
+        window.alert(res.error ?? "Could not move the card.");
+        return;
+      }
+      router.refresh();
+    });
+  }
   // Merge VIEW mode. "dupes" (default) collapses a same-accession order (Vibrant
   // Zoomer split into Foundational/Gut/Toxin panel cards) into ONE card across
   // columns. "patient" / "date" collapse a patient's cards WITHIN each column
@@ -597,7 +674,14 @@ export function LabKanbanBoard({
           // count reflects rendered units (not raw rows) — no ghost left behind.
           const units = unitsFor(col);
           return (
-            <StaticColumn key={col} col={col} count={units.length}>
+            <StaticColumn
+              key={col}
+              col={col}
+              count={units.length}
+              isDropOver={dragOverCol === col}
+              onCardDrop={handleDropCase}
+              onColDragOver={setDragOverCol}
+            >
               {units.length === 0 ? (
                 <p className="px-2 py-3 text-[11px] text-zinc-400">—</p>
               ) : (
@@ -629,6 +713,12 @@ export function LabKanbanBoard({
 
       <dialog
         ref={dialogRef}
+        onClick={(e) => {
+          // Click on the backdrop (the dialog element itself, outside the
+          // content) closes the card. Clicks inside the content bubble up with
+          // a different target, so they don't close it.
+          if (e.target === e.currentTarget) closeDialog();
+        }}
         className="w-full max-w-3xl rounded-lg border border-zinc-200 bg-white p-0 shadow-xl backdrop:bg-zinc-900/40"
       >
         {activeRow ? (

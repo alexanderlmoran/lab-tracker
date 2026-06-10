@@ -284,6 +284,14 @@ export function StepChecklist({
           {stepsToShow.slice(midpoint).map((step, i) =>
             renderStep(step, i + midpoint),
           )}
+          {/* Step 10 sits at the bottom of the right column, right after step 9. */}
+          <StageRow
+            label="10. Completed"
+            hint={c.archived_at ? "(archived — click to restore)" : "(archive to the Completed lane)"}
+            checked={Boolean(c.archived_at)}
+            pending={archiving}
+            onChange={onToggleCompleted}
+          />
         </div>
       </div>
       {siblingCount > 0 ? (
@@ -297,13 +305,6 @@ export function StepChecklist({
           Move all {siblingCount + 1} same-order cards together
         </label>
       ) : null}
-      <StageRow
-        label="10. Completed"
-        hint={c.archived_at ? "(archived — click to restore)" : "(archive to the Completed lane)"}
-        checked={Boolean(c.archived_at)}
-        pending={archiving}
-        onChange={onToggleCompleted}
-      />
       {error ? (
         <p className="mt-1 px-2 text-xs text-red-600" role="alert">
           {error}
