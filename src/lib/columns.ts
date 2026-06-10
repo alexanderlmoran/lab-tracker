@@ -59,21 +59,22 @@ export const COLUMN_LABEL: Record<ColumnKey, string> = {
   completed: "Completed",
 };
 
-// Step names read in the same vocabulary as the board columns they feed, so
-// the checklist and the lane a card sits in agree (e.g. step 3 → "Partial
-// Uploaded" lane, step 6/7 → the "ROF" lanes). Keep the column word first
-// ("Sample sent", "Partial uploaded", "ROF scheduled") and any email/where
-// detail after, matching COLUMN_LABEL above.
+// Each step is named after the BOARD COLUMN it moves the card into, so the
+// checklist reads like the lanes left-to-right (Alex, 2026-06-10). The column
+// name leads; the parenthetical clarifies the action / which email fires / the
+// Nadia + Allison touchpoints. Two steps share a column on purpose — partial-
+// and complete-received both sit in "Pending Upload"; steps 8 + 9 both close to
+// "Protocol received". Must match COLUMN_LABEL above.
 const STEP_LABELS: Record<StepNumber, string> = {
-  1: "Sample sent to lab",
-  2: "Partial results received",
-  3: "Partial uploaded → Email 2",
-  4: "Complete results received",
-  5: "Complete uploaded → Email 3",
-  6: "ROF scheduled in Zenoti",
-  7: "ROF done → Email 4",
-  8: "Protocol emailed to patient",
-  9: "ROF Allison email sent (she will proofread)",
+  1: "Sample Sent",
+  2: "Pending Upload (partial received)",
+  3: "Partial Uploaded (Email 2)",
+  4: "Pending Upload (complete received)",
+  5: "Complete Uploaded (Email 3 · Nadia alerted when all the patient's labs reach here)",
+  6: "ROF Scheduled (in Zenoti)",
+  7: "ROF Done (Email 4)",
+  8: "Protocol received (protocol emailed to patient)",
+  9: "Protocol received (Allison proofreads the ROF)",
 };
 
 const STEP_TO_COL: Record<StepNumber, keyof LabCase> = {
