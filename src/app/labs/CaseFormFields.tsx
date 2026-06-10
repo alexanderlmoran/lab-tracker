@@ -50,7 +50,9 @@ export function CaseFormFields({ initial }: { initial?: LabCase | null }) {
           Patient
         </h3>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <PatientPicker initial={initial} />
+          {/* DOB is editable here (edit-only form) and saves to the patient
+              record — all their cases + patients_seed (#23). */}
+          <PatientPicker initial={initial} editableDob />
         </div>
       </section>
 
@@ -188,10 +190,11 @@ export function CaseFormFields({ initial }: { initial?: LabCase | null }) {
         />
       </section>
 
-      {/* DOB / phone / address removed from the new-case form per UX
-          decision 2026-05-12 — fields stay in the DB for existing rows and
-          patient identity matching. Hidden inputs in PatientPicker carry
-          forward whatever the picker pre-loaded so edits don't clear them. */}
+      {/* Phone / address stay out of the form per UX decision 2026-05-12 —
+          fields remain in the DB for existing rows and patient identity
+          matching. Hidden inputs in PatientPicker carry forward whatever the
+          picker pre-loaded so edits don't clear them. (DOB is now editable
+          above on this edit form — #23.) */}
       <input type="hidden" name="patientAddress" value={v?.patient_address ?? ""} readOnly />
     </div>
   );

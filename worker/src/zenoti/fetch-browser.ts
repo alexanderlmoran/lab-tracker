@@ -153,6 +153,12 @@ export async function fetchZenotiLabAppointments(
     if (!labName) continue;
 
     const startAt = parseZenotiStart(r.starttime);
+    // TODO(#5): DOB is NOT in the setDate appointment payload (no birth field
+    // on ZenotiApptRow — confirmed during IV charting). We carry `zenotiGuestId`
+    // (r.userid), so a per-guest detail lookup (e.g. the guest-profile endpoint
+    // ApptExtV2 uses on appointment open) could backfill it. Until that HAR is
+    // captured, DOB is filled manually on the edit-case form (#23 → saves to
+    // the patient + patients_seed) or comes from patients_seed where known.
     out.push({
       zenotiAppointmentId: r.appointmentid,
       zenotiGuestId: r.userid,

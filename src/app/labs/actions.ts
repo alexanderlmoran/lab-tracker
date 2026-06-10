@@ -416,6 +416,17 @@ export async function updateLabCase(
     meta: { changes },
   });
 
+  // DOB belongs to the PATIENT, not this one case (#23). When it changes on the
+  // edit form, propagate it across all of the patient's non-deleted cases and
+  // into patients_seed so req forms / probes reuse it — same path the "edit
+  // patient" dialog uses. Keyed by the case's current email.
+  if ("patient_dob" in changes) {
+    await updatePatientAcrossCases({
+      currentEmail: parsed.data.patientEmail,
+      dobIso: parsed.data.patientDob,
+    });
+  }
+
   revalidatePath("/labs");
   revalidatePath(`/labs/${caseId}`);
   return { ok: true };

@@ -15,10 +15,21 @@ const labelClass = "block text-xs font-medium text-zinc-700";
  * Patient name + email inputs with a typeahead that searches existing
  * patients in our own lab_cases table. Selecting a suggestion fills name +
  * email (and carries forward the patient's phone / DOB silently as hidden
- * inputs so they're not lost on re-save). DOB / phone / address are not
- * user-editable on this form per UX decision 2026-05-12.
+ * inputs so they're not lost on re-save). Phone / address stay hidden per UX
+ * decision 2026-05-12.
+ *
+ * `editableDob` surfaces a visible DOB date input (backlog #23). On edit, the
+ * saved value propagates to the whole patient (all cases + patients_seed) so
+ * req forms etc. can reuse it — see updateLabCase. When false the DOB rides as
+ * a hidden input as before.
  */
-export function PatientPicker({ initial }: { initial?: LabCase | null }) {
+export function PatientPicker({
+  initial,
+  editableDob = false,
+}: {
+  initial?: LabCase | null;
+  editableDob?: boolean;
+}) {
   const v = initial ?? null;
   const listboxId = useId();
 
@@ -216,11 +227,30 @@ export function PatientPicker({ initial }: { initial?: LabCase | null }) {
         />
       </div>
 
-      {/* DOB / phone are no longer user-editable from the case form. Hidden
-          inputs preserve any value pre-filled from the typeahead (or from
-          the existing row on edit) so we don't blow away historical data. */}
+      {/* DOB: editable on the edit-case form (#23) so it saves to the patient
+          and feeds req forms; otherwise hidden to preserve a pre-filled value
+          without blowing away historical data. Phone stays hidden either way. */}
+      {editableDob ? (
+        <div className="sm:col-span-2">
+          <label htmlFor="patientDob" className={labelClass}>
+            Date of birth{" "}
+            <span className="font-normal text-zinc-400">
+              (saves to the patient — reused by req forms)
+            </span>
+          </label>
+          <input
+            id="patientDob"
+            name="patientDob"
+            type="date"
+            value={dob}
+            onChange={(e) => setDob(e.target.value)}
+            className={inputClass}
+          />
+        </div>
+      ) : (
+        <input type="hidden" name="patientDob" value={dob} readOnly />
+      )}
       <input type="hidden" name="patientPhone" value={phone} readOnly />
-      <input type="hidden" name="patientDob" value={dob} readOnly />
     </div>
   );
 }
