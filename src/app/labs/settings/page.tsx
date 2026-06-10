@@ -25,6 +25,7 @@ import { LabPortalsPanel } from "./LabPortalsPanel";
 import { ScrapersPanel } from "./ScrapersPanel";
 import { PortalRecipesPanel } from "./PortalRecipesPanel";
 import { ReqFormsPanel } from "./ReqFormsPanel";
+import { DuplicatesPanel } from "./DuplicatesPanel";
 import { SettingsTabs } from "./SettingsTabs";
 import { parseSettingsTab } from "./tab";
 import { BulkRecoveryTable } from "../BulkRecoveryTable";
@@ -63,6 +64,7 @@ export default async function SettingsPage({
   const wantsReqForms = isAdmin && tab === "reqforms";
   const wantsPatients = isAdmin && tab === "patients";
   const wantsTurnarounds = isAdmin && tab === "turnarounds";
+  const wantsDuplicates = isAdmin && tab === "duplicates";
 
   const [
     settings,
@@ -201,6 +203,15 @@ export default async function SettingsPage({
             description="Calibrate where each field is stamped on a lab's blank requisition PDF — drag, resize, add your own fields, then Save. Live on the next “Print req form”, no deploy. Test anytime, no open case needed."
           >
             <ReqFormsPanel />
+          </Section>
+        ) : null}
+
+        {wantsDuplicates ? (
+          <Section
+            title="Duplicate cases"
+            description="Genuine duplicate rows — same patient + lab + panel, more than one non-deleted case (usually Zenoti re-creating an appointment under a new id). Pick the one to keep; the rest are soft-deleted (recoverable from Deleted). Vibrant Zoomer sub-panels are NOT shown here — they're one order, collapsed on the board."
+          >
+            <DuplicatesPanel />
           </Section>
         ) : null}
 

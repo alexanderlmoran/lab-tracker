@@ -218,6 +218,64 @@ export async function POST(request: Request) {
       continue;
     }
 
+    // Duplicate-appointment prevention (backlog #1/#4): a case for the same
+    // patient + service + collection_date may already exist under a DIFFERENT
+    // (now-stale) appointment id — Zenoti re-created the appointment (reschedule
+    // / edit), which the appt-id lookup above misses, inserting a duplicate
+    // card. Same patient + same service on the SAME day is a re-creation, not a
+    // second draw, so RE-POINT the existing case onto the new appointment id
+    // instead of inserting. Re-pointing (vs skipping) keeps deletion-
+    // reconciliation correct — the new id is in the census, so the case isn't
+    // axed as an orphan. Conservative: requires a collection date + EXACTLY one
+    // match (ambiguous multi-match → fall through and insert, never guess).
+    if (appt.collectionDate) {
+      const normSvc = (v: string | null) => (v ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+      const svc = normSvc(appt.serviceName);
+      const { data: sameDayPool } = await db
+        .from("lab_cases")
+        .select("id, patient_name, lab_name, zenoti_service_name")
+        .eq("collection_date", appt.collectionDate)
+        .is("deleted_at", null);
+      const reMatches = (
+        (sameDayPool ?? []) as Array<{
+          id: string;
+          patient_name: string;
+          lab_name: string;
+          zenoti_service_name: string | null;
+        }>
+      ).filter(
+        (c) =>
+          sameName(c.patient_name, appt.patientFullName) &&
+          (c.zenoti_service_name && svc
+            ? normSvc(c.zenoti_service_name) === svc
+            : sameLab(c.lab_name, appt.labName)),
+      );
+      if (reMatches.length === 1) {
+        const adopteeId = reMatches[0].id;
+        await db
+          .from("lab_cases")
+          .update({
+            zenoti_appointment_id: appt.zenotiAppointmentId,
+            zenoti_guest_id: appt.zenotiGuestId,
+            zenoti_service_name: appt.serviceName,
+          })
+          .eq("id", adopteeId);
+        await db.from("lab_events").insert({
+          case_id: adopteeId,
+          kind: "case_adopted",
+          actor: "worker:zenoti-sync",
+          note: `Re-pointed to Zenoti appointment ${appt.zenotiAppointmentId} (re-created appt — same patient/service/date) • ${appt.serviceName}`,
+          meta: {
+            zenoti_appointment_id: appt.zenotiAppointmentId,
+            service_name: appt.serviceName,
+            reason: "duplicate-appointment-prevention",
+          },
+        });
+        results.push({ zenotiAppointmentId: appt.zenotiAppointmentId, caseId: adopteeId, created: false });
+        continue;
+      }
+    }
+
     const insertPayload = {
       patient_name: appt.patientFullName,
       patient_email: email,

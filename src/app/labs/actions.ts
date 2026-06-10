@@ -1842,3 +1842,137 @@ export async function getPatientHistory(
     emailLogs: (logsRes.data ?? []) as PatientHistory["emailLogs"],
   };
 }
+
+// ── Duplicate cleanup (backlog #4) ──────────────────────────────────────
+// A genuine duplicate = ≥2 NON-deleted cases for the same patient + same lab +
+// same panel (e.g. Zenoti re-created an appointment under a new id, leaving an
+// active card next to the original/archived one). NOT the same as Vibrant
+// Zoomer sub-panels (those share an accession but have DIFFERENT panels, so
+// they never land in one group here). Read-only finder + a click-gated resolve
+// that soft-deletes the extras (recoverable from Settings → Deleted).
+
+export type DuplicateMember = {
+  id: string;
+  patientName: string;
+  labLabel: string;
+  collectionDate: string | null;
+  tracking: string | null;
+  columnLabel: string;
+  archived: boolean;
+  createdAt: string;
+  stepsDone: number;
+};
+export type DuplicateGroup = {
+  key: string;
+  patientName: string;
+  patientEmail: string;
+  /** "high" when members share a tracking # or collection date (almost
+   * certainly the same physical order); "review" when they differ (could be a
+   * legitimate repeat of the same panel — eyeball the dates before merging). */
+  confidence: "high" | "review";
+  members: DuplicateMember[];
+  /** Most-advanced member (furthest column, then most steps, then newest). */
+  suggestedKeepId: string;
+};
+
+export async function findDuplicateGroups(): Promise<
+  ActionResult<{ groups: DuplicateGroup[] }>
+> {
+  await requireSignedIn();
+  const db = getSupabaseAdmin();
+  const { data, error } = await db.from("lab_cases").select("*").is("deleted_at", null);
+  if (error) return { ok: false, error: error.message };
+  const cases = (data ?? []) as LabCase[];
+
+  const { getColumnFor, COLUMN_LABEL, completedStepCount, LAB_BOARD_COLUMN_ORDER } =
+    await import("@/lib/columns");
+  const { labelForCase } = await import("@/lib/labs/label");
+
+  const norm = (v: string | null) => (v ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const groupKey = (c: LabCase) => `${norm(c.patient_email)}|${norm(c.lab_name)}|${norm(c.lab_panel)}`;
+
+  const buckets = new Map<string, LabCase[]>();
+  for (const c of cases) {
+    const k = groupKey(c);
+    const arr = buckets.get(k) ?? [];
+    arr.push(c);
+    buckets.set(k, arr);
+  }
+
+  const rank = (c: LabCase) => {
+    const col = LAB_BOARD_COLUMN_ORDER.indexOf(getColumnFor(c));
+    return col * 100 + completedStepCount(c);
+  };
+
+  const groups: DuplicateGroup[] = [];
+  for (const [key, members] of buckets) {
+    if (members.length < 2) continue;
+    // Confidence: do any two members share a tracking # or a collection date?
+    const trackings = members.map((m) => m.tracking_number).filter(Boolean) as string[];
+    const dates = members.map((m) => m.collection_date).filter(Boolean) as string[];
+    const dup = (arr: string[]) => new Set(arr).size < arr.length;
+    const confidence: "high" | "review" = dup(trackings) || dup(dates) ? "high" : "review";
+
+    const sorted = [...members].sort(
+      (a, b) => rank(b) - rank(a) || b.created_at.localeCompare(a.created_at),
+    );
+    groups.push({
+      key,
+      patientName: members[0].patient_name,
+      patientEmail: members[0].patient_email,
+      confidence,
+      suggestedKeepId: sorted[0].id,
+      members: sorted.map((c) => ({
+        id: c.id,
+        patientName: c.patient_name,
+        labLabel: labelForCase(c),
+        collectionDate: c.collection_date,
+        tracking: c.tracking_number,
+        columnLabel: COLUMN_LABEL[getColumnFor(c)],
+        archived: Boolean(c.archived_at),
+        createdAt: c.created_at,
+        stepsDone: completedStepCount(c),
+      })),
+    });
+  }
+  // High-confidence first, then most members.
+  groups.sort(
+    (a, b) =>
+      Number(b.confidence === "high") - Number(a.confidence === "high") ||
+      b.members.length - a.members.length,
+  );
+  return { ok: true, data: { groups } };
+}
+
+/** Soft-delete the chosen duplicate rows, keeping `keepId`. Recoverable from
+ * Settings → Deleted. Click-gated from the Duplicates panel — never automatic. */
+export async function resolveDuplicates(input: {
+  keepId: string;
+  removeIds: string[];
+}): Promise<ActionResult<{ removed: number }>> {
+  const user = await requireSignedIn();
+  const removeIds = [...new Set(input.removeIds)].filter((id) => id && id !== input.keepId);
+  if (removeIds.length === 0) return { ok: false, error: "Select at least one duplicate to remove." };
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("lab_cases")
+    .update({ deleted_at: new Date().toISOString() })
+    .in("id", removeIds)
+    .is("deleted_at", null)
+    .select("id");
+  if (error) return { ok: false, error: error.message };
+  const removed = (data ?? []).map((d) => (d as { id: string }).id);
+  if (removed.length > 0) {
+    await db.from("lab_events").insert(
+      removed.map((id) => ({
+        case_id: id,
+        kind: "case_deleted" as const,
+        actor: user.email ?? "admin",
+        note: `Removed as duplicate — kept case ${input.keepId}. Recoverable from Settings → Deleted.`,
+        meta: { duplicate_of: input.keepId },
+      })),
+    );
+  }
+  revalidatePath("/labs");
+  return { ok: true, data: { removed: removed.length } };
+}

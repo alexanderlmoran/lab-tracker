@@ -13,6 +13,7 @@ export type SettingsTab =
   | "reqforms"
   | "patients"
   | "turnarounds"
+  | "duplicates"
   | "archived"
   | "deleted";
 
@@ -26,6 +27,7 @@ export const SETTINGS_TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: "reqforms", label: "Req forms" },
   { key: "patients", label: "Patient seed" },
   { key: "turnarounds", label: "Turnarounds" },
+  { key: "duplicates", label: "Duplicates" },
   { key: "archived", label: "Archived" },
   { key: "deleted", label: "Deleted" },
 ];
@@ -40,6 +42,7 @@ export function parseSettingsTab(value: string | undefined): SettingsTab {
     case "reqforms":
     case "patients":
     case "turnarounds":
+    case "duplicates":
     case "archived":
     case "deleted":
       return value;
