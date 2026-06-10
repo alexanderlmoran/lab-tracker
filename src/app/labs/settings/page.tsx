@@ -24,6 +24,7 @@ import { EmailTemplatesPanel } from "./EmailTemplatesPanel";
 import { LabPortalsPanel } from "./LabPortalsPanel";
 import { ScrapersPanel } from "./ScrapersPanel";
 import { PortalRecipesPanel } from "./PortalRecipesPanel";
+import { ReqFormsPanel } from "./ReqFormsPanel";
 import { SettingsTabs } from "./SettingsTabs";
 import { parseSettingsTab } from "./tab";
 import { BulkRecoveryTable } from "../BulkRecoveryTable";
@@ -59,6 +60,7 @@ export default async function SettingsPage({
   const wantsDeleted = isAdmin && tab === "deleted";
   const wantsPortals = isAdmin && tab === "portals";
   const wantsScrapers = isAdmin && tab === "scrapers";
+  const wantsReqForms = isAdmin && tab === "reqforms";
   const wantsPatients = isAdmin && tab === "patients";
   const wantsTurnarounds = isAdmin && tab === "turnarounds";
 
@@ -191,6 +193,15 @@ export default async function SettingsPage({
               <ScrapersPanel rows={scrapers} />
             </Section>
           </>
+        ) : null}
+
+        {wantsReqForms ? (
+          <Section
+            title="Requisition forms"
+            description="Calibrate where each field is stamped on a lab's blank requisition PDF — drag, resize, add your own fields, then Save. Live on the next “Print req form”, no deploy. Test anytime, no open case needed."
+          >
+            <ReqFormsPanel />
+          </Section>
         ) : null}
 
         {wantsPatients && patientSeed ? (

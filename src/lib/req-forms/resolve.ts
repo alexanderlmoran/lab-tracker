@@ -103,12 +103,15 @@ export async function resolveReqForm(
   const sep = spec.dateSep ?? "/"; // forms with MM/DD/YYYY divider boxes space the digits
   const collectionDate = fmtDate(c.collection_date as string | null, sep);
 
-  let orderNumber = opts.orderNumber ?? "";
+  // The order/accession/sample # the staff entered lives in lab_external_ref
+  // (the "Accession #" field on the case). Pull it for EVERY mode — including
+  // Kennedy (manual) and DoctorsData (assign) — so a typed order # never gets
+  // dropped. Only synthesize a DD- ref from the tracking # when assign-mode has
+  // nothing entered. An explicit opts.orderNumber still wins.
+  const caseRef = (c.lab_external_ref as string | null)?.trim() ?? "";
+  let orderNumber = opts.orderNumber ?? caseRef;
   if (!orderNumber && spec.orderNumber === "assign") {
     orderNumber = c.tracking_number ? `DD-${String(c.tracking_number).slice(-8)}` : "";
-  }
-  if (!orderNumber && spec.orderNumber === "accession") {
-    orderNumber = (c.lab_external_ref as string | null) ?? "";
   }
 
   const data: ReqFormData = {

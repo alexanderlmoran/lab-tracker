@@ -41,13 +41,15 @@ function b64ToBytes(b64: string): Uint8Array {
 }
 
 export function ReqFormCalibrator({
-  caseId,
+  source,
   onBack,
   values,
   customVals,
   onValueChange,
 }: {
-  caseId: string;
+  // Calibrate from a case card ({ caseId } — previews the case's real values) or
+  // from Settings ({ templateKey } — any template, no case attached).
+  source: { caseId: string } | { templateKey: string };
   onBack: () => void;
   values?: Record<string, string | undefined>; // current dialog field values (your edits)
   customVals?: Record<string, string>; // current custom-field values
@@ -56,6 +58,8 @@ export function ReqFormCalibrator({
 }) {
   // captured once at mount — the values shown when you clicked Calibrate
   const live = useRef({ values: values ?? {}, customVals: customVals ?? {} });
+  // stable id for the load effect — the object identity of `source` isn't.
+  const sourceKey = "caseId" in source ? source.caseId : source.templateKey;
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [err, setErr] = useState<string | null>(null);
   const [label, setLabel] = useState("");
@@ -80,7 +84,7 @@ export function ReqFormCalibrator({
     setStatus("loading");
     setErr(null);
     setSaved(null);
-    const r = await loadReqFormCalibration(caseId);
+    const r = await loadReqFormCalibration(source);
     if (!r.ok) {
       setErr(r.error);
       setStatus("error");
@@ -129,7 +133,9 @@ export function ReqFormCalibrator({
       setErr(`[${phase}] ${e instanceof Error ? e.message : "Failed to render the template."}`);
       setStatus("error");
     }
-  }, [caseId]);
+    // key off the primitive id, not the (re-created each render) `source` object.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceKey]);
 
   useEffect(() => {
     void load();

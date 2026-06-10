@@ -7,7 +7,7 @@ import { fillReqForm } from "@/lib/req-forms/fill";
 import { specForLab, REQ_FORM_SPECS } from "@/lib/req-forms/specs";
 import { loadOverrides, saveOverrides, mergeFields, type FieldOverrides, type CustomField } from "@/lib/req-forms/overrides";
 import { expandStampFields } from "@/lib/req-forms/derive";
-import type { ReqFormData, ReqField } from "@/lib/req-forms/types";
+import type { ReqFormData, ReqField, ReqFormSpec } from "@/lib/req-forms/types";
 
 const BUCKET = "req-form-templates";
 
@@ -113,23 +113,31 @@ export async function generateReqForm(
   };
 }
 
-/** Load everything the visual calibrator needs: the blank template bytes (to
- *  render in-browser) plus each positioned field's current coords + sample text.
- *  Coords are the spec merged with any saved overrides — so calibration resumes
- *  from where it was left, not from the original spec. */
-export async function loadReqFormCalibration(caseId: string) {
+/** The req-form templates available to calibrate, for the Settings picker. */
+export async function listReqFormTemplates() {
   await requireSignedIn();
-  const r = await resolveReqForm(caseId);
-  if (!r) return { ok: false as const, error: "No requisition template for this lab yet." };
+  return {
+    ok: true as const,
+    templates: REQ_FORM_SPECS.map((s) => ({ templateKey: s.templateKey, label: s.label })),
+  };
+}
 
+/** Shared body of the calibrator load: given a resolved spec (+ optional real
+ *  case values), fetch the blank template and build the draggable item list.
+ *  `data` is the case's resolved values when calibrating from a card, or empty
+ *  in the Settings flow — calibText falls back to SAMPLE text either way. */
+async function buildCalibration(
+  spec: ReqFormSpec,
+  data: ReqFormData,
+) {
   const db = getSupabaseAdmin();
-  const { data: file, error } = await db.storage.from(BUCKET).download(r.spec.templateKey);
+  const { data: file, error } = await db.storage.from(BUCKET).download(spec.templateKey);
   if (error || !file) {
-    return { ok: false as const, error: `Template "${r.spec.templateKey}" not found: ${error?.message ?? "missing"}` };
+    return { ok: false as const, error: `Template "${spec.templateKey}" not found: ${error?.message ?? "missing"}` };
   }
   const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
-  const ov = await loadOverrides(r.spec.templateKey);
-  const fields = mergeFields(r.spec.fields, ov.fields);
+  const ov = await loadOverrides(spec.templateKey);
+  const fields = mergeFields(spec.fields, ov.fields);
 
   // Draggable items: every positioned spec field (sample text) + every custom
   // field the user added (shown by its label). The calibrator stamps these as
@@ -137,7 +145,7 @@ export async function loadReqFormCalibration(caseId: string) {
   const items = [
     ...Object.entries(fields).map(([field, pos]) => ({
       field: field as string,
-      text: calibText(field as ReqField, r.data),
+      text: calibText(field as ReqField, data),
       x: pos!.x,
       yTop: pos!.yTop,
       size: pos!.size ?? 26,
@@ -159,12 +167,32 @@ export async function loadReqFormCalibration(caseId: string) {
 
   return {
     ok: true as const,
-    label: r.spec.label,
-    templateKey: r.spec.templateKey,
+    label: spec.label,
+    templateKey: spec.templateKey,
     templateBase64: base64,
     fields: ov.fields, // saved position overrides, preserved on next save
     items,
   };
+}
+
+/** Load everything the visual calibrator needs: the blank template bytes (to
+ *  render in-browser) plus each positioned field's current coords + sample text.
+ *  Coords are the spec merged with any saved overrides — so calibration resumes
+ *  from where it was left, not from the original spec. Pass a `caseId` to
+ *  preview with the case's real values (from a card), or a `templateKey` to
+ *  calibrate any template from Settings with no case attached. */
+export async function loadReqFormCalibration(
+  arg: { caseId: string } | { templateKey: string },
+) {
+  await requireSignedIn();
+  if ("templateKey" in arg) {
+    const spec = REQ_FORM_SPECS.find((s) => s.templateKey === arg.templateKey);
+    if (!spec) return { ok: false as const, error: `Unknown template "${arg.templateKey}".` };
+    return buildCalibration(spec, {});
+  }
+  const r = await resolveReqForm(arg.caseId);
+  if (!r) return { ok: false as const, error: "No requisition template for this lab yet." };
+  return buildCalibration(r.spec, r.data);
 }
 
 /** Persist calibrated positions + custom fields for a template (validated against
