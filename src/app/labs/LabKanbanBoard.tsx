@@ -89,11 +89,26 @@ function LabCard({
     ? TRACKING_BADGE[row.tracking_status]
     : null;
 
+  // Chips live in a wrap row BELOW the text (not a right-side rail) so a narrow
+  // column — there are 10 lanes now — never squeezes the lab/patient text into
+  // one-word-per-line. Only render the row when there's at least one chip so
+  // sparse cards (TODO / Ready to ship) stay tight.
+  const hasChips =
+    hasPendingPdf ||
+    Boolean(row.tracking_status) ||
+    probablyReady ||
+    (dupSiblings?.length ?? 0) > 0 ||
+    counts.openAttempts > 0 ||
+    Boolean(countdown) ||
+    Boolean(destWarning) ||
+    counts.emailCount > 0 ||
+    stale.stale;
+
   return (
     <button
       type="button"
       onClick={() => onOpen(row, hasPendingPdf)}
-      className={`flex w-full gap-2 rounded-md border p-1.5 text-left shadow-sm transition-shadow hover:shadow ${
+      className={`flex w-full flex-col gap-1 rounded-md border p-1.5 text-left shadow-sm transition-shadow hover:shadow ${
         hasPendingPdf
           ? "border-amber-400 bg-amber-50"
           : probablyReady
@@ -101,7 +116,7 @@ function LabCard({
             : attemptCardClasses(counts.openAttempts)
       }`}
     >
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <div className="flex min-w-0 flex-col gap-0.5">
         <p className="truncate text-[13px] font-medium leading-tight text-zinc-900">
           {labLabel}
         </p>
@@ -109,14 +124,14 @@ function LabCard({
           {formatPersonName(row.patient_name)}
         </p>
         {expected || row.tracking_number || row.pickup_confirmation ? (
-          <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-zinc-400">
-            {expected ? <span>↳ {expected}</span> : null}
+          <div className="flex flex-col gap-0.5 text-[10px] text-zinc-400">
+            {expected ? <span className="truncate">↳ {expected}</span> : null}
             {row.tracking_number ? (
               <span className="truncate">TRK {row.tracking_number}</span>
             ) : null}
             {row.pickup_confirmation ? (
               <span
-                className="text-emerald-600"
+                className="truncate text-emerald-600"
                 title={`Pickup scheduled${row.pickup_scheduled_date ? ` for ${row.pickup_scheduled_date}` : ""} (${(row.pickup_carrier ?? "fedex").toUpperCase()})`}
               >
                 📦 {row.pickup_confirmation}
@@ -126,75 +141,74 @@ function LabCard({
         ) : null}
       </div>
 
-      <div className="flex shrink-0 flex-col items-end gap-0.5">
-        {hasPendingPdf ? (
-          <RailChip
-            className="border-amber-400 bg-amber-100 font-semibold text-amber-800"
-            title="Result PDF staged — click to review & approve"
-          >
-            review
-          </RailChip>
-        ) : null}
-        {trackingMeta ? (
-          <RailChip
-            className={trackingMeta.className}
-            title={row.tracking_status_detail ?? undefined}
-          >
-            {trackingMeta.label}
-          </RailChip>
-        ) : row.tracking_status ? (
-          <RailChip className={CHIP.muted}>{row.tracking_status}</RailChip>
-        ) : null}
-        {probablyReady ? (
-          <RailChip
-            className={CHIP.state}
-            title="Likely ready — check lab portal"
-          >
-            ready?
-          </RailChip>
-        ) : null}
-        {dupSiblings && dupSiblings.length > 0 ? (
-          <RailChip
-            className="border-purple-300 bg-purple-50 text-purple-700"
-            title={`Same ACC# ${row.lab_external_ref} as ${dupSiblings.length} other card(s) for this patient — likely one lab split into multiple cards (e.g. PT/PTT/PT-INR). Tracking#: ${dupSiblings.map((s) => s.tracking_number ?? "—").join(", ")}. Merge/dismiss the extras.`}
-          >
-            dup ×{dupSiblings.length + 1}
-          </RailChip>
-        ) : null}
-        <AttemptRailChip openAttempts={counts.openAttempts} />
-        {countdown ? (
-          <RailChip
-            className={
-              countdown.tone === "overdue"
-                ? CHIP.alert
-                : countdown.tone === "due"
-                  ? CHIP.caution
-                  : CHIP.good
-            }
-            title={
-              countdown.tone === "overdue"
-                ? `Expected by ${formatShortDate(row.expected_result_at_max)} — past`
-                : `Expected by ${formatShortDate(row.expected_result_at_max)}`
-            }
-          >
-            {countdown.label}
-          </RailChip>
-        ) : null}
-        {destWarning ? (
-          <RailChip className={CHIP.warn} title={destWarning}>
-            wrong city?
-          </RailChip>
-        ) : null}
-        <EmailRailChip emailCount={counts.emailCount} />
-        {stale.stale ? (
-          <RailChip
-            className={CHIP.caution}
-            title={`No progress in ${stale.daysSinceProgress} days`}
-          >
-            {stale.daysSinceProgress}d
-          </RailChip>
-        ) : null}
-      </div>
+      {hasChips ? (
+        <div className="flex flex-wrap items-center gap-1">
+          {hasPendingPdf ? (
+            <RailChip
+              className="border-amber-400 bg-amber-100 font-semibold text-amber-800"
+              title="Result PDF staged — click to review & approve"
+            >
+              review
+            </RailChip>
+          ) : null}
+          {trackingMeta ? (
+            <RailChip
+              className={trackingMeta.className}
+              title={row.tracking_status_detail ?? undefined}
+            >
+              {trackingMeta.label}
+            </RailChip>
+          ) : row.tracking_status ? (
+            <RailChip className={CHIP.muted}>{row.tracking_status}</RailChip>
+          ) : null}
+          {probablyReady ? (
+            <RailChip className={CHIP.state} title="Likely ready — check lab portal">
+              ready?
+            </RailChip>
+          ) : null}
+          {dupSiblings && dupSiblings.length > 0 ? (
+            <RailChip
+              className="border-purple-300 bg-purple-50 text-purple-700"
+              title={`Same ACC# ${row.lab_external_ref} as ${dupSiblings.length} other card(s) for this patient — likely one lab split into multiple cards (e.g. PT/PTT/PT-INR). Tracking#: ${dupSiblings.map((s) => s.tracking_number ?? "—").join(", ")}. Merge/dismiss the extras.`}
+            >
+              dup ×{dupSiblings.length + 1}
+            </RailChip>
+          ) : null}
+          <AttemptRailChip openAttempts={counts.openAttempts} />
+          {countdown ? (
+            <RailChip
+              className={
+                countdown.tone === "overdue"
+                  ? CHIP.alert
+                  : countdown.tone === "due"
+                    ? CHIP.caution
+                    : CHIP.good
+              }
+              title={
+                countdown.tone === "overdue"
+                  ? `Expected by ${formatShortDate(row.expected_result_at_max)} — past`
+                  : `Expected by ${formatShortDate(row.expected_result_at_max)}`
+              }
+            >
+              {countdown.label}
+            </RailChip>
+          ) : null}
+          {destWarning ? (
+            <RailChip className={CHIP.warn} title={destWarning}>
+              wrong city?
+            </RailChip>
+          ) : null}
+          <EmailRailChip emailCount={counts.emailCount} />
+          {stale.stale ? (
+            <RailChip
+              className={CHIP.caution}
+              title={`No progress in ${stale.daysSinceProgress} days`}
+            >
+              {stale.daysSinceProgress}d
+            </RailChip>
+          ) : null}
+        </div>
+      ) : null}
     </button>
   );
 }
@@ -216,7 +230,11 @@ function MergedDupCard({
   // rows arrive in column order (leftmost first); open the most-advanced one so
   // the dialog reflects where the order actually is.
   const lead = rows[rows.length - 1];
-  const trackings = rows.map((r) => r.tracking_number).filter(Boolean) as string[];
+  // Sub-panels of one physical order usually share ONE tracking # — dedupe so
+  // the card shows "TRK 7917…" once, not the same number repeated ×3.
+  const trackings = [
+    ...new Set(rows.map((r) => r.tracking_number).filter(Boolean) as string[]),
+  ];
   return (
     <button
       type="button"
