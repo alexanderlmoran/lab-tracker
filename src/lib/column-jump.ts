@@ -29,6 +29,15 @@ const COLUMN_DEFINING_STEPS: Record<ColumnKey, StepNumber[]> = {
   completed: [],
 };
 
+// A column is a valid "Move to" target only if reaching it ticks a step. The
+// derived lanes — untouched (TODO), ready_to_ship (auto on tracking #), and
+// pending_upload (auto on PDF staged / partial received) — have no defining
+// step, so jumping to them does nothing. Hide them from the move menu instead
+// of offering a dead option (you reach Ready to ship by adding a tracking #).
+export function isColumnJumpTarget(col: ColumnKey): boolean {
+  return (COLUMN_DEFINING_STEPS[col]?.length ?? 0) > 0;
+}
+
 export type StepPlan = {
   step: StepNumber;
   isEmailStep: boolean;

@@ -11,6 +11,7 @@ import {
   getColumnFor,
   type ColumnKey,
 } from "@/lib/columns";
+import { isColumnJumpTarget } from "@/lib/column-jump";
 import { CaseDetail } from "./CaseDetail";
 import { archiveLabCase } from "./actions";
 import { formatPersonName } from "@/lib/format";
@@ -179,7 +180,7 @@ export function CaseCard({
                     </button>
                     {moveSubOpen ? (
                       <div className="absolute left-full top-0 z-20 ml-1 w-44 overflow-hidden rounded-md border border-zinc-200 bg-white shadow-lg">
-                        {COLUMN_ORDER.map((col) => (
+                        {COLUMN_ORDER.filter(isColumnJumpTarget).map((col) => (
                           <button
                             key={col}
                             type="button"
