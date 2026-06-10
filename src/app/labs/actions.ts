@@ -243,7 +243,31 @@ export async function createLabCases(
   }));
 
   const db = getSupabaseAdmin();
-  const { data, error } = await db.from("lab_cases").insert(rows).select("id");
+
+  // Dedupe guard (backlog #4 — true duplicate rows): never create a case the
+  // patient already has (same lab + panel, not deleted). The Manage-labs grid
+  // already blocks this client-side; this is the server-side safety net that
+  // also covers the New-case form. Same-lab DIFFERENT-panel rows (Vibrant
+  // Zoomer sub-panels) are allowed — only an exact lab+panel repeat is dropped.
+  const norm = (v: string | null) => (v ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const lpKey = (labName: string, panel: string | null) => `${norm(labName)}|${norm(panel)}`;
+  const { data: existingForPatient } = await db
+    .from("lab_cases")
+    .select("lab_name, lab_panel")
+    .eq("patient_email", patient.data.patientEmail)
+    .is("deleted_at", null);
+  const existsKey = new Set(
+    (existingForPatient ?? []).map((c) => lpKey(c.lab_name as string, c.lab_panel as string | null)),
+  );
+  const fresh = rows.filter((r) => !existsKey.has(lpKey(r.lab_name, r.lab_panel)));
+  if (fresh.length === 0) {
+    return {
+      ok: false,
+      error: "That lab already exists for this patient — nothing new to add.",
+    };
+  }
+
+  const { data, error } = await db.from("lab_cases").insert(fresh).select("id");
   if (error || !data) {
     return { ok: false, error: error?.message ?? "Insert failed" };
   }

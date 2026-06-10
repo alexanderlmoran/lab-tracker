@@ -390,7 +390,11 @@ export function LabKanbanBoard({
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [activeRow, setActiveRow] = useState<LabCase | null>(null);
   const [autoReview, setAutoReview] = useState(false);
-  const [mergeDupes, setMergeDupes] = useState(false);
+  // Default ON: a same-accession order (Vibrant Zoomer split into Foundational/
+  // Gut/Toxin/… panel cards) collapses to ONE card out of the box, so the board
+  // isn't cluttered with what reads as duplicates. The toggle stays so staff can
+  // expand a group to act on a single panel.
+  const [mergeDupes, setMergeDupes] = useState(true);
 
   // Board-wide merged-group plan. A same-accession group is ONE physical order
   // split across cards; when those cards land in DIFFERENT columns (only one
