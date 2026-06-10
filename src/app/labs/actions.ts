@@ -1884,12 +1884,24 @@ export async function findDuplicateGroups(): Promise<
   if (error) return { ok: false, error: error.message };
   const cases = (data ?? []) as LabCase[];
 
-  const { getColumnFor, COLUMN_LABEL, completedStepCount, LAB_BOARD_COLUMN_ORDER } =
-    await import("@/lib/columns");
+  const { getColumnFor, COLUMN_LABEL, completedStepCount } = await import("@/lib/columns");
   const { labelForCase } = await import("@/lib/labs/label");
 
   const norm = (v: string | null) => (v ?? "").toLowerCase().replace(/\s+/g, " ").trim();
-  const groupKey = (c: LabCase) => `${norm(c.patient_email)}|${norm(c.lab_name)}|${norm(c.lab_panel)}`;
+  // CRITICAL: group on the EFFECTIVE label (labelForCase, which folds in
+  // zenoti_service_name), NOT raw lab_name/lab_panel. Zenoti multi-panel tests
+  // store lab_name="Vibrant", lab_panel=null and keep the panel in
+  // zenoti_service_name — so Foundational/Gut/Toxin share lab_name+lab_panel but
+  // are DIFFERENT panels. Grouping on raw columns would lump them and offer to
+  // delete real labs. The discriminator (same tracking # = same shipment, else
+  // same collection_date = same draw day) keeps legitimately-separate orders of
+  // the same panel apart; cases with NEITHER are never grouped.
+  const discriminator = (c: LabCase) => c.tracking_number?.trim() || c.collection_date || null;
+  const groupKey = (c: LabCase) => {
+    const disc = discriminator(c);
+    if (!disc) return `solo:${c.id}`; // unique → never groups
+    return `${norm(c.patient_email)}|${norm(labelForCase(c))}|${disc}`;
+  };
 
   const buckets = new Map<string, LabCase[]>();
   for (const c of cases) {
@@ -1899,19 +1911,18 @@ export async function findDuplicateGroups(): Promise<
     buckets.set(k, arr);
   }
 
-  const rank = (c: LabCase) => {
-    const col = LAB_BOARD_COLUMN_ORDER.indexOf(getColumnFor(c));
-    return col * 100 + completedStepCount(c);
-  };
+  // Keeper = the most COMPLETE record: most workflow steps done dominates (a
+  // 9-step Protocol-received case beats a 1-step phantom that merely got
+  // archived). Archived breaks ties (it's the already-filed copy), then newest.
+  // NOT column index — "Completed" (archived) is a bucket, not progress.
+  const rank = (c: LabCase) => completedStepCount(c) * 10 + (c.archived_at ? 1 : 0);
 
   const groups: DuplicateGroup[] = [];
   for (const [key, members] of buckets) {
-    if (members.length < 2) continue;
-    // Confidence: do any two members share a tracking # or a collection date?
-    const trackings = members.map((m) => m.tracking_number).filter(Boolean) as string[];
-    const dates = members.map((m) => m.collection_date).filter(Boolean) as string[];
-    const dup = (arr: string[]) => new Set(arr).size < arr.length;
-    const confidence: "high" | "review" = dup(trackings) || dup(dates) ? "high" : "review";
+    if (key.startsWith("solo:") || members.length < 2) continue;
+    // Grouped by a shared tracking # (same physical shipment) → high confidence;
+    // grouped only by collection date (no tracking) → review.
+    const confidence: "high" | "review" = members[0].tracking_number?.trim() ? "high" : "review";
 
     const sorted = [...members].sort(
       (a, b) => rank(b) - rank(a) || b.created_at.localeCompare(a.created_at),
