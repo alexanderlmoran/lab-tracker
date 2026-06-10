@@ -971,6 +971,17 @@ export async function setStepCompleted(input: {
     }
   }
 
+  // NOTE (backlog #11): the patient-facing tracker emails (sample_sent /
+  // partial_uploaded / complete_uploaded / rof_followup) are intentionally
+  // NOT auto-dispatched here — they fire only via the explicit Send-email
+  // button in StepChecklist (with its confirm dialog). The per-case
+  // `auto_send_emails` flag is currently vestigial (stored + shown, never
+  // read for dispatch); wiring it to auto-send on toggle is a product
+  // decision left to the owner because the flag defaults true on every
+  // existing/imported/worker-created case, so flipping it live would blast
+  // patient emails on historical step toggles. The INTERNAL staff emails
+  // (Nadia @ step 5, Allison @ step 6) do auto-fire above, as designed.
+
   revalidatePath("/labs");
   revalidatePath(`/labs/${caseId}`);
   return { ok: true };

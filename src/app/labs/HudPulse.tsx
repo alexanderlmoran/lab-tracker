@@ -10,6 +10,7 @@ import {
 } from "@/lib/columns";
 import { UserChip } from "./UserChip";
 import { logoutAction } from "../login/actions";
+import { countUnreadInbox } from "@/lib/inbound/unread-count";
 import "./hud.css";
 
 const COLUMN_COLOR_VAR: Record<ColumnKey, string> = {
@@ -50,8 +51,12 @@ export type HudPulseProps = {
   cases?: LabCase[];
 };
 
-export function HudPulse({ user, cases }: HudPulseProps) {
+export async function HudPulse({ user, cases }: HudPulseProps) {
   const hasCases = Array.isArray(cases);
+  // Unread/actionable inbound lab emails — surfaced as a badge on the Inbox
+  // nav item so a new email (Allison/patient labs, Kennedy, notification-only
+  // portals) is visible from every page, not just /labs/inbox (backlog #15).
+  const unreadInbox = await countUnreadInbox();
   const safeCases = cases ?? [];
   // ── Stats ─────────────────────────────────────────────────────────
   // Bucket every visible case by column. "Active" excludes the terminal
@@ -94,7 +99,7 @@ export function HudPulse({ user, cases }: HudPulseProps) {
   // lab-portal links still live in Settings tabs.
   const navItems: Array<{ href: string; label: string; badge?: number; show: boolean }> = [
     { href: "/labs", label: "Home", show: true },
-    { href: "/labs/inbox", label: "Inbox", show: true },
+    { href: "/labs/inbox", label: "Inbox", badge: unreadInbox, show: true },
     { href: "/labs/import", label: "Import", show: true },
     { href: "/labs/patients", label: "Patients", show: true },
     { href: "/labs/analytics", label: "Analytics", show: canManage },

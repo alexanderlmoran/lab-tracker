@@ -15,6 +15,8 @@ import { SchedulePickupButton } from "./SchedulePickupButton";
 import { HudPulse } from "./HudPulse";
 import { LabsLegend } from "./LabsLegend";
 import { CaseDialog } from "./CaseDialog";
+import { InboxNotice } from "./InboxNotice";
+import { countUnreadInbox } from "@/lib/inbound/unread-count";
 
 export const dynamic = "force-dynamic";
 
@@ -83,6 +85,10 @@ export default async function LabsPage({
     Array.from(new Set([...labBoardCases, ...focusedCases].map((c) => c.id))),
   ).catch(() => [] as string[]);
 
+  // New inbound lab emails (backlog #15) — surfaced as a dismissible banner on
+  // the main board in addition to the always-on Inbox nav badge in HudPulse.
+  const unreadInbox = await countUnreadInbox();
+
   const isPatientFocus = tab === "patients";
   const focusedPatientName = focusedCases[0]?.patient_name ?? null;
   const focusedRows = focusedCases.map((c) => ({
@@ -95,6 +101,7 @@ export default async function LabsPage({
       <HudPulse user={user} cases={cases} />
 
       <main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col px-4 pb-16 pt-3 lg:min-h-0 lg:pb-4">
+        <InboxNotice count={unreadInbox} />
         <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1.5">
           <CaseDialog
             mode="create"

@@ -46,16 +46,23 @@ export async function maybeFireNadiaAllReceived(
   const siblings = await fetchActiveSiblings(db, self.patient_email);
   if (siblings.length === 0) return;
 
-  // Only fire when EVERY active lab for this patient is at step 5.
-  const allDone = siblings.every((c) => c.step5_complete_uploaded);
-  if (!allDone) return;
+  // The patient's group = all their active siblings. Split into received
+  // (at step 5) and outstanding (not yet there) so the email reflects the
+  // whole group's state, not just the one lab that flipped (backlog #12).
+  const received = siblings.filter((c) => c.step5_complete_uploaded);
+  const outstanding = siblings.filter((c) => !c.step5_complete_uploaded);
+
+  // Only fire when EVERY active lab for this patient is at step 5 — outreach
+  // shouldn't start mid-batch. The outstanding set is computed anyway so the
+  // email body is correct if this gate is ever relaxed to fire earlier.
+  if (outstanding.length > 0) return;
 
   // Skip if there's already an outstanding (unconfirmed) Nadia token on any
   // sibling — we only want one outreach email per "batch complete" moment.
-  const hasOutstanding = siblings.some(
+  const hasOutstandingToken = siblings.some(
     (c) => c.nadia_confirm_token && !c.nadia_confirmed_at,
   );
-  if (hasOutstanding) return;
+  if (hasOutstandingToken) return;
 
   const token = crypto.randomUUID();
   const now = new Date();
@@ -74,7 +81,11 @@ export async function maybeFireNadiaAllReceived(
     })
     .in("id", siblingIds);
 
-  const result = await sendNadiaAllReceived({ cases: siblings, token });
+  const result = await sendNadiaAllReceived({
+    cases: received,
+    outstandingCases: outstanding,
+    token,
+  });
 
   await db.from("lab_events").insert(
     siblingIds.map((id) => ({
@@ -85,6 +96,7 @@ export async function maybeFireNadiaAllReceived(
         emailKind: "nadia_all_received",
         token,
         siblingCount: siblings.length,
+        outstandingCount: outstanding.length,
         ...(result.ok ? {} : { error: result.error }),
       },
     })),

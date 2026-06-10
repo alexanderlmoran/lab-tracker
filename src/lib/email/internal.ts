@@ -106,7 +106,11 @@ async function dispatch(args: {
 }
 
 export async function sendNadiaAllReceived(args: {
+  /** The patient's labs that are received & uploaded (at step 5). */
   cases: LabCase[];
+  /** The patient group's labs still outstanding (not yet step 5). Empty
+   * when the whole batch is complete; surfaced so Nadia sees what remains. */
+  outstandingCases?: LabCase[];
   token: string;
 }): Promise<DispatchResult> {
   if (args.cases.length === 0) return { ok: false, error: "No cases" };
@@ -118,6 +122,7 @@ export async function sendNadiaAllReceived(args: {
     practiceAddress: ctx.practiceAddress,
     patientName: first.patient_name,
     labLabels: args.cases.map(labLabelFor),
+    outstandingLabels: (args.outstandingCases ?? []).map(labLabelFor),
     confirmUrl,
   });
   const html = await render(element, { pretty: false });

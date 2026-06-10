@@ -38,25 +38,52 @@ export function NadiaAllReceived(
     practiceAddress?: string | null;
     patientName: string;
     labLabels: string[];
+    /** Labs in the patient's group that are NOT yet at step 5 (still
+     * outstanding). Empty when the whole batch is complete. Surfaced so
+     * Nadia sees the group's remaining work, not just the confirm link. */
+    outstandingLabels: string[];
     confirmUrl: string;
   },
 ) {
+  const allDone = props.outstandingLabels.length === 0;
   return (
     <Layout
-      preview="All labs received — please confirm scheduling outreach"
+      preview={
+        allDone
+          ? "All labs received — please confirm scheduling outreach"
+          : "Labs received — outstanding labs still pending for this patient"
+      }
       practiceName={props.practiceName}
       practiceAddress={props.practiceAddress}
     >
       <Text style={styles.body}>Hi Nadia,</Text>
       <Text style={styles.body}>
-        All labs for <strong>{props.patientName}</strong> have been received
-        and uploaded. Please reach out to schedule their review of results
-        (virtual or in-person) with the practitioner.
+        {allDone ? (
+          <>
+            All labs for <strong>{props.patientName}</strong> have been
+            received and uploaded. Please reach out to schedule their review of
+            results (virtual or in-person) with the practitioner.
+          </>
+        ) : (
+          <>
+            Labs for <strong>{props.patientName}</strong> have been received and
+            uploaded. A few labs in their group are still outstanding — please
+            reach out to schedule their review once the remaining results land.
+          </>
+        )}
       </Text>
-      <Text style={styles.body}>Labs included:</Text>
+      <Text style={styles.body}>Labs received &amp; uploaded:</Text>
       <Text style={styles.body}>
         {props.labLabels.map((l) => `• ${l}`).join("\n")}
       </Text>
+      {!allDone ? (
+        <>
+          <Text style={styles.body}>Still outstanding for this patient:</Text>
+          <Text style={styles.body}>
+            {props.outstandingLabels.map((l) => `• ${l}`).join("\n")}
+          </Text>
+        </>
+      ) : null}
       <Text style={styles.body}>
         Once outreach has started, click below to confirm so the case moves
         forward:
