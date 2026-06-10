@@ -306,6 +306,38 @@ export function trackingDestinationWarning(args: {
 }
 
 /**
+ * Staged completion-check cadence for partial-returning labs (Access).
+ *
+ * Access drips a partial first, then back-fills the complete panel over the
+ * next ~2 weeks. Once a partial lands (step2 received) the case otherwise stays
+ * in the scrape feed EVERY loop until the complete panel arrives — needlessly
+ * hammering the portal for days. Instead we re-check only on a staged cadence
+ * after the first partial: ~day 2, the day 4–7 window, and ~day 14. Outside
+ * those windows the partial-only case is skipped, so the loop rests.
+ *
+ * Days are counted from `partialAt` (when the first partial PDF was attached).
+ * Returns `true` when `now` falls in one of the staged check windows OR past
+ * the final stage (day 14+) so a late completion still gets pulled rather than
+ * abandoned. The hourly scrape loop calls this through the open-cases gate; it
+ * is NOT a separate scheduler — it just narrows the existing feed.
+ */
+export function partialCompletionCheckDue(
+  partialAt: Date,
+  now: Date = new Date(),
+): boolean {
+  const elapsedDays = (now.getTime() - partialAt.getTime()) / 86_400_000;
+  // Negative (clock skew / future timestamp): treat as just-arrived → check.
+  if (elapsedDays < 0) return true;
+  // Day 2 ± half a day, the day 4–7 window, then day 14 onward (open-ended so a
+  // delayed complete panel is still recovered instead of silently dropped).
+  return (
+    (elapsedDays >= 1.5 && elapsedDays < 2.5) ||
+    (elapsedDays >= 4 && elapsedDays <= 7) ||
+    elapsedDays >= 14
+  );
+}
+
+/**
  * Compute an expected result-date range from a step1_sample_sent_at date and a
  * lab catalog entry. Returns nulls when the entry has no turnaround estimate.
  */

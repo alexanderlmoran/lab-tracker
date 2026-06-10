@@ -13,7 +13,11 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { sameLab } from "@/lib/scrapers/normalize-lab";
-import { findLabByName, predictResultDates } from "@/lib/labs/catalog";
+import {
+  findLabByName,
+  predictResultDates,
+  partialCompletionCheckDue,
+} from "@/lib/labs/catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -114,9 +118,58 @@ export async function GET(request: Request) {
     return !!min && min <= today && (!max || max >= graceFloor);
   };
 
-  const cases = ((data ?? []) as Row[])
-    .filter((c) => sameLab(c.lab_name, lab))
-    .filter((c) => c.step4_complete_received || c.step2_partial_received || inResultWindow(c))
+  const rows = ((data ?? []) as Row[]).filter((c) => sameLab(c.lab_name, lab));
+
+  // Staged completion re-checks — Access only (backlog #20). Access drips a
+  // partial first then back-fills the complete panel over ~2 weeks. Once a
+  // partial has landed (step2 true, step4 false) the case otherwise stays in the
+  // scrape feed EVERY loop until the complete panel arrives — needlessly
+  // hammering the portal. Instead we re-check only on a staged cadence after the
+  // first partial (~day 2, day 4–7, then day 14+), anchored on when the partial
+  // PDF actually arrived. Scoped to the Access feed so other drip labs (Vibrant
+  // Zoomers) keep their prior always-include behavior.
+  const stageAccessPartials = sameLab(lab, "Access");
+  const partialOnlyIds = stageAccessPartials
+    ? rows
+        .filter((c) => c.step2_partial_received && !c.step4_complete_received)
+        .map((c) => c.id)
+    : [];
+  const partialAtById = new Map<string, Date>();
+  if (partialOnlyIds.length > 0) {
+    const { data: pdfRows } = await db
+      .from("lab_case_pdfs")
+      .select("case_id, attached_at")
+      .in("case_id", partialOnlyIds)
+      .eq("is_partial", true)
+      .is("superseded_at", null)
+      .order("attached_at", { ascending: false });
+    for (const p of (pdfRows ?? []) as { case_id: string; attached_at: string }[]) {
+      // Rows are newest-first; keep the FIRST partial seen per case (its most
+      // recent partial = the cadence anchor).
+      if (!partialAtById.has(p.case_id)) {
+        partialAtById.set(p.case_id, new Date(p.attached_at));
+      }
+    }
+  }
+
+  // Is a partial-only case due for a completion re-check right now? Off the
+  // Access feed (or when a partial was marked by hand with no PDF anchor) we
+  // keep the old always-include behavior so nothing is silently dropped.
+  const completionCheckDue = (c: Row): boolean => {
+    if (!stageAccessPartials) return true;
+    const partialAt = partialAtById.get(c.id);
+    if (!partialAt) return true;
+    return partialCompletionCheckDue(partialAt);
+  };
+
+  const cases = rows
+    .filter((c) =>
+      c.step4_complete_received
+        ? true
+        : c.step2_partial_received
+          ? completionCheckDue(c)
+          : inResultWindow(c),
+    )
     .map((c) => ({
       caseId: c.id,
       patientName: c.patient_name,
