@@ -343,6 +343,7 @@ export function LabKanbanBoard({
 
   const grouped: Record<ColumnKey, LabCase[]> = {
     untouched: [],
+    ready_to_ship: [],
     sample_sent: [],
     partial_results: [],
     complete_results: [],

@@ -1,48 +1,37 @@
-// Pickup lifecycle predicates — which cards still need a carrier pickup
-// booked, and which have one booked that the carrier hasn't honored yet.
-// Shared by the Schedule-pickup button (candidate list + header count) and the
-// Tracking board's "Pending pickup" column so the two never disagree.
+// Pickup / ready-to-ship lifecycle predicates — the single source of truth for
+// "which cards have a sample packed and waiting at the clinic." Shared by the
+// `ready_to_ship` kanban column (getColumnFor), the Schedule-pickup button, and
+// the Tracking board's "Pending pickup" column so they never disagree.
+//
+// THE RULE: a card is "ready to ship" once a tracking # (the return label) is
+// attached but step 1 ("Sample sent") hasn't ticked yet. Step 1 ticks when
+// FedEx actually scans the package — refresh-core advances it on PU/in_transit
+// (and on delivery). Entering a tracking # NO LONGER ticks step 1 (that auto-
+// tick was decoupled), which is exactly what lets a card rest in this state.
+//
+// Why not gate on tracking_status? FedEx purges history after ~90 days, leaving
+// long-sent cards at status "unknown" — keying off that made already-shipped
+// cards (and kit-out tracking numbers) look ready, which was the "Schedule
+// pickup (109)" bug. Step 1 is the durable workflow signal; tracking_status is
+// the volatile carrier signal.
 
-import type { LabCase, TrackingStatus } from "@/lib/types";
+import type { LabCase } from "@/lib/types";
 
-// Statuses meaning the package has NOT been scanned into the carrier network.
-// "unknown" covers both never-polled labels and old shipments FedEx has purged
-// (~90 days), which is why awaitingPickup() also checks the workflow steps.
-const NOT_IN_NETWORK = new Set<TrackingStatus | null>([null, "unknown", "pre_transit"]);
+type ShipState = Pick<LabCase, "tracking_number" | "step1_sample_sent">;
+type LifecycleState = ShipState &
+  Pick<LabCase, "archived_at" | "deleted_at" | "pickup_confirmation">;
 
-function notInNetwork(c: Pick<LabCase, "tracking_status" | "tracking_delivered_at">): boolean {
-  return NOT_IN_NETWORK.has(c.tracking_status ?? null) && !c.tracking_delivered_at;
+/** Sample packed with a return label, not yet handed to / scanned by the carrier. */
+export function isReadyToShip(c: ShipState): boolean {
+  return Boolean(c.tracking_number) && !c.step1_sample_sent;
 }
 
-// Results came back → the sample reached the lab regardless of what tracking
-// says (FedEx purges history, leaving stale "unknown" statuses on old cards).
-function resultsAlreadyReceived(c: LabCase): boolean {
-  return (
-    c.step2_partial_received ||
-    c.step3_partial_uploaded ||
-    c.step4_complete_received ||
-    c.step5_complete_uploaded ||
-    c.step6_rof_scheduled ||
-    c.step7_rof_completed ||
-    c.step8_protocol_emailed ||
-    c.step9_sales_followup
-  );
+/** Ready to ship and no pickup booked yet → a candidate for "Schedule pickup". */
+export function awaitingPickup(c: LifecycleState): boolean {
+  return !c.archived_at && !c.deleted_at && isReadyToShip(c) && !c.pickup_confirmation;
 }
 
-/** Card needs a pickup booked: label exists, no pickup booked yet, package not
- * in the carrier network, and no results back. NOTE: step1_sample_sent can't be
- * used here — it auto-ticks the moment a tracking # is entered (see PLAYBOOK
- * "Advance step on tracking"), long before the package leaves the clinic. */
-export function awaitingPickup(c: LabCase): boolean {
-  return (
-    Boolean(c.tracking_number) &&
-    !c.pickup_confirmation &&
-    notInNetwork(c) &&
-    !resultsAlreadyReceived(c)
-  );
-}
-
-/** Pickup booked but the carrier hasn't scanned the package yet. */
-export function pickupPending(c: LabCase): boolean {
-  return Boolean(c.pickup_confirmation) && notInNetwork(c) && !resultsAlreadyReceived(c);
+/** Pickup booked but the carrier hasn't scanned the package yet (step 1 unticked). */
+export function pickupPending(c: LifecycleState): boolean {
+  return !c.archived_at && !c.deleted_at && Boolean(c.pickup_confirmation) && isReadyToShip(c);
 }

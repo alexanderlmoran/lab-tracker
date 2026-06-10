@@ -11,6 +11,10 @@ import type { PatientEmailKind } from "./email/step-map";
 // firing N email confirmations from one drop.
 const COLUMN_DEFINING_STEPS: Record<ColumnKey, StepNumber[]> = {
   untouched: [],
+  // ready_to_ship is a derived state (tracking # attached, step 1 not yet
+  // ticked) — there's no step to flip, and you can't drag a card here (it
+  // needs a tracking number). Like pending_upload, it's not a jump target.
+  ready_to_ship: [],
   sample_sent: [1],
   partial_results: [3],
   complete_results: [5],
@@ -51,6 +55,7 @@ export function planColumnJump(
 export function isForwardJump(from: ColumnKey, to: ColumnKey): boolean {
   const order: ColumnKey[] = [
     "untouched",
+    "ready_to_ship",
     "sample_sent",
     "partial_results",
     "complete_results",

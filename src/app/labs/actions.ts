@@ -393,17 +393,11 @@ export async function updateLabCase(
     if (prev !== v) changes[k] = { from: prev, to: v };
   }
 
-  // Adding a tracking # means the sample shipped → advance to Sample Sent if it
-  // isn't already (same rule as the scan-at-intake and grid paths). Closes the
-  // gap where editing tracking in this form left the card stuck in "untouched".
-  const cur = current as LabCase;
-  const trackingNewlyAdded =
-    !!next.tracking_number && !cur.tracking_number && !cur.step1_sample_sent;
-  if (trackingNewlyAdded) {
-    update.step1_sample_sent = true;
-    changes.step1_sample_sent = { from: false, to: true };
-  }
-
+  // Entering a tracking # does NOT tick step 1 ("Sample sent") — it moves the
+  // card to "Ready to ship" (a tracking # = packed return label, not proof the
+  // package left the clinic). Step 1 ticks when FedEx actually scans it
+  // (refresh-core, on PU/in_transit/delivered). Decoupled 2026-06-09 — see
+  // src/lib/labs/pickup.ts and PLAYBOOK "Advance step on tracking".
   if (Object.keys(changes).length === 0) {
     return { ok: true };
   }
@@ -419,7 +413,7 @@ export async function updateLabCase(
     case_id: caseId,
     kind: "case_edited",
     actor: user.email ?? "admin",
-    meta: { changes, ...(trackingNewlyAdded ? { auto_sample_sent: "tracking added" } : {}) },
+    meta: { changes },
   });
 
   revalidatePath("/labs");
@@ -1033,7 +1027,7 @@ export async function attachTrackingFromScan(input: {
   caseId: string;
   trackingNumber: string;
 }): Promise<
-  ActionResult<{ advancedStep1: boolean; trackingChanged: boolean }>
+  ActionResult<{ readyToShip: boolean; trackingChanged: boolean }>
 > {
   const user = await requireSignedIn();
   const parsed = AttachScanInput.safeParse(input);
@@ -1053,7 +1047,11 @@ export async function attachTrackingFromScan(input: {
   }
 
   const trackingChanged = row.tracking_number !== trackingNumber;
-  const advancedStep1 = !row.step1_sample_sent;
+  // Scanning a return label attaches the tracking # and moves the card to
+  // "Ready to ship" — it does NOT tick step 1. Step 1 ticks when FedEx scans
+  // the package (refresh-core). The cron poller selects cases by tracking #
+  // regardless of step 1, so this card still gets polled. Decoupled 2026-06-09.
+  const readyToShip = !row.step1_sample_sent;
 
   if (trackingChanged) {
     const { error: updErr } = await db
@@ -1074,21 +1072,9 @@ export async function attachTrackingFromScan(input: {
     });
   }
 
-  if (advancedStep1) {
-    // setStepCompleted handles the expected-date prediction + best-effort
-    // FedEx auto-arm; reuse it so the bookkeeping stays in one place.
-    const stepRes = await setStepCompleted({
-      caseId,
-      step: 1,
-      completed: true,
-      note: "Auto-advanced by barcode scan at intake",
-    });
-    if (!stepRes.ok) return { ok: false, error: stepRes.error };
-  }
-
   revalidatePath("/labs");
   revalidatePath(`/labs/${caseId}`);
-  return { ok: true, data: { advancedStep1, trackingChanged } };
+  return { ok: true, data: { readyToShip, trackingChanged } };
 }
 
 export async function listLabEvents(caseId: string): Promise<LabEvent[]> {

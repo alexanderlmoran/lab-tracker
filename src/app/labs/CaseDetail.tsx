@@ -373,7 +373,7 @@ function ScanKitButton({
       }
       const bits: string[] = [];
       if (r.data?.trackingChanged) bits.push(`TRK ${code} attached`);
-      if (r.data?.advancedStep1) bits.push("step 1 marked");
+      if (r.data?.readyToShip) bits.push("→ Ready to ship");
       setMsg(bits.length > 0 ? bits.join(" · ") : "No changes (already on file)");
     });
   }

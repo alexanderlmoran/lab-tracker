@@ -14,11 +14,13 @@ to where the relevant code likely lives — verify before trusting.
    verify the Zenoti sync is actually POSTing a COMPLETE per-day census, and that
    the zenoti machine/loop is running — see `worker/scripts/zenoti-sync.ts`.)_
 
-2. **Tracking# auto-completes "Sample sent" (should be MANUAL).** Inputting a
-   tracking number into the Sample-sent column auto-ticks step 1; Alex wants that
-   to be manual. _(ptr: currently auto-ticks — PLAYBOOK row "Advance step on
-   tracking" → `updateLabCase` / `bulkUpdatePatientCases` / `attachTrackingFromScan`
-   / `refresh-core`. Decouple tracking-entry from step1.)_
+2. ~~**Tracking# auto-completes "Sample sent" (should be MANUAL).**~~ ✅ **FIXED
+   2026-06-09** (same change as #24). Entering a tracking # now moves the card to
+   the new **Ready to ship** lane instead of auto-ticking step 1. Step 1 ticks
+   only on a FedEx scan (refresh-core PU/in_transit/delivered) or a manual toggle.
+   Decoupled in `updateLabCase` + `attachTrackingFromScan`; `bulkUpdatePatientCases`
+   never ticked it. The cron poller selects by tracking # regardless of step 1, so
+   ready-to-ship cards still auto-advance on pickup.
 
 3. **Merge dupes doesn't move cards together.** Moved Vanessa LeBlanc — moved ONE
    card to a column, the others didn't follow. Need an option to **move all / by
@@ -137,24 +139,33 @@ to where the relevant code likely lives — verify before trusting.
 
 ## 📦 Pickup scheduling
 
-24. ~~**"Schedule pickup (109)" — count is wrong + confirm one-call behavior.**~~
-    ✅ **FIXED 2026-06-09.** The count was every active card with a tracking #
-    that was never booked through the app (all shipped/delivered/backfilled
-    history), and ALL of them were pre-selected in the dialog. Now:
-    - Candidates come from `awaitingPickup()` (`src/lib/labs/pickup.ts`):
-      tracking # present, no pickup booked, **package not yet scanned into the
-      FedEx network**, and no results back.
-    - Confirmed: one "Book pickup" click = **one** FedEx API call
-      (`POST /pickup/v1/pickups`, `packageCount` = selected count), stamping
-      only the cards you checked. No cron/worker books pickups.
-    - Book button **locks after a successful booking** (was re-clickable →
-      could book a second truck).
-    - **"Pending pickup" column added to the Tracking board** — booked but not
-      yet scanned; sorted soonest-pickup-first; flips to "Needs attention"
-      with a "Pickup date passed — never scanned" badge if the truck never came.
-    - FedEx status code `PU` (picked up) now maps to in_transit so collected
-      packages leave "Pending pickup" on the next poll.
-    Remaining: UPS (Cyrex) pickups are still manual — dialog calls them out.
+24. ~~**"Schedule pickup (109)/(20)" — wrong cards counted; need a "Ready to
+    ship" column.**~~ ✅ **FIXED 2026-06-09.** Root cause: the dialog counted
+    every card with a tracking # that wasn't booked through the app — including
+    already-shipped/delivered cards (FedEx purges history → status "unknown")
+    and kit-out tracking #s — and pre-selected them all. The real fix was a new
+    workflow lane:
+    - **Renamed "New" column → "TODO"** (by-lab `untouched` + by-patient `p_new`).
+    - **New "Ready to Ship" column** between TODO and Sample Sent: a card lands
+      here when it has a tracking # but step 1 isn't ticked
+      (`isReadyToShip = tracking_number && !step1_sample_sent`,
+      `src/lib/labs/pickup.ts`, shared by `getColumnFor`). Orange lane color.
+    - **Decoupled tracking-entry from step 1** (backlog #2) so cards actually
+      rest in Ready-to-ship instead of skipping to Sample Sent. The FedEx
+      pickup/in-transit scan ticks step 1 (refresh-core); the cron poller selects
+      by tracking # regardless of step 1, so the loop still closes.
+    - **Pickup candidates = the Ready-to-ship lane** (`awaitingPickup`). Already-
+      sent cards (step 1 already ticked) no longer appear. NOTE: right after this
+      ships the dialog shows ~0 candidates because every existing card was
+      auto-ticked to step 1 under the old behavior — the lane fills from NEW
+      draws going forward.
+    - Confirmed one "Book pickup" click = **one** FedEx API call
+      (`POST /pickup/v1/pickups`, `packageCount` = selected count); stamps only
+      checked cards; nothing books pickups automatically; button locks after success.
+    - Tracking board: **"Pending pickup" column** (booked, not yet scanned) +
+      "Pickup date passed — never scanned" attention badge. FedEx `PU` now maps
+      to in_transit so collected packages clear the lane on the next poll.
+    Remaining: UPS (Cyrex) pickups still manual — dialog calls them out.
 
 ---
 

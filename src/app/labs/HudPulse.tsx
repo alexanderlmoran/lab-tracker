@@ -14,6 +14,7 @@ import "./hud.css";
 
 const COLUMN_COLOR_VAR: Record<ColumnKey, string> = {
   untouched: "var(--c-new)",
+  ready_to_ship: "var(--c-ready)",
   sample_sent: "var(--c-sent)",
   partial_results: "var(--c-partial)",
   complete_results: "var(--c-complete)",
@@ -58,6 +59,7 @@ export function HudPulse({ user, cases }: HudPulseProps) {
   // the practical "what's still in flight" question staff care about.
   const counts: Record<ColumnKey, number> = {
     untouched: 0,
+    ready_to_ship: 0,
     sample_sent: 0,
     partial_results: 0,
     complete_results: 0,
