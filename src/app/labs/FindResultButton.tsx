@@ -28,6 +28,7 @@ export function FindResultButton({
   idleLabel = "Find result",
   busyLabel = "Searching…",
   stageOnFind = false,
+  onStaged,
 }: {
   caseId: string;
   labName: string;
@@ -36,6 +37,9 @@ export function FindResultButton({
   /** Pending-Upload context (#6): pull the found PDF and STAGE it for review in
    * one click, instead of only listing the accession. */
   stageOnFind?: boolean;
+  /** Called after a PDF is staged so the parent can reload + open the review
+   * without the user closing and reopening the card. */
+  onStaged?: () => void;
 }) {
   const router = useRouter();
   const [probing, startProbe] = useTransition();
@@ -60,7 +64,8 @@ export function FindResultButton({
       setResult(r.data ?? null);
       if (stageOnFind && (r.data?.staged ?? 0) > 0) {
         setStaged(r.data!.staged);
-        router.refresh(); // staged PDF now shows in the review step
+        router.refresh(); // board behind the modal picks up the staged PDF
+        onStaged?.(); // reload + open the review in the OPEN card, no re-open needed
       }
     });
   }

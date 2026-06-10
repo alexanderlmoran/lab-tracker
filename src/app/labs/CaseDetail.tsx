@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import type { LabCase } from "@/lib/types";
 import {
   completedStepCount,
@@ -593,31 +593,36 @@ export function CaseDetail({
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewLoading, setReviewLoading] = useState(false);
 
-  useEffect(() => {
-    // Always fetch — getPendingPdfForCase returns null when there's no
-    // non-superseded, non-approved PDF, so it self-gates. Don't tie this to
-    // `currentCol` because that's computed without the hasPendingPdf flag
-    // and can lie ("Complete Results" instead of "Pending Upload"). The
-    // banner should appear whenever staff action is owed, period.
-    let cancelled = false;
-    setReviewLoading(true);
-    getPendingPdfForCase(row.id)
-      .then((p) => {
-        if (cancelled) return;
-        setPendingPdf(p);
-        if (p && autoReview) setReviewOpen(true);
-      })
-      .catch((e: unknown) => {
-        if (!cancelled)
-          setPendingPdfError(e instanceof Error ? e.message : "Failed to load PDF");
-      })
-      .finally(() => {
-        if (!cancelled) setReviewLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [row.id]);
+  // Load (or reload) the case's pending PDF. Always fetch — getPendingPdfForCase
+  // returns null when there's no non-superseded, non-approved PDF, so it self-
+  // gates. Don't tie this to `currentCol` (computed without the hasPendingPdf
+  // flag, it can lie). `openReview` opens the review modal once it loads — used
+  // after a manual "search for lab to post" stages a PDF so the operator reviews
+  // it in place instead of closing + reopening the card.
+  const loadPendingPdf = useCallback(
+    (openReview = false) => {
+      let cancelled = false;
+      setReviewLoading(true);
+      getPendingPdfForCase(row.id)
+        .then((p) => {
+          if (cancelled) return;
+          setPendingPdf(p);
+          if (p && (openReview || autoReview)) setReviewOpen(true);
+        })
+        .catch((e: unknown) => {
+          if (!cancelled)
+            setPendingPdfError(e instanceof Error ? e.message : "Failed to load PDF");
+        })
+        .finally(() => {
+          if (!cancelled) setReviewLoading(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    },
+    [row.id, autoReview],
+  );
+  useEffect(() => loadPendingPdf(), [loadPendingPdf]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -843,6 +848,7 @@ export function CaseDetail({
               idleLabel="Search for lab to post (review PDF)"
               busyLabel="Searching portal…"
               stageOnFind
+              onStaged={() => loadPendingPdf(true)}
             />
           </div>
         </section>

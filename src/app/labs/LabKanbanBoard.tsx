@@ -55,6 +55,25 @@ function isProbablyReady(row: LabCase): boolean {
   return row.expected_result_at_max <= today0;
 }
 
+// Per-column chip policy (Alex, 2026-06-10): shipping/staleness badges are just
+// noise once a card is past results. ROF lanes keep ONLY the email indicator
+// (the Nadia/Allison-email correlation); Protocol-received + Completed show none.
+type BadgeTier = "full" | "minimal" | "none";
+function badgeTier(col: ColumnKey): BadgeTier {
+  if (col === "closed" || col === "completed") return "none";
+  if (col === "rof_scheduled" || col === "rof_done") return "minimal";
+  return "full";
+}
+// Tracking #, expected window and pickup are operational shipping info — hide
+// from "Complete Uploaded" onward, where the sample is long delivered.
+const TRACKING_META_HIDDEN = new Set<ColumnKey>([
+  "complete_results",
+  "rof_scheduled",
+  "rof_done",
+  "closed",
+  "completed",
+]);
+
 function LabCard({
   row,
   onOpen,
@@ -89,11 +108,17 @@ function LabCard({
     ? TRACKING_BADGE[row.tracking_status]
     : null;
 
+  // Per-column policy: how many badges + whether tracking meta shows.
+  const col = getColumnFor(row);
+  const tier = badgeTier(col);
+  const showMeta = !TRACKING_META_HIDDEN.has(col);
+
   // Chips live in a wrap row BELOW the text (not a right-side rail) so a narrow
   // column — there are 10 lanes now — never squeezes the lab/patient text into
   // one-word-per-line. Only render the row when there's at least one chip so
-  // sparse cards (TODO / Ready to ship) stay tight.
-  const hasChips =
+  // sparse cards (TODO / Ready to ship) stay tight. The set shown is tiered:
+  // "none" → nothing; "minimal" → just the email indicator (+ review); "full" → all.
+  const fullChips =
     hasPendingPdf ||
     Boolean(row.tracking_status) ||
     probablyReady ||
@@ -103,6 +128,12 @@ function LabCard({
     Boolean(destWarning) ||
     counts.emailCount > 0 ||
     stale.stale;
+  const hasChips =
+    tier === "none"
+      ? false
+      : tier === "minimal"
+        ? hasPendingPdf || counts.emailCount > 0
+        : fullChips;
 
   return (
     <button
@@ -123,7 +154,7 @@ function LabCard({
         <p className="truncate text-[12px] text-zinc-500">
           {formatPersonName(row.patient_name)}
         </p>
-        {expected || row.tracking_number || row.pickup_confirmation ? (
+        {showMeta && (expected || row.tracking_number || row.pickup_confirmation) ? (
           <div className="flex flex-col gap-0.5 text-[10px] text-zinc-400">
             {expected ? <span className="truncate">↳ {expected}</span> : null}
             {row.tracking_number ? (
@@ -151,55 +182,59 @@ function LabCard({
               review
             </RailChip>
           ) : null}
-          {trackingMeta ? (
-            <RailChip
-              className={trackingMeta.className}
-              title={row.tracking_status_detail ?? undefined}
-            >
-              {trackingMeta.label}
-            </RailChip>
-          ) : row.tracking_status ? (
-            <RailChip className={CHIP.muted}>{row.tracking_status}</RailChip>
-          ) : null}
-          {probablyReady ? (
-            <RailChip className={CHIP.state} title="Likely ready — check lab portal">
-              ready?
-            </RailChip>
-          ) : null}
-          {dupSiblings && dupSiblings.length > 0 ? (
-            <RailChip
-              className="border-purple-300 bg-purple-50 text-purple-700"
-              title={`Same ACC# ${row.lab_external_ref} as ${dupSiblings.length} other card(s) for this patient — likely one lab split into multiple cards (e.g. PT/PTT/PT-INR). Tracking#: ${dupSiblings.map((s) => s.tracking_number ?? "—").join(", ")}. Merge/dismiss the extras.`}
-            >
-              dup ×{dupSiblings.length + 1}
-            </RailChip>
-          ) : null}
-          <AttemptRailChip openAttempts={counts.openAttempts} />
-          {countdown ? (
-            <RailChip
-              className={
-                countdown.tone === "overdue"
-                  ? CHIP.alert
-                  : countdown.tone === "due"
-                    ? CHIP.caution
-                    : CHIP.good
-              }
-              title={
-                countdown.tone === "overdue"
-                  ? `Expected by ${formatShortDate(row.expected_result_at_max)} — past`
-                  : `Expected by ${formatShortDate(row.expected_result_at_max)}`
-              }
-            >
-              {countdown.label}
-            </RailChip>
-          ) : null}
-          {destWarning ? (
-            <RailChip className={CHIP.warn} title={destWarning}>
-              wrong city?
-            </RailChip>
+          {tier === "full" ? (
+            <>
+              {trackingMeta ? (
+                <RailChip
+                  className={trackingMeta.className}
+                  title={row.tracking_status_detail ?? undefined}
+                >
+                  {trackingMeta.label}
+                </RailChip>
+              ) : row.tracking_status ? (
+                <RailChip className={CHIP.muted}>{row.tracking_status}</RailChip>
+              ) : null}
+              {probablyReady ? (
+                <RailChip className={CHIP.state} title="Likely ready — check lab portal">
+                  ready?
+                </RailChip>
+              ) : null}
+              {dupSiblings && dupSiblings.length > 0 ? (
+                <RailChip
+                  className="border-purple-300 bg-purple-50 text-purple-700"
+                  title={`Same ACC# ${row.lab_external_ref} as ${dupSiblings.length} other card(s) for this patient — likely one lab split into multiple cards (e.g. PT/PTT/PT-INR). Tracking#: ${dupSiblings.map((s) => s.tracking_number ?? "—").join(", ")}. Merge/dismiss the extras.`}
+                >
+                  dup ×{dupSiblings.length + 1}
+                </RailChip>
+              ) : null}
+              <AttemptRailChip openAttempts={counts.openAttempts} />
+              {countdown ? (
+                <RailChip
+                  className={
+                    countdown.tone === "overdue"
+                      ? CHIP.alert
+                      : countdown.tone === "due"
+                        ? CHIP.caution
+                        : CHIP.good
+                  }
+                  title={
+                    countdown.tone === "overdue"
+                      ? `Expected by ${formatShortDate(row.expected_result_at_max)} — past`
+                      : `Expected by ${formatShortDate(row.expected_result_at_max)}`
+                  }
+                >
+                  {countdown.label}
+                </RailChip>
+              ) : null}
+              {destWarning ? (
+                <RailChip className={CHIP.warn} title={destWarning}>
+                  wrong city?
+                </RailChip>
+              ) : null}
+            </>
           ) : null}
           <EmailRailChip emailCount={counts.emailCount} />
-          {stale.stale ? (
+          {tier === "full" && stale.stale ? (
             <RailChip
               className={CHIP.caution}
               title={`No progress in ${stale.daysSinceProgress} days`}
@@ -222,19 +257,25 @@ function MergedDupCard({
   rows,
   onOpen,
   hasPendingPdf,
+  mode,
 }: {
   rows: LabCase[];
   onOpen: (row: LabCase, autoReview?: boolean) => void;
   hasPendingPdf: boolean;
+  /** "dupes" = one accession's panels (lab-first header); "patient"/"date" =
+   *  a patient's cards collapsed within a column (patient-first header). */
+  mode: "off" | "dupes" | "patient" | "date";
 }) {
   // rows arrive in column order (leftmost first); open the most-advanced one so
   // the dialog reflects where the order actually is.
   const lead = rows[rows.length - 1];
+  const isDupes = mode === "dupes";
   // Sub-panels of one physical order usually share ONE tracking # — dedupe so
   // the card shows "TRK 7917…" once, not the same number repeated ×3.
   const trackings = [
     ...new Set(rows.map((r) => r.tracking_number).filter(Boolean) as string[]),
   ];
+  const labels = [...new Set(rows.map((r) => labelForCase(r)))];
   return (
     <button
       type="button"
@@ -247,19 +288,28 @@ function MergedDupCard({
     >
       <div className="flex items-start justify-between gap-2">
         <p className="min-w-0 flex-1 truncate text-[13px] font-medium leading-tight text-zinc-900">
-          {labelForCase(lead)}
+          {isDupes ? labelForCase(lead) : formatPersonName(lead.patient_name)}
         </p>
         <span className="shrink-0 rounded bg-purple-200 px-1.5 text-[10px] font-semibold text-purple-800">
-          merged ×{rows.length}
+          {isDupes ? `merged ×${rows.length}` : `${rows.length} labs`}
         </span>
       </div>
-      <p className="truncate text-[12px] text-zinc-500">
-        {formatPersonName(lead.patient_name)}
-      </p>
-      <div className="flex flex-col gap-0.5 text-[10px] text-zinc-400">
-        {lead.lab_external_ref ? <span>ACC# {lead.lab_external_ref}</span> : null}
-        {trackings.length ? <span className="truncate">TRK {trackings.join(" · ")}</span> : null}
-      </div>
+      {isDupes ? (
+        <p className="truncate text-[12px] text-zinc-500">
+          {formatPersonName(lead.patient_name)}
+        </p>
+      ) : (
+        <p className="truncate text-[11px] text-zinc-500">
+          {mode === "date" && lead.collection_date ? `${lead.collection_date} · ` : ""}
+          {labels.join(" · ")}
+        </p>
+      )}
+      {isDupes ? (
+        <div className="flex flex-col gap-0.5 text-[10px] text-zinc-400">
+          {lead.lab_external_ref ? <span>ACC# {lead.lab_external_ref}</span> : null}
+          {trackings.length ? <span className="truncate">TRK {trackings.join(" · ")}</span> : null}
+        </div>
+      ) : null}
       {hasPendingPdf ? (
         <span className="self-start rounded border border-amber-400 bg-amber-100 px-1 text-[10px] font-semibold text-amber-800">
           review — applies to all {rows.length}
@@ -390,11 +440,12 @@ export function LabKanbanBoard({
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [activeRow, setActiveRow] = useState<LabCase | null>(null);
   const [autoReview, setAutoReview] = useState(false);
-  // Default ON: a same-accession order (Vibrant Zoomer split into Foundational/
-  // Gut/Toxin/… panel cards) collapses to ONE card out of the box, so the board
-  // isn't cluttered with what reads as duplicates. The toggle stays so staff can
-  // expand a group to act on a single panel.
-  const [mergeDupes, setMergeDupes] = useState(true);
+  // Merge VIEW mode. "dupes" (default) collapses a same-accession order (Vibrant
+  // Zoomer split into Foundational/Gut/Toxin panel cards) into ONE card across
+  // columns. "patient" / "date" collapse a patient's cards WITHIN each column
+  // (by patient, or by patient+collection-date) so a busy patient reads as one
+  // unit per lane. "off" expands everything.
+  const [mergeMode, setMergeMode] = useState<"off" | "dupes" | "patient" | "date">("dupes");
 
   // Board-wide merged-group plan. A same-accession group is ONE physical order
   // split across cards; when those cards land in DIFFERENT columns (only one
@@ -407,7 +458,7 @@ export function LabKanbanBoard({
     // card in the group (across columns). suppressedIds: sibling cards that
     // should NOT render as their own card (they're folded into the merged one).
     const groupsByKey = new Map<string, LabCase[]>();
-    if (mergeDupes) {
+    if (mergeMode === "dupes") {
       for (const col of LAB_BOARD_COLUMN_ORDER) {
         for (const r of grouped[col]) {
           const key = dupKey(r);
@@ -440,14 +491,38 @@ export function LabKanbanBoard({
       for (const m of members) suppressedIds.add(m.id);
     }
     return { leadColByKey, membersByKey, suppressedIds };
-  }, [mergeDupes, grouped]);
+  }, [mergeMode, grouped]);
 
   // Units to render in a column: the column's own cards, EXCEPT cards folded
   // into a merged group (suppressed everywhere but their lead column), PLUS the
   // merged cards whose lead column is this one. Without merge-dupes, one unit
   // per card (unchanged behavior).
   function unitsFor(col: ColumnKey): LabCase[][] {
-    if (!mergeDupes) return grouped[col].map((r) => [r]);
+    if (mergeMode === "off") return grouped[col].map((r) => [r]);
+
+    // By-patient / by-date: group a patient's cards WITHIN this column (the user
+    // wants merge to "respect each column"). Same patient → one unit; date mode
+    // splits a patient further by collection date.
+    if (mergeMode === "patient" || mergeMode === "date") {
+      const norm = (v: string | null) => (v ?? "").toLowerCase().trim();
+      const keyFn = (r: LabCase) =>
+        mergeMode === "patient"
+          ? norm(r.patient_email) || `solo:${r.id}`
+          : `${norm(r.patient_email)}|${r.collection_date ?? "nodate"}`;
+      const order: string[] = [];
+      const groups = new Map<string, LabCase[]>();
+      for (const r of grouped[col]) {
+        const k = keyFn(r);
+        if (!groups.has(k)) {
+          groups.set(k, []);
+          order.push(k);
+        }
+        groups.get(k)!.push(r);
+      }
+      return order.map((k) => groups.get(k)!);
+    }
+
+    // dupes: cross-column same-accession collapse (one card in the lead column).
     const out: LabCase[][] = [];
     const emitted = new Set<string>(); // group keys already rendered this column
     for (const r of grouped[col]) {
@@ -489,20 +564,30 @@ export function LabKanbanBoard({
 
   return (
     <div className="flex h-full flex-col">
-      {dupByCaseId.size > 0 ? (
-        <div className="flex items-center justify-end px-1.5 pb-1">
-          <button
-            type="button"
-            onClick={() => setMergeDupes((v) => !v)}
-            className={`rounded-md border px-2 py-0.5 text-[11px] font-medium ${
-              mergeDupes
-                ? "border-purple-400 bg-purple-100 text-purple-800"
-                : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50"
-            }`}
-            title="Collapse same-accession duplicate cards (same patient + ACC#) into one merged card — even across columns; the merged card sits in the order's most-advanced column. All other cards stay as-is."
-          >
-            {mergeDupes ? "Merging dupes ✓" : "⊕ Merge dupes"}
-          </button>
+      {rows.length > 0 ? (
+        <div className="flex items-center justify-end gap-1.5 px-1.5 pb-1">
+          <span className="text-[10px] uppercase tracking-wide text-zinc-400">Merge view</span>
+          {(
+            [
+              ["dupes", "Dupes", "Collapse a same-accession order (Vibrant Zoomer panels) into one card across columns."],
+              ["patient", "By patient", "Collapse each patient's cards within a column into one card."],
+              ["date", "By date", "Collapse each patient's cards within a column by collection date."],
+            ] as const
+          ).map(([m, label, title]) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMergeMode((cur) => (cur === m ? "off" : m))}
+              title={title}
+              className={`rounded-md border px-2 py-0.5 text-[11px] font-medium ${
+                mergeMode === m
+                  ? "border-purple-400 bg-purple-100 text-purple-800"
+                  : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50"
+              }`}
+            >
+              {mergeMode === m ? `${label} ✓` : label}
+            </button>
+          ))}
         </div>
       ) : null}
       <div className="flex flex-row flex-nowrap gap-1.5 pb-2 lg:flex-1 lg:min-h-0">
@@ -519,8 +604,9 @@ export function LabKanbanBoard({
                 units.map((unit) =>
                   unit.length > 1 ? (
                     <MergedDupCard
-                      key={`merged:${dupKey(unit[0]) ?? unit[0].id}`}
+                      key={`merged:${unit[0].id}`}
                       rows={unit}
+                      mode={mergeMode}
                       onOpen={openLabDetail}
                       hasPendingPdf={unit.some((r) => pendingPdfSet.has(r.id))}
                     />
