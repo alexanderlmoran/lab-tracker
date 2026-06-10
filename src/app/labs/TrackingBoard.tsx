@@ -3,13 +3,16 @@
 import Link from "next/link";
 import { useMemo } from "react";
 import type { LabCase, TrackingStatus } from "@/lib/types";
+import { pickupPending } from "@/lib/labs/pickup";
 import { formatPersonName } from "@/lib/format";
 
-// Columns track the carrier-side lifecycle, not our workflow steps. "Needs
-// attention" is a synthetic bucket that captures stuck shipments — anything
-// pre_transit > 3 days with no event, or in_transit/out_for_delivery with
-// no event in the last 3 days. Exception / Returned always land in
-// "Needs attention" regardless of timing.
+// Columns track the carrier-side lifecycle, not our workflow steps. "Pending
+// pickup" = a FedEx pickup is booked but the package hasn't been scanned yet
+// (it clears to "In transit" on the pickup scan). "Needs attention" is a
+// synthetic bucket that captures stuck shipments — anything pre_transit > 3
+// days with no event, in_transit/out_for_delivery with no event in the last
+// 3 days, or a booked pickup whose scheduled date passed without a scan.
+// Exception / Returned always land in "Needs attention" regardless of timing.
 
 const STUCK_DAYS = 3;
 const MS_PER_DAY = 86_400_000;
@@ -17,6 +20,7 @@ const MS_PER_DAY = 86_400_000;
 type TrackingColumnKey =
   | "attention"
   | "pre_transit"
+  | "pending_pickup"
   | "in_transit"
   | "out_for_delivery"
   | "delivered"
@@ -25,6 +29,7 @@ type TrackingColumnKey =
 const COLUMN_ORDER: TrackingColumnKey[] = [
   "attention",
   "pre_transit",
+  "pending_pickup",
   "in_transit",
   "out_for_delivery",
   "delivered",
@@ -34,6 +39,7 @@ const COLUMN_ORDER: TrackingColumnKey[] = [
 const COLUMN_LABEL: Record<TrackingColumnKey, string> = {
   attention: "Needs attention",
   pre_transit: "Pre-transit",
+  pending_pickup: "Pending pickup",
   in_transit: "In transit",
   out_for_delivery: "Out for delivery",
   delivered: "Delivered",
@@ -43,13 +49,20 @@ const COLUMN_LABEL: Record<TrackingColumnKey, string> = {
 const COLUMN_COLOR_VAR: Record<TrackingColumnKey, string> = {
   attention: "var(--c-stale)",
   pre_transit: "var(--c-new)",
+  pending_pickup: "var(--c-partial)",
   in_transit: "var(--c-sent)",
   out_for_delivery: "var(--c-rof-s)",
   delivered: "var(--c-rof-d)",
   no_tracking: "var(--c-new)",
 };
 
-type StuckReason = "exception" | "returned" | "stale_event" | "never_scanned" | null;
+type StuckReason =
+  | "exception"
+  | "returned"
+  | "stale_event"
+  | "never_scanned"
+  | "missed_pickup"
+  | null;
 
 function daysSince(iso: string | null): number | null {
   if (!iso) return null;
@@ -63,6 +76,14 @@ function stuckReason(c: LabCase): StuckReason {
   if (c.tracking_status === "exception") return "exception";
   if (c.tracking_status === "returned") return "returned";
   if (c.tracking_status === "delivered") return null;
+
+  // Pickup booked but never scanned: fine until the scheduled date passes,
+  // then it probably got missed — flag it instead of the generic staleness.
+  if (pickupPending(c)) {
+    const today = new Date().toLocaleDateString("en-CA");
+    if (c.pickup_scheduled_date && c.pickup_scheduled_date < today) return "missed_pickup";
+    return null;
+  }
 
   // Never scanned: in pre_transit > 3 days with no carrier event yet.
   if (c.tracking_status === "pre_transit" || c.tracking_status === null) {
@@ -88,7 +109,7 @@ function columnFor(c: LabCase): TrackingColumnKey {
   if (s === "delivered") return "delivered";
   if (s === "out_for_delivery") return "out_for_delivery";
   if (s === "in_transit") return "in_transit";
-  return "pre_transit";
+  return pickupPending(c) ? "pending_pickup" : "pre_transit";
 }
 
 function carrierLabel(c: LabCase): string {
@@ -120,19 +141,23 @@ export function TrackingBoard({ rows }: { rows: LabCase[] }) {
     const map: Record<TrackingColumnKey, LabCase[]> = {
       attention: [],
       pre_transit: [],
+      pending_pickup: [],
       in_transit: [],
       out_for_delivery: [],
       delivered: [],
       no_tracking: [],
     };
     for (const c of rows) map[columnFor(c)].push(c);
-    // Order within columns: stuck-longest first in attention, most recent
-    // event first elsewhere, least-recently-updated first for no_tracking.
+    // Order within columns: stuck-longest first in attention, soonest pickup
+    // first in pending_pickup, most recent event first elsewhere.
     map.attention.sort((a, b) => {
       const ax = a.tracking_event_at ?? a.created_at;
       const bx = b.tracking_event_at ?? b.created_at;
       return ax.localeCompare(bx); // oldest first
     });
+    map.pending_pickup.sort((a, b) =>
+      (a.pickup_scheduled_date ?? a.created_at).localeCompare(b.pickup_scheduled_date ?? b.created_at),
+    );
     for (const k of ["pre_transit", "in_transit", "out_for_delivery", "delivered"] as const) {
       map[k].sort((a, b) => {
         const ax = a.tracking_event_at ?? a.created_at;
@@ -144,7 +169,7 @@ export function TrackingBoard({ rows }: { rows: LabCase[] }) {
   }, [rows]);
 
   return (
-    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
       {COLUMN_ORDER.map((col) => {
         const cases = grouped[col];
         return (
@@ -211,6 +236,15 @@ function TrackingCard({ c }: { c: LabCase }) {
         </p>
       ) : null}
 
+      {c.pickup_confirmation && pickupPending(c) ? (
+        <p
+          className="mt-1 truncate text-[10px] text-violet-600"
+          title={`Pickup confirmation ${c.pickup_confirmation}`}
+        >
+          📦 Pickup {c.pickup_scheduled_date ?? "scheduled"} · #{c.pickup_confirmation}
+        </p>
+      ) : null}
+
       <div className="mt-2 flex flex-wrap items-center justify-between gap-1 text-[10px] text-zinc-400">
         <span>
           {eventAgo ? `Event ${eventAgo}` : "No carrier events yet"}
@@ -229,6 +263,7 @@ function StuckBadge({ reason }: { reason: NonNullable<StuckReason> }) {
     returned: "Returned",
     stale_event: `No update in ${STUCK_DAYS}+ days`,
     never_scanned: `Never scanned (${STUCK_DAYS}+ days)`,
+    missed_pickup: "Pickup date passed — never scanned",
   };
   return (
     <div className="mt-2 flex items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-700">

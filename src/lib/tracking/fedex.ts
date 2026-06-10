@@ -113,9 +113,11 @@ function normalizeStatus(code?: string, description?: string): TrackingStatus {
   // mirror that for parity with what staff sees on fedex.com.
   if (c === "DL" || c === "HP" || c === "HL" || c === "DV") return "delivered";
   if (c === "OD" || c === "DS") return "out_for_delivery";
-  if (c === "IT" || c === "AR" || c === "DP" || c === "AF" || c === "AP")
+  // PU (Picked Up) counts as in_transit: the package is in FedEx's hands, so
+  // pickup-pending views clear and refresh-core's in_transit advance applies.
+  if (c === "IT" || c === "AR" || c === "DP" || c === "AF" || c === "AP" || c === "PU")
     return "in_transit";
-  if (c === "PU" || c === "OC") return "pre_transit";
+  if (c === "OC") return "pre_transit";
   if (c === "DE" || c === "SE" || c === "CA" || c === "DD") return "exception";
   if (c === "RS") return "returned";
 
@@ -134,14 +136,11 @@ function normalizeStatus(code?: string, description?: string): TrackingStatus {
     d.includes("in transit") ||
     d.includes("on fedex vehicle") ||
     d.includes("departed") ||
-    d.includes("arrived")
+    d.includes("arrived") ||
+    d.includes("picked up")
   )
     return "in_transit";
-  if (
-    d.includes("picked up") ||
-    d.includes("label created") ||
-    d.includes("shipment information sent")
-  )
+  if (d.includes("label created") || d.includes("shipment information sent"))
     return "pre_transit";
   if (d.includes("exception") || d.includes("delay")) return "exception";
   if (d.includes("return")) return "returned";

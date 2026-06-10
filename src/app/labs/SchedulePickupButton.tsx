@@ -3,15 +3,18 @@
 import { useMemo, useRef, useState, useTransition } from "react";
 import type { LabCase } from "@/lib/types";
 import { carrierForCase } from "@/lib/labs/carrier";
+import { awaitingPickup } from "@/lib/labs/pickup";
 import { formatPersonName } from "@/lib/format";
 import { scheduleFedexPickup } from "./tracking-actions";
 
-// Board-level "Schedule pickup" — books one FedEx pickup from the clinic for the
-// day's outbound lab samples and STAMPS the confirmation onto the cards you
-// include, so each card is traceable to the pickup. Carrier-aware: Cyrex/UPS
-// cards are surfaced separately (FedEx pickup can't cover them) until a UPS
-// pickup integration exists. Candidates = active cards with a tracking # that
-// haven't been assigned to a pickup yet.
+// Board-level "Schedule pickup" — books ONE FedEx pickup (one API call per
+// Book click) from the clinic for the day's outbound lab samples and STAMPS
+// the confirmation onto the cards you include, so each card is traceable to
+// the pickup. Carrier-aware: Cyrex/UPS cards are surfaced separately (FedEx
+// pickup can't cover them) until a UPS pickup integration exists. Candidates
+// come from awaitingPickup() — cards whose package hasn't been scanned into
+// the carrier network yet, NOT every card with a tracking # (which once made
+// the count balloon to all unstamped history).
 export function SchedulePickupButton({ cases }: { cases: LabCase[] }) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [open, setOpen] = useState(false);
@@ -22,7 +25,7 @@ export function SchedulePickupButton({ cases }: { cases: LabCase[] }) {
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   const { fedex, ups } = useMemo(() => {
-    const ready = cases.filter((c) => c.tracking_number && !c.pickup_confirmation);
+    const ready = cases.filter(awaitingPickup);
     return {
       fedex: ready.filter((c) => carrierForCase(c) === "fedex"),
       ups: ready.filter((c) => carrierForCase(c) === "ups"),
@@ -49,6 +52,9 @@ export function SchedulePickupButton({ cases }: { cases: LabCase[] }) {
   }
 
   function book() {
+    // One booking per dialog open — after a success the Book button locks so a
+    // second click can't dispatch a second FedEx truck. Reopen to book again.
+    if (result?.ok) return;
     if (!date) return setResult({ ok: false, msg: "Pick a ready date." });
     if (selected.size === 0) return setResult({ ok: false, msg: "Select at least one card to include." });
     setResult(null);
@@ -165,10 +171,10 @@ export function SchedulePickupButton({ cases }: { cases: LabCase[] }) {
               <button
                 type="button"
                 onClick={book}
-                disabled={pending || selected.size === 0}
+                disabled={pending || selected.size === 0 || result?.ok === true}
                 className="rounded-md border border-indigo-600 bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
               >
-                {pending ? "Booking…" : `Book pickup (${selected.size})`}
+                {pending ? "Booking…" : result?.ok ? "Booked ✓" : `Book pickup (${selected.size})`}
               </button>
             </div>
           </div>
