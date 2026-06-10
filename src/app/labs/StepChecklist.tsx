@@ -10,7 +10,7 @@ import {
   stepLabelForWorkflow,
 } from "@/lib/columns";
 import { emailKindForStep } from "@/lib/email/step-map";
-import { setStepCompleted } from "./actions";
+import { archiveLabCase, setStepCompleted, unarchiveLabCase } from "./actions";
 import { listEmailLogs } from "./email-actions";
 import { EmailConfirmDialog, type EmailConfirmHandle } from "./EmailConfirmDialog";
 
@@ -30,6 +30,7 @@ const DB_COL: Record<StepNumber, keyof LabCase> = {
 export function StepChecklist({ initial }: { initial: LabCase }) {
   const [c, setC] = useState<LabCase>(initial);
   const [pendingStep, setPendingStep] = useState<StepNumber | null>(null);
+  const [archiving, setArchiving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
   const emailDialogRef = useRef<EmailConfirmHandle | null>(null);
@@ -114,6 +115,68 @@ export function StepChecklist({ initial }: { initial: LabCase }) {
     }
   }
 
+  // "Completed" is the terminal stage = archived. Toggling it here archives /
+  // unarchives the case (same as the Danger-zone button) so the step ladder is
+  // complete and a case can be finished in one click from the checklist.
+  function onToggleCompleted(next: boolean) {
+    setError(null);
+    setArchiving(true);
+    const prevSnapshot = c;
+    setC((prev) => ({ ...prev, archived_at: next ? new Date().toISOString() : null }) as LabCase);
+    startTransition(async () => {
+      const res = next ? await archiveLabCase(c.id) : await unarchiveLabCase(c.id);
+      setArchiving(false);
+      if (!res.ok) {
+        setError(res.error);
+        setC(prevSnapshot);
+      }
+    });
+  }
+
+  // Derived/terminal stages that bracket the numbered steps so the card's
+  // ladder matches the board columns: Ready to ship (tracking attached, before
+  // step 1) → 1–9 → Completed (archived). Ready-to-ship is read-only — it's
+  // derived from the tracking #, not a toggle. Both are hidden for peptides'
+  // trimmed ship→receive flow except Completed (any case can be archived).
+  function StageRow({
+    label,
+    checked,
+    derived,
+    pending,
+    onChange,
+  }: {
+    label: string;
+    checked: boolean;
+    derived?: boolean;
+    pending?: boolean;
+    onChange?: (next: boolean) => void;
+  }) {
+    return (
+      <div className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm">
+        <label className={`flex min-w-0 flex-1 items-center gap-2 ${derived ? "" : "cursor-pointer"}`}>
+          <input
+            type="checkbox"
+            className="h-4 w-4 shrink-0 rounded border-zinc-300"
+            checked={checked}
+            disabled={derived || pending}
+            onChange={(e) => onChange?.(e.target.checked)}
+          />
+          <span
+            className={`min-w-0 flex-1 truncate text-[13px] italic text-zinc-600 ${
+              checked ? "line-through decoration-zinc-400" : ""
+            }`}
+            title={label}
+          >
+            {label}
+          </span>
+        </label>
+        <span className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-zinc-500">
+          {derived ? "auto" : "stage"}
+        </span>
+      </div>
+    );
+  }
+
   // Split into two columns: first half (1-5) left, second half (6+) right.
   // Indexes are 0-based here; idx + 1 stays the visible step number.
   const midpoint = Math.ceil(stepsToShow.length / 2);
@@ -183,6 +246,13 @@ export function StepChecklist({ initial }: { initial: LabCase }) {
 
   return (
     <>
+      {workflow === "default" ? (
+        <StageRow
+          label="Ready to ship — tracking # attached, waiting for carrier"
+          checked={Boolean(c.tracking_number)}
+          derived
+        />
+      ) : null}
       <div className="grid gap-x-4 gap-y-0 lg:grid-cols-2">
         <div className="flex flex-col">
           {stepsToShow.slice(0, midpoint).map((step, i) => renderStep(step, i))}
@@ -193,6 +263,12 @@ export function StepChecklist({ initial }: { initial: LabCase }) {
           )}
         </div>
       </div>
+      <StageRow
+        label="Completed — archived to the Completed lane"
+        checked={Boolean(c.archived_at)}
+        pending={archiving}
+        onChange={onToggleCompleted}
+      />
       {error ? (
         <p className="mt-1 px-2 text-xs text-red-600" role="alert">
           {error}
