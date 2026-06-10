@@ -830,7 +830,9 @@ export function CaseDetail({
        *  same machinery as the accession-less "Find result", relabeled. Gated
        *  on pending_upload + no staged PDF + not still loading so it only shows
        *  when there's nothing to Review yet. */}
-      {currentCol === "pending_upload" && !pendingPdf && !reviewLoading ? (
+      {(currentCol === "pending_upload" || currentCol === "sample_sent") &&
+      !pendingPdf &&
+      !reviewLoading ? (
         <section className="rounded-md border border-indigo-200 bg-indigo-50 px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0">
@@ -838,8 +840,9 @@ export function CaseDetail({
                 No result staged yet
               </h3>
               <p className="mt-0.5 text-[11.5px] text-indigo-800">
-                The worker hasn&apos;t attached a PDF to post yet. Search the lab
-                portal now for this patient&apos;s result to review.
+                {currentCol === "sample_sent"
+                  ? "Sample's at the lab — if the portal already has a result, pull it now to review (early results land before the predicted window)."
+                  : "The worker hasn't attached a PDF to post yet. Search the lab portal now for this patient's result to review."}
               </p>
             </div>
             <FindResultButton

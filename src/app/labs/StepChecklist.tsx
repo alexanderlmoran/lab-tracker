@@ -179,16 +179,19 @@ export function StepChecklist({
     const inner = (
       <>
         <span aria-hidden className={`h-2.5 w-2.5 shrink-0 rounded-full border ${dot}`} />
-        <span className="min-w-0 flex-1 truncate text-[12px] italic text-zinc-500" title={label}>
+        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-zinc-700" title={label}>
           {label}
-          {hint ? <span className="not-italic text-zinc-400"> — {hint}</span> : null}
+          {hint ? <span className="font-normal text-zinc-400"> — {hint}</span> : null}
         </span>
-        <span className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-zinc-400">
+        <span className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-zinc-500">
           {interactive ? "stage" : "auto"}
         </span>
       </>
     );
-    const cls = "flex w-full items-center gap-2 rounded-md bg-zinc-50/70 px-1.5 py-1 text-left";
+    // A clearly-bordered row so the bracketing stages (Ready to ship / Completed)
+    // read as real rungs of the ladder, not faint asides.
+    const cls =
+      "flex w-full items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1.5 text-left";
     return interactive ? (
       <button
         type="button"

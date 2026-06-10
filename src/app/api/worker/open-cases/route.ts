@@ -43,9 +43,17 @@ type Row = {
   expected_result_at_min: string | null;
   expected_result_at_max: string | null;
   collection_date: string | null;
+  tracking_delivered_at: string | null;
   created_at: string;
   dismissed_refs: string[] | null;
 };
+
+// Once the sample is at the lab, results can land any day — so poll from when
+// it was delivered. Without a delivery signal, start a few days after
+// collection. We deliberately DON'T wait for the predicted earliest-result date:
+// labs like Vibrant routinely return far sooner than the catalog estimate, so
+// gating on the predicted min left ready results unpulled (Vinay Mittal, 2026-06).
+const EARLY_POLL_DAYS = 2;
 
 export async function GET(request: Request) {
   const expected = process.env.WORKER_SHARED_SECRET;
@@ -68,7 +76,7 @@ export async function GET(request: Request) {
   const { data, error } = await db
     .from("lab_cases")
     .select(
-      "id, patient_name, patient_dob, patient_email, lab_name, lab_external_ref, step1_sample_sent, step2_partial_received, step4_complete_received, expected_result_at_min, expected_result_at_max, collection_date, created_at, dismissed_refs",
+      "id, patient_name, patient_dob, patient_email, lab_name, lab_external_ref, step1_sample_sent, step2_partial_received, step4_complete_received, expected_result_at_min, expected_result_at_max, collection_date, tracking_delivered_at, created_at, dismissed_refs",
     )
     .not("lab_external_ref", "is", null)
     .eq("step5_complete_uploaded", false)
@@ -110,12 +118,22 @@ export async function GET(request: Request) {
     };
   };
 
+  // Poll daily from delivery (or collection + EARLY_POLL_DAYS) through the
+  // predicted max + grace — NOT from the predicted earliest date. The scraper
+  // only stages a PDF that matches the accession, so polling before the result
+  // is ready is a safe no-op; this just lets the hourly scrape catch results
+  // that arrive faster than the catalog estimate.
+  const pollStartsBy = (c: Row): string => {
+    if (c.tracking_delivered_at) return c.tracking_delivered_at.slice(0, 10);
+    const anchor = c.collection_date ?? c.created_at.slice(0, 10);
+    return addDays(anchor, EARLY_POLL_DAYS);
+  };
   const inResultWindow = (c: Row) => {
     if (!c.step1_sample_sent || c.step2_partial_received || c.step4_complete_received) {
       return false;
     }
-    const { min, max } = effectiveWindow(c);
-    return !!min && min <= today && (!max || max >= graceFloor);
+    const { max } = effectiveWindow(c);
+    return pollStartsBy(c) <= today && (!max || max >= graceFloor);
   };
 
   const rows = ((data ?? []) as Row[]).filter((c) => sameLab(c.lab_name, lab));
