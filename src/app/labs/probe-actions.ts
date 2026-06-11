@@ -154,3 +154,91 @@ export async function setCaseAccession(input: {
   revalidatePath(`/labs/${input.caseId}`);
   return { ok: true };
 }
+
+/**
+ * Manually attach a result PDF to a case — the universal fallback for labs with
+ * no scraper (Kennedy Krieger, MembersPanel, Custom…), un-downloadable reports
+ * (Vibrant EBOO), or any portal the scrape can't reach. Mirrors the worker's
+ * postResultReady → /api/worker/result-ready staging: upload to the lab-pdfs
+ * bucket, insert a lab_case_pdfs row, and tick step 4 (+ cascade 1/2/3) so the
+ * card lands in Pending Upload for the normal Approve → PB flow. Does NOT touch
+ * the accession (manual uploads aren't a portal match).
+ */
+export async function uploadResultPdf(input: {
+  caseId: string;
+  pdfBase64: string;
+  filename: string;
+  isPartial?: boolean;
+}): Promise<ActionResult<{ pdfId: string }>> {
+  const user = await requireSignedIn();
+  const db = getSupabaseAdmin();
+
+  const { data: kase } = await db
+    .from("lab_cases")
+    .select("id, lab_external_ref")
+    .eq("id", input.caseId)
+    .maybeSingle();
+  if (!kase) return { ok: false, error: "Case not found" };
+
+  const bytes = Buffer.from(input.pdfBase64, "base64");
+  if (bytes.length === 0) return { ok: false, error: "Empty file." };
+  if (bytes.indexOf("%PDF-") < 0) return { ok: false, error: "That file isn't a PDF." };
+
+  const filename = (input.filename.replace(/[^\w.\-]+/g, "_").slice(0, 120) || "manual.pdf");
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const storagePath = `${input.caseId}/${ts}-${filename}`;
+
+  const { error: upErr } = await db.storage
+    .from("lab-pdfs")
+    .upload(storagePath, bytes, { contentType: "application/pdf", upsert: false });
+  if (upErr) return { ok: false, error: `Upload failed: ${upErr.message}` };
+
+  const source = `manual:${user.email ?? "staff"}`;
+  const { data: pdfRow, error: pdfErr } = await db
+    .from("lab_case_pdfs")
+    .insert({
+      case_id: input.caseId,
+      storage_path: storagePath,
+      source,
+      external_ref: (kase as { lab_external_ref: string | null }).lab_external_ref ?? "manual",
+      filename,
+      size_bytes: bytes.length,
+      is_partial: input.isPartial ?? false,
+      result_issued_at: null,
+      attached_by: source,
+    })
+    .select("id")
+    .single();
+  if (pdfErr || !pdfRow) return { ok: false, error: `Couldn't stage the PDF: ${pdfErr?.message ?? "unknown"}` };
+
+  // A PDF arriving = results received → tick step 4 (+ cascade 1/2/3), or step 2
+  // (+1) for a partial. Mirrors result-ready / setStepCompleted(cascadePrior).
+  const target = input.isPartial ? "step2_partial_received" : "step4_complete_received";
+  const cascade = input.isPartial
+    ? ["step1_sample_sent"]
+    : ["step1_sample_sent", "step2_partial_received", "step3_partial_uploaded"];
+  const { data: steps } = await db
+    .from("lab_cases")
+    .select("step1_sample_sent, step2_partial_received, step3_partial_uploaded, step4_complete_received")
+    .eq("id", input.caseId)
+    .single();
+  const s = (steps as Record<string, boolean> | null) ?? {};
+  const updates: Record<string, boolean> = {};
+  if (!s[target]) updates[target] = true;
+  for (const c of cascade) if (!s[c]) updates[c] = true;
+  if (Object.keys(updates).length > 0) {
+    await db.from("lab_cases").update(updates).eq("id", input.caseId);
+  }
+
+  await db.from("lab_events").insert({
+    case_id: input.caseId,
+    kind: "case_edited",
+    actor: source,
+    note: `Result PDF uploaded manually (${filename}, ${bytes.length} bytes)`,
+    meta: { pdf_id: pdfRow.id, manual: true },
+  });
+
+  revalidatePath("/labs");
+  revalidatePath(`/labs/${input.caseId}`);
+  return { ok: true, data: { pdfId: pdfRow.id } };
+}

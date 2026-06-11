@@ -38,6 +38,7 @@ import { useRouter } from "next/navigation";
 import { getLabDestination, trackingDestinationWarning } from "@/lib/labs/catalog";
 import { labelForCase } from "@/lib/labs/label";
 import { probeKeyForLab } from "@/lib/scrapers/normalize-lab";
+import { ManualUploadButton } from "./ManualUploadButton";
 import { getAdapterFor } from "@/lib/lab-adapters";
 
 function DeleteCaseButton({ caseId }: { caseId: string }) {
@@ -863,16 +864,23 @@ export function CaseDetail({
                         : "The worker hasn't attached a PDF to post yet. Search the lab portal now for this patient's result to review."}
                   </p>
                 </div>
-                {hasScraper ? (
-                  <FindResultButton
+                <div className="flex flex-col items-end gap-1.5">
+                  {hasScraper ? (
+                    <FindResultButton
+                      caseId={row.id}
+                      labName={row.lab_name}
+                      idleLabel="Search for lab to post (review PDF)"
+                      busyLabel="Searching portal…"
+                      stageOnFind
+                      onStaged={() => loadPendingPdf(true)}
+                    />
+                  ) : null}
+                  <ManualUploadButton
                     caseId={row.id}
-                    labName={row.lab_name}
-                    idleLabel="Search for lab to post (review PDF)"
-                    busyLabel="Searching portal…"
-                    stageOnFind
-                    onStaged={() => loadPendingPdf(true)}
+                    onUploaded={() => loadPendingPdf(true)}
+                    label={hasScraper ? "or upload a PDF" : "Upload result PDF"}
                   />
-                ) : null}
+                </div>
               </div>
             </section>
           );
