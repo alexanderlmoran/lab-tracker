@@ -48,7 +48,8 @@ export type PbQuestion = {
 };
 export type PbContentItem = {
   id: string;
-  question: PbQuestion;
+  /** Optional: some content items are text/section blocks with no question. */
+  question?: PbQuestion;
   answer?: unknown;
   name?: string;
   publishStatus?: string;
@@ -149,8 +150,10 @@ export function scaffoldFromNote(note: PbSessionNote): PbContentItem[] {
 }
 
 /** Deep-clone a question and blank any free-text (shorttext) cell labels so a
- *  reference note's data (lots, doses, locations) can't leak into a new note. */
-export function sanitizeQuestion(question: PbQuestion): PbQuestion {
+ *  reference note's data (lots, doses, locations) can't leak into a new note.
+ *  Some content items (text/section blocks) have no question — passed through. */
+export function sanitizeQuestion(question: PbQuestion | undefined): PbQuestion | undefined {
+  if (!question) return question;
   const q = structuredClone(question);
   const shorttext = (q.columns ?? []).map((col) => col.columnType === "shorttext");
   for (const row of q.rows ?? []) {
@@ -160,6 +163,20 @@ export function sanitizeQuestion(question: PbQuestion): PbQuestion {
     );
   }
   return q;
+}
+
+// ── Delete ───────────────────────────────────────────────────────────────
+/** Delete a session note. Uses the note headers (cookie + x-xsrf-token +
+ *  x-api-version 5.1) — same write-auth as create. Returns true on success;
+ *  treats 404 as already-gone (idempotent). */
+export async function deleteSessionNote(session: PbSession, noteId: string): Promise<boolean> {
+  const res = await pbRequest(`${PB_BASE}/api/consultant/sessionnotes/${noteId}`, {
+    method: "DELETE",
+    headers: pbNoteHeaders(session, true),
+  });
+  const text = await res.body.text();
+  if (res.statusCode === 200 || res.statusCode === 204 || res.statusCode === 404) return true;
+  throw new Error(`PB deleteSessionNote ${res.statusCode}: ${text.slice(0, 200)}`);
 }
 
 // ── Create ───────────────────────────────────────────────────────────────

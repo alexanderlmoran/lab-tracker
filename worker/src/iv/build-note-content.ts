@@ -153,8 +153,8 @@ function emptyMatrix(q: PbQuestion) {
 
 /** Is this the components / "IV Fluids" matrix? (Dose + Lot columns, not IM,
  *  not vitals/attempts/reaction/removal.) */
-function isComponentsMatrix(q: PbQuestion): boolean {
-  if (q.object !== "matrix") return false;
+function isComponentsMatrix(q: PbQuestion | undefined): boolean {
+  if (!q || q.object !== "matrix") return false;
   const title = lc(q.title);
   if (/vital|attempt|location|reaction|removal/.test(title)) return false;
   if (/\bim\b|intramuscular|shot given/.test(title)) return false;
@@ -186,6 +186,7 @@ function buildComponents(q: PbQuestion, comps: NonNullable<IvChartInput["compone
 /** Build the answer for one scaffold item from the chart, or null to skip. */
 function answerFor(item: PbContentItem, chart: IvChartInput): unknown {
   const q = item.question;
+  if (!q) return undefined; // text/section block — no answer
   const title = lc(q.title);
   if (q.object === "singlechoicegrid") {
     if (/initial assessment/.test(title)) return assessmentAnswer(q, chart.assessment);
@@ -219,14 +220,14 @@ export function buildIvNoteContent(
     let answer = answerFor(item, chart);
     // Form-driven components: replace the template rows with the staff's table.
     if (comps.length && isComponentsMatrix(item.question)) {
-      const built = buildComponents(item.question, comps);
+      const built = buildComponents(item.question!, comps); // isComponentsMatrix guarantees defined
       question = built.question;
       answer = built.answer;
     }
     const filled: PbContentItem = {
       id: item.id,
       question,
-      name: item.name ?? question.title,
+      name: item.name ?? question?.title,
       publishStatus: "draft",
       object: item.object,
     };

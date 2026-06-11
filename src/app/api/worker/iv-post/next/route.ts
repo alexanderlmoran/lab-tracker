@@ -12,6 +12,17 @@ import { getSupabaseAdmin } from "@/utils/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
+/** Normalize a template_hint for join-key matching: straighten curly quotes,
+ *  collapse whitespace, lowercase. Keeps "Myers’ Cocktail" == "Myers' Cocktail". */
+function normalizeTemplateHint(s: string | null | undefined): string {
+  return (s ?? "")
+    .replace(/[‘’ʼ]/g, "'")
+    .replace(/[“”]/g, '"')
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export async function POST(request: Request) {
   const expected = process.env.WORKER_SHARED_SECRET;
   if (!expected) return NextResponse.json({ ok: false, error: "WORKER_SHARED_SECRET not configured" }, { status: 500 });
@@ -75,12 +86,18 @@ export async function POST(request: Request) {
     }
   }
 
-  // Resolve the template scaffold reference note.
-  const { data: ref } = await db
-    .from("iv_template_refs")
-    .select("reference_note_id")
-    .eq("template_hint", s.template_hint ?? "")
-    .maybeSingle();
+  // Resolve the template scaffold reference note. template_hint is a free string
+  // that drifts on apostrophes / whitespace / case (Zenoti's curly ’ vs a seeded
+  // straight '), so match on a NORMALIZED form rather than exact eq — otherwise
+  // e.g. "Myers’ Cocktail" never finds "Myers' Cocktail" and the post holds.
+  let referenceNoteId: string | null = null;
+  const normHint = normalizeTemplateHint(s.template_hint);
+  if (normHint) {
+    const { data: refs } = await db.from("iv_template_refs").select("template_hint, reference_note_id");
+    const hit = (refs ?? []).find((r) => normalizeTemplateHint(r.template_hint) === normHint);
+    referenceNoteId = hit?.reference_note_id ?? null;
+  }
+  const ref = referenceNoteId ? { reference_note_id: referenceNoteId } : null;
 
   return NextResponse.json({
     job: { id: claimed.id, sessionId: s.id },
