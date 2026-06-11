@@ -9,6 +9,7 @@ import {
   type ColumnKey,
 } from "@/lib/columns";
 import { UserChip } from "./UserChip";
+import { ThemeToggle } from "./ThemeToggle";
 import { logoutAction } from "../login/actions";
 import { countUnreadInbox } from "@/lib/inbound/unread-count";
 import "./hud.css";
@@ -166,6 +167,7 @@ export async function HudPulse({ user, cases }: HudPulseProps) {
             </span>
           ) : null}
           <UserChip email={user.email} role={user.role} />
+          <ThemeToggle />
           <form action={logoutAction}>
             <button type="submit" className="signout">
               Sign out

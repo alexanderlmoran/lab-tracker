@@ -225,6 +225,17 @@
 }
 .hud--pulse .signout:hover { background: #f4f4f5; color: #18181b; }
 
+/* The 💡 dark-theme toggle (ThemeToggle.tsx) — same ghost style as .signout. */
+.hud--pulse .theme-toggle {
+  display: inline-flex; align-items: center;
+  border: 0; background: transparent;
+  padding: 4px 6px;
+  color: #71717a;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.hud--pulse .theme-toggle:hover { background: #f4f4f5; color: #18181b; }
+
 /* Flow strip */
 .hud--pulse .flow {
   position: relative;

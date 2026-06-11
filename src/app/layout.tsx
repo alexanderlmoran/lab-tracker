@@ -28,9 +28,20 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      // The theme boot script below may add `dark` before hydration.
+      suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        {/* Apply the saved theme before first paint — no light flash. Keep in
+            sync with ThemeToggle's STORAGE_KEY. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{if(localStorage.labTheme==="dark")document.documentElement.classList.add("dark")}catch(e){}`,
+          }}
+        />
+        {children}
+      </body>
     </html>
   );
 }

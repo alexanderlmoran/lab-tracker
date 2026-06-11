@@ -67,3 +67,43 @@ dialog[open] {
 .kanban-col > div[class*="overflow-y-auto"] {
   scrollbar-gutter: stable;
 }
+
+/* ───────────────────────── Dark theme (the 💡 in the header) ─────────────────
+ * The app is styled light with hardcoded utility colors throughout, so dark
+ * mode is an INVERSION theme rather than per-component dark: variants: flip
+ * luminance on the root, rotate hue 180° so brand/status colors keep their
+ * identity (amber stays amber, not blue), then re-invert real media (photos,
+ * PDF previews, canvases) so documents render as printed. Toggled by
+ * ThemeToggle.tsx; persisted as localStorage.labTheme; applied pre-paint by
+ * the boot script in app/layout.tsx.
+ *
+ * KNOWN TRADE-OFF: filter on the root makes it the containing block for
+ * position:fixed descendants — harmless on /labs (the page itself doesn't
+ * scroll; columns scroll internally) but fixed elements on a page-scrolled
+ * view would track the document. If that ever bites, the fix is the Popover
+ * API (top layer), not a different filter target.
+ */
+html.dark {
+  color-scheme: dark; /* native widgets, scrollbars, form controls */
+  background: #fff;   /* inverts to true black at the overscroll edges */
+  filter: invert(1) hue-rotate(180deg);
+}
+/* showModal() dialogs render in the top layer, which ESCAPES the root filter —
+ * without this they'd stay light on the dark board. (Their ::backdrop is
+ * already dark and correctly stays unfiltered.) */
+html.dark dialog {
+  filter: invert(1) hue-rotate(180deg);
+}
+/* Real media must read as-authored — invert(1) hue-rotate(180deg) is its own
+ * exact inverse, so applying it again restores the original pixels. The
+ * [data-no-invert] hatch is for DOM overlays that sit ON media (e.g. the
+ * req-form calibrator's SVG text over the pdf.js canvas). */
+html.dark img,
+html.dark video,
+html.dark canvas,
+html.dark iframe,
+html.dark embed,
+html.dark object,
+html.dark [data-no-invert] {
+  filter: invert(1) hue-rotate(180deg);
+}

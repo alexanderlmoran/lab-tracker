@@ -328,6 +328,10 @@ export function ReqFormCalibrator({
               width={cssW}
               height={cssH}
               className="absolute inset-0"
+              // Dark theme re-inverts the pdf.js canvas below back to printed
+              // colors; this overlay must follow it, not the inverted UI, or
+              // its text goes light-on-white (see globals.css dark theme).
+              data-no-invert
               style={{ touchAction: "none", cursor: sel ? "crosshair" : "default" }}
               onPointerDown={onSvgDown}
             >
