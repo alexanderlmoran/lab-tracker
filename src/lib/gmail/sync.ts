@@ -7,6 +7,7 @@ import { matchCase } from "@/lib/inbound/match-case";
 import {
   detectLabFromEmail,
   isNotificationOnlyEmail,
+  looksLikeKkEmail,
 } from "@/lib/inbound/detect-notification";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import type { LabCase } from "@/lib/types";
@@ -261,6 +262,36 @@ export async function syncGmailInbox(): Promise<SyncResult> {
             .eq("id", inboundId);
           result.processed += 1;
           result.details.push({ messageId: id, status: "parsed" });
+
+          // Kennedy Krieger auto-forward (Phase A): KK results are email-only
+          // encrypted PDFs — the standing action IS "forward to BodyBio", so
+          // do it the moment the email lands instead of waiting for a click.
+          // Marks the row applied/forwarded_bodybio (the "forwarded" badge).
+          if (
+            pdfParts.length > 0 &&
+            looksLikeKkEmail({
+              fromAddress: fromAddr,
+              subject,
+              filenames: pdfParts.map((p) => p.filename),
+              extractedLab: extracted.lab_name ?? null,
+            })
+          ) {
+            try {
+              const { forwardKkPdf } = await import("@/lib/inbound/forward-kk");
+              const fw = await forwardKkPdf(inboundId, "auto:kk-forward");
+              result.details.push({
+                messageId: id,
+                status: "parsed",
+                note: fw.ok ? `KK auto-forwarded → ${fw.to}` : `KK forward failed: ${fw.error}`,
+              });
+            } catch (fwErr) {
+              result.details.push({
+                messageId: id,
+                status: "error",
+                note: `KK forward: ${fwErr instanceof Error ? fwErr.message : "failed"}`,
+              });
+            }
+          }
         } catch (parseErr) {
           await db
             .from("inbound_emails")

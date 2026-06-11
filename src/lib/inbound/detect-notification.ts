@@ -4,6 +4,22 @@
 // status (`needs_manual_pull`) lets staff click straight through to the lab
 // portal instead of digging through error rows.
 
+/** Does this email look like a Kennedy Krieger result? One definition shared
+ * by the inbox UI (Forward button), the sync auto-forward, and re-parse. */
+export function looksLikeKkEmail(args: {
+  fromAddress?: string | null;
+  subject?: string | null;
+  filenames?: string[];
+  extractedLab?: string | null;
+}): boolean {
+  return (
+    args.extractedLab === "Kennedy Krieger" ||
+    /geneticslab|kennedy.?krieger/i.test(args.fromAddress ?? "") ||
+    /kennedy.?krieger|genetics\s*lab/i.test(args.subject ?? "") ||
+    (args.filenames ?? []).some((f) => /kennedy.?krieger|genetics/i.test(f ?? ""))
+  );
+}
+
 const NOTIFICATION_KEYWORDS: readonly string[] = [
   "log in to view",
   "login to view",

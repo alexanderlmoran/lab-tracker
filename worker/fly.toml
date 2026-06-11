@@ -46,6 +46,10 @@ primary_region = "iad"
   # promptly) AND runs the auto-post sweep daily at 5pm ET so a note never goes
   # missing. Posts to PB → needs the egress wrapper like pbdrain.
   ivpost = "bash scripts/pb-egress-entrypoint.sh npx tsx scripts/iv-autopost-loop.ts"
+  # gmailsync pings the app's /api/worker/gmail-sync every ~2 min so lab emails
+  # land in the inbox (and KK results auto-forward to BodyBio) without anyone
+  # clicking "Sync now". The app does the real work; this is just the scheduler.
+  gmailsync = "npx tsx scripts/gmail-sync-loop.ts"
 
 [http_service]
   internal_port = 8080

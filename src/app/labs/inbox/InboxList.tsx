@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { InboundAttachment, InboundEmail, LabCase } from "@/lib/types";
 import { formatPersonName } from "@/lib/format";
-import { getPortalUrlForLab } from "@/lib/inbound/detect-notification";
+import { getPortalUrlForLab, looksLikeKkEmail } from "@/lib/inbound/detect-notification";
 import { InboundRowActions } from "./InboundRowActions";
 
 type EmailRow = InboundEmail & { attachments: InboundAttachment[] };
@@ -94,11 +94,30 @@ function senderName(from: string | null): string {
 }
 
 function isKkEmail(e: EmailRow): boolean {
+  return looksLikeKkEmail({
+    fromAddress: e.from_address,
+    subject: e.subject,
+    filenames: (e.attachments ?? []).map((a) => a.filename),
+    extractedLab: e.parser_extracted?.lab_name ?? null,
+  });
+}
+
+/** Status badge, with the Kennedy Krieger special case: applied via the
+ * auto-forward reads "forwarded", not "posted" (nothing went to PB). */
+function statusFor(e: EmailRow): { label: string; cls: string; title: string } {
+  if (e.parser_status === "applied" && e.applied_action === "forwarded_bodybio") {
+    return {
+      label: "forwarded",
+      cls: "bg-indigo-100 text-indigo-800",
+      title: "Kennedy Krieger flow — the PDF was forwarded to BodyBio.",
+    };
+  }
   return (
-    e.parser_extracted?.lab_name === "Kennedy Krieger" ||
-    /geneticslab|kennedy.?krieger/i.test(e.from_address ?? "") ||
-    /kennedy.?krieger|genetics\s*lab/i.test(e.subject ?? "") ||
-    (e.attachments ?? []).some((a) => /kennedy.?krieger|genetics/i.test(a.filename ?? ""))
+    STATUS_META[e.parser_status] ?? {
+      label: e.parser_status,
+      cls: "bg-zinc-100 text-zinc-700",
+      title: "",
+    }
   );
 }
 
@@ -137,11 +156,7 @@ export function InboxList({
     <>
       <ul className="divide-y divide-zinc-100 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
         {emails.map((e) => {
-          const status = STATUS_META[e.parser_status] ?? {
-            label: e.parser_status,
-            cls: "bg-zinc-100 text-zinc-700",
-            title: "",
-          };
+          const status = statusFor(e);
           const actionable = e.parser_status === "parsed" || e.parser_status === "pending";
           const conf =
             actionable && e.matched_confidence ? CONF_META[e.matched_confidence] : null;
@@ -234,7 +249,7 @@ function InboxDetail({
   onClose: () => void;
 }) {
   const ext = email.parser_extracted;
-  const status = STATUS_META[email.parser_status];
+  const status = statusFor(email);
   const actionable = email.parser_status === "parsed" || email.parser_status === "pending";
   const conf = actionable && email.matched_confidence ? CONF_META[email.matched_confidence] : null;
   const isManualPull = email.parser_status === "needs_manual_pull";
@@ -381,7 +396,9 @@ function InboxDetail({
       <div className="border-t border-zinc-200 px-5 py-3">
         {email.parser_status === "applied" ? (
           <span className="text-xs text-emerald-700">
-            Posted{email.reviewed_by ? ` by ${email.reviewed_by}` : ""} — nothing left to do.
+            {email.applied_action === "forwarded_bodybio"
+              ? `Forwarded to BodyBio${email.reviewed_by === "auto:kk-forward" ? " automatically" : ""} — nothing left to do.`
+              : `Posted${email.reviewed_by ? ` by ${email.reviewed_by}` : ""} — nothing left to do.`}
           </span>
         ) : email.parser_status === "dismissed" ? (
           <span className="text-xs text-zinc-500">Dismissed.</span>

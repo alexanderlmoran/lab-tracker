@@ -22,70 +22,18 @@ import type {
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
 
-// Kennedy Krieger (Phase A): forward the raw KK PDF to BodyBio. Defaults to a
-// TEST address until verified — set KK_FORWARD_TO=results@bodybio.com to go
-// live. The sync only stored extracted text, so re-fetch the PDF bytes from
-// Gmail by message id, then send via Resend with the PDF attached.
+// Kennedy Krieger (Phase A): forward the raw KK PDF to BodyBio. The sync now
+// auto-forwards on arrival; this button is the manual retry. Core (fetch +
+// send + mark the row) lives in @/lib/inbound/forward-kk.
 export async function forwardKkEmailToBodyBio(
   inboundEmailId: string,
 ): Promise<ActionResult<{ to: string; filename: string }>> {
-  await requireSignedIn();
-  const db = getSupabaseAdmin();
-
-  const { data: email } = await db
-    .from("inbound_emails")
-    .select("external_id, from_address, subject")
-    .eq("id", inboundEmailId)
-    .maybeSingle();
-  const row = email as
-    | { external_id: string | null; from_address: string | null; subject: string | null }
-    | null;
-  if (!row?.external_id) return { ok: false, error: "Email not found or missing Gmail id." };
-
-  const auth = await getAuthorizedGmailClient();
-  if (!auth) return { ok: false, error: "Gmail isn't connected — connect it in the Inbox panel first." };
-  const gmail = google.gmail({ version: "v1", auth: auth.auth });
-
-  let buf: Buffer;
-  let filename: string;
-  try {
-    const msg = await gmail.users.messages.get({ userId: "me", id: row.external_id, format: "full" });
-    const parts = collectPdfParts(msg.data.payload ?? {});
-    if (parts.length === 0) return { ok: false, error: "No PDF attachment on that email." };
-    const part = parts[0];
-    filename = part.filename || "kennedy-krieger.pdf";
-    const att = await gmail.users.messages.attachments.get({
-      userId: "me",
-      messageId: row.external_id,
-      id: part.attachmentId,
-    });
-    if (!att.data.data) return { ok: false, error: "Could not fetch the PDF bytes from Gmail." };
-    buf = decodeBase64Url(att.data.data);
-  } catch (err) {
-    return { ok: false, error: `Gmail fetch failed: ${err instanceof Error ? err.message : String(err)}` };
-  }
-
-  const to = process.env.KK_FORWARD_TO?.trim() || "alex@centnerhb.com";
-  const key = process.env.RESEND_API_KEY;
-  if (!key) return { ok: false, error: "RESEND_API_KEY is not set." };
-
-  try {
-    const ctx = await loadEmailConfig();
-    const result = await new Resend(key).emails.send({
-      from: ctx.fromHeader,
-      to: [to],
-      replyTo: ctx.replyTo,
-      subject: `FW: ${row.subject ?? "Kennedy Krieger result"}`,
-      text: `Forwarded Kennedy Krieger lab PDF (originally from ${row.from_address ?? "?"}). Original subject: ${row.subject ?? "(none)"}.`,
-      attachments: [{ filename, content: buf.toString("base64") }],
-    });
-    if (result.error) return { ok: false, error: result.error.message };
-  } catch (err) {
-    return { ok: false, error: `Send failed: ${err instanceof Error ? err.message : String(err)}` };
-  }
-
+  const user = await requireSignedIn();
+  const { forwardKkPdf } = await import("@/lib/inbound/forward-kk");
+  const r = await forwardKkPdf(inboundEmailId, user.email ?? "staff");
   revalidatePath("/labs/inbox");
-  return { ok: true, data: { to, filename } };
+  if (!r.ok) return { ok: false, error: r.error };
+  return { ok: true, data: { to: r.to, filename: r.filename } };
 }
 
 export async function uploadInboundEmail(
