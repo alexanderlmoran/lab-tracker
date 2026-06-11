@@ -30,6 +30,7 @@ import {
   type CardCounts,
 } from "./card-counts";
 import { useDismiss } from "./use-dismiss";
+import { isMergeMode, MERGE_STORAGE_KEY, type MergeMode } from "./MergeViewMenu";
 
 function formatExpectedRange(min: string | null, max: string | null): string | null {
   if (!min && !max) return null;
@@ -89,8 +90,6 @@ const SORT_NATURAL_DIR: Record<SortField, SortDir> = {
 };
 // Persisted so the board comes back the way you left it after a reload.
 const SORT_STORAGE_KEY = "labKanbanSortByCol";
-const MERGE_STORAGE_KEY = "labKanbanMergeMode";
-type MergeMode = "off" | "dupes" | "patient" | "date";
 
 function sortUnits(units: LabCase[][], sort: ColumnSort): LabCase[][] {
   if (!sort) return units;
@@ -530,23 +529,19 @@ function StaticColumn({
           sort/count controls drop below the title when both can't fit (e.g.
           an active sort pill on a long-titled column). */}
       <header className="flex flex-wrap items-start justify-between gap-x-1 gap-y-0.5 px-1.5 py-1">
+        {/* Count lives INSIDE the accent dot (replaces the old right-side
+            count chip — Alex, 2026-06-11). Amber when Pending Upload owes a
+            human action. */}
         <h3 className={`col-head-title min-w-0 ${needsAction ? "text-amber-800" : ""}`}>
-          {needsAction ? "● " : ""}
+          <span className={`col-count-dot${needsAction ? " col-count-dot--alert" : ""}`}>
+            {count}
+          </span>
           {COLUMN_LABEL[col]}
         </h3>
         <div className="flex shrink-0 items-center gap-1">
           {onSortChange ? (
             <SortControl col={col} sort={sort ?? null} onChange={onSortChange} />
           ) : null}
-          <span
-            className={
-              needsAction
-                ? "rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold text-white"
-                : "col-head-count"
-            }
-          >
-            {count}
-          </span>
         </div>
       </header>
       <div className="flex min-h-[40px] flex-col gap-1.5 p-0.5 lg:flex-1 lg:overflow-y-auto">
@@ -724,26 +719,20 @@ export function LabKanbanBoard({
   // columns. "patient" / "date" collapse a patient's cards WITHIN each column
   // (by patient, or by patient+collection-date) so a busy patient reads as one
   // unit per lane. "off" expands everything.
-  const [mergeMode, setMergeModeState] = useState<MergeMode>("dupes");
-  // Hydrated + persisted like the column sorts, so a reload keeps the view.
+  // The merge control lives in the toolbar now (MergeViewMenu, left of the
+  // search bar). It writes ?merge= + localStorage; the board only reads —
+  // param wins, the stored value covers param-less visits.
+  const mergeParam = searchParams.get("merge");
+  const [storedMerge, setStoredMerge] = useState<MergeMode>("dupes");
   useEffect(() => {
     try {
       const m = window.localStorage.getItem(MERGE_STORAGE_KEY);
-      if (m === "off" || m === "dupes" || m === "patient" || m === "date") {
-        setMergeModeState(m);
-      }
+      if (isMergeMode(m)) setStoredMerge(m);
     } catch {
-      // storage unavailable — keep the default
+      // storage unavailable — default stands
     }
-  }, []);
-  function setMergeMode(next: MergeMode) {
-    setMergeModeState(next);
-    try {
-      window.localStorage.setItem(MERGE_STORAGE_KEY, next);
-    } catch {
-      // storage unavailable (private mode) — the toggle still works in-session
-    }
-  }
+  }, [mergeParam]);
+  const mergeMode: MergeMode = isMergeMode(mergeParam) ? mergeParam : storedMerge;
 
   // Board-wide merged-group plan. A same-accession group is ONE physical order
   // split across cards; when those cards land in DIFFERENT columns (only one
@@ -872,32 +861,6 @@ export function LabKanbanBoard({
 
   return (
     <div className="flex h-full flex-col">
-      {rows.length > 0 ? (
-        <div className="flex items-center justify-end gap-1.5 px-1.5 pb-1">
-          <span className="text-[10px] uppercase tracking-wide text-zinc-400">Merge view</span>
-          {(
-            [
-              ["dupes", "By accession", "Collapse a same-accession order (Vibrant Zoomer panels) into one card across columns."],
-              ["patient", "By patient", "Collapse each patient's cards within a column into one card."],
-              ["date", "By date", "Collapse each patient's cards within a column by collection date."],
-            ] as const
-          ).map(([m, label, title]) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setMergeMode(mergeMode === m ? "off" : m)}
-              title={title}
-              className={`rounded-md border px-2 py-0.5 text-[11px] font-medium ${
-                mergeMode === m
-                  ? "border-purple-400 bg-purple-100 text-purple-800"
-                  : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50"
-              }`}
-            >
-              {mergeMode === m ? `${label} ✓` : label}
-            </button>
-          ))}
-        </div>
-      ) : null}
       <div className="flex flex-row flex-nowrap gap-1.5 pb-2 lg:flex-1 lg:min-h-0">
         {LAB_BOARD_COLUMN_ORDER.map((col) => {
           // Units actually rendered here. With merge-dupes a group's cards

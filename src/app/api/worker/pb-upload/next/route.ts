@@ -134,8 +134,12 @@ export async function POST(request: Request) {
       // PDF-attached accession (preferred — what's actually printed on
       // the document). Falls back to the case's lab_external_ref if a
       // human typed the accession but no PDF row has carried it yet.
+      // "manual" is the placeholder manual uploads stamp on the PDF row,
+      // not an accession — skip it so PB titles never say "Acc#manual".
       accession:
-        (pdf.external_ref as string | null) ??
+        ((pdf.external_ref as string | null) === "manual"
+          ? null
+          : (pdf.external_ref as string | null)) ??
         (kase.lab_external_ref as string | null) ??
         null,
       pdfFilename: (pdf.filename as string | null) ?? "lab-report.pdf",

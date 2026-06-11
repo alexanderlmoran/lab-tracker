@@ -92,7 +92,9 @@ function composePbLabTitle(
 ): string {
   const descriptor = cleanServiceName(serviceName);
   const parts = [labName];
-  if (accession) parts.push(`- Acc#${accession}`);
+  // "manual" is the placeholder ref manual uploads stamp on the PDF row,
+  // not a real accession — the PB title read "Access Custom - Acc#manual".
+  if (accession && accession !== "manual") parts.push(`- Acc#${accession}`);
   if (descriptor && descriptor.toLowerCase() !== labName.toLowerCase()) parts.push(descriptor);
   return parts.join(" ");
 }
@@ -153,7 +155,10 @@ async function processJob(job: Job) {
   try {
     pdfPath = await downloadToTemp(job.pdfSignedUrl, job.pdfFilename);
     const collectionDate = job.collectionDate ?? new Date().toISOString().slice(0, 10);
-    const dateOrdered = `${collectionDate}T00:00:00.000Z`;
+    // Noon UTC, NOT midnight: PB renders this instant in the practice's
+    // timezone, and midnight UTC is the PREVIOUS evening in Eastern — every
+    // Date Ordered displayed one day early (collection 05-18 → "May 17").
+    const dateOrdered = `${collectionDate}T12:00:00.000Z`;
 
     const result = await uploadPdfToPb({
       username: PB_USERNAME!,

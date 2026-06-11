@@ -339,6 +339,35 @@
   line-height: 1.2;
   gap: 7px;
 }
+/* Count-in-dot — the lane count lives INSIDE the accent dot (the separate
+   right-side count chip is gone). Tinted bg + dark colored numeral so even
+   the yellow lanes stay readable; the halo matches the old dot. */
+.kanban-col .col-count-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 19px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--col-c) 28%, #ffffff);
+  color: color-mix(in oklab, var(--col-c) 55%, #0a0a0b);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--col-c) 20%, transparent);
+  flex-shrink: 0;
+}
+.kanban-col .col-count-dot--alert {
+  background: #f59e0b;
+  color: #fff;
+  box-shadow: 0 0 0 3px rgb(245 158 11 / 0.25);
+}
+/* The pill replaces the plain dot when present. */
+.kanban-col .col-head-title:has(.col-count-dot)::before {
+  display: none;
+}
+
 .kanban-col .col-head-title::before {
   content: "";
   margin-top: 3px; /* optically centers on line one of a wrapped title */
