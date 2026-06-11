@@ -165,6 +165,39 @@ export function sanitizeQuestion(question: PbQuestion | undefined): PbQuestion |
   return q;
 }
 
+// ── Update ───────────────────────────────────────────────────────────────
+/** Update an existing note (re-post = complete the SAME note, never a duplicate).
+ *  PUT /sessionnotes/<id>; PB requires `notesId` + `publishStatus` in the body
+ *  (verified live). Returns the note id. */
+export async function updateSessionNote(
+  session: PbSession,
+  noteId: string,
+  input: CreateSessionNoteInput,
+): Promise<{ id: string }> {
+  const body = {
+    id: noteId,
+    notesId: noteId,
+    clientRecordId: input.clientRecordId,
+    name: input.name,
+    summary: input.summary ?? "",
+    sessionDate: input.sessionDate,
+    publishStatus: input.publishStatus ?? "draft",
+    content: input.content,
+    object: "sessionnote",
+  };
+  const res = await pbRequest(`${PB_BASE}/api/consultant/sessionnotes/${noteId}`, {
+    method: "PUT",
+    headers: pbNoteHeaders(session, true),
+    body: JSON.stringify(body),
+  });
+  const text = await res.body.text();
+  if (res.statusCode !== 200 && res.statusCode !== 201) {
+    throw new Error(`PB updateSessionNote ${res.statusCode}: ${text.slice(0, 300)}`);
+  }
+  const j = JSON.parse(text) as { id?: string };
+  return { id: j.id ?? noteId };
+}
+
 // ── Delete ───────────────────────────────────────────────────────────────
 /** Delete a session note. Uses the note headers (cookie + x-xsrf-token +
  *  x-api-version 5.1) — same write-auth as create. Returns true on success;

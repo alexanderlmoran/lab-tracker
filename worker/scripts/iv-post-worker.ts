@@ -10,7 +10,7 @@ import { request } from "undici";
 
 import { loadEnvLocal } from "../src/lib/load-env.js";
 import { pbLogin, searchPbPatientCandidates, type PbSession } from "../src/uploaders/practicebetter.js";
-import { getSessionNote, scaffoldFromNote, createSessionNote } from "../src/uploaders/pb-sessionnotes.js";
+import { getSessionNote, scaffoldFromNote, createSessionNote, updateSessionNote } from "../src/uploaders/pb-sessionnotes.js";
 import { buildIvNoteContent, ivNoteSummary, ivNoteTitle, type IvChartInput } from "../src/iv/build-note-content.js";
 import { pickBestMatch, type PatientIdentity } from "../src/iv/match-patient.js";
 
@@ -26,7 +26,7 @@ const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`);
 
 type Claim = {
   job: { id: string; sessionId: string };
-  session: { id: string; serviceName: string; kind: string; templateHint: string | null; sessionDate: string; chart: IvChartInput; pc: { infusionNumber?: number | null; vialCount?: string } };
+  session: { id: string; serviceName: string; kind: string; templateHint: string | null; sessionDate: string; chart: IvChartInput; pc: { infusionNumber?: number | null; vialCount?: string }; pbNoteId?: string | null; pbClientRecordId?: string | null };
   identity: PatientIdentity;
   referenceNoteId: string | null;
 };
@@ -59,6 +59,25 @@ async function handle(claim: Claim, pb: PbSession) {
   if (!referenceNoteId) {
     await report({ jobId: job.id, sessionId: s.id, outcome: "held", score: null, reason: `no reference scaffold for template "${s.templateHint}" — add it to iv_template_refs` });
     log(`hold (no scaffold) session=${s.id}`);
+    return;
+  }
+
+  // Re-post of an already-posted session → UPDATE the same note (never a
+  // duplicate), reusing the patient matched on the first post. This completes
+  // the "post incomplete now, finish charting later" flow.
+  if (s.pbNoteId && s.pbClientRecordId) {
+    const ref = await getSessionNote(pb, referenceNoteId);
+    const content = buildIvNoteContent(scaffoldFromNote(ref), s.chart);
+    const title = ivNoteTitle({ serviceName: s.serviceName, templateHint: s.templateHint, kind: s.kind, pc: s.pc });
+    await updateSessionNote(pb, s.pbNoteId, {
+      clientRecordId: s.pbClientRecordId,
+      name: title,
+      summary: ivNoteSummary(s.chart),
+      sessionDate: `${s.sessionDate}T12:00:00.000Z`,
+      content,
+    });
+    await report({ jobId: job.id, sessionId: s.id, outcome: "success", pbNoteId: s.pbNoteId, pbClientRecordId: s.pbClientRecordId, score: null, reason: "updated existing note (re-post)" });
+    log(`UPDATED note=${s.pbNoteId} session=${s.id}`);
     return;
   }
 

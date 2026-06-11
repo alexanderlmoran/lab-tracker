@@ -20,6 +20,7 @@
 import { request } from "undici";
 import { loadEnvLocal } from "../src/lib/load-env.js";
 import { pbLogin, searchPbPatientCandidates } from "../src/uploaders/practicebetter.js";
+import { deleteSessionNote } from "../src/uploaders/pb-sessionnotes.js";
 
 loadEnvLocal();
 const SUPA = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -123,20 +124,38 @@ async function verify() {
   if (s.pb_note_id) console.log(`\n⚠ Delete PB test note ${s.pb_note_id} from Leila's chart.`);
 }
 
-async function cleanup() {
-  const ses = await rest("GET", `iv_sessions?zenoti_appointment_id=eq.${ZAPPT}&select=id`);
+/** Set the test job back to queued so the worker re-claims it (tests re-post →
+ *  UPDATE the same note, no duplicate). */
+async function requeue() {
+  const ses = await rest("GET", `iv_sessions?zenoti_appointment_id=eq.${ZAPPT}&select=id,pb_note_id`);
   const s = Array.isArray(ses) ? ses[0] : null;
+  if (!s) throw new Error("test session not found — run setup first");
+  await rest("PATCH", `iv_post_jobs?session_id=eq.${s.id}`, { status: "queued", finished_at: null, claimed_at: null, last_error: null }, "return=minimal");
+  console.log(`✓ re-queued. existing pb_note_id=${s.pb_note_id} — re-run the worker; it should UPDATE this note.`);
+}
+
+async function cleanup() {
+  const ses = await rest("GET", `iv_sessions?zenoti_appointment_id=eq.${ZAPPT}&select=id,pb_note_id`);
+  const s = Array.isArray(ses) ? ses[0] : null;
+  if (s?.pb_note_id) {
+    try {
+      const pb = await pbLogin(process.env.PB_USERNAME!, process.env.PB_PASSWORD!);
+      await deleteSessionNote(pb, s.pb_note_id);
+      console.log(`✓ deleted PB note ${s.pb_note_id} from Leila`);
+    } catch (e) {
+      console.log(`⚠ could not delete PB note ${s.pb_note_id}: ${e instanceof Error ? e.message : e} (delete in PB UI)`);
+    }
+  }
   if (s) {
     await rest("DELETE", `iv_post_jobs?session_id=eq.${s.id}`, undefined, "return=minimal");
     await rest("DELETE", `iv_sessions?zenoti_appointment_id=eq.${ZAPPT}`, undefined, "return=minimal");
   }
   await rest("DELETE", `iv_template_refs?template_hint=eq.${THINT}`, undefined, "return=minimal");
   await rest("DELETE", `patients_seed?notes=eq.${encodeURIComponent(SEED_NOTE)}`, undefined, "return=minimal");
-  console.log("✓ cleanup: removed test job, session, template-ref, and any marked patients_seed row.");
-  console.log("  (PB note on Leila must still be deleted manually in PB.)");
+  console.log("✓ cleanup: removed PB note + test job, session, template-ref, and any marked patients_seed row.");
 }
 
 const cmd = process.argv[2];
-const fn = cmd === "setup" ? setup : cmd === "verify" ? verify : cmd === "cleanup" ? cleanup : null;
-if (!fn) { console.error("usage: iv-orchestration-test.ts <setup|verify|cleanup>"); process.exit(1); }
+const fn = cmd === "setup" ? setup : cmd === "verify" ? verify : cmd === "requeue" ? requeue : cmd === "cleanup" ? cleanup : null;
+if (!fn) { console.error("usage: iv-orchestration-test.ts <setup|verify|requeue|cleanup>"); process.exit(1); }
 fn().catch((e) => { console.error("FATAL", e instanceof Error ? e.message : e); process.exit(1); });

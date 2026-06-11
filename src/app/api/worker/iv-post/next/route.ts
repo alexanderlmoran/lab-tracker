@@ -56,7 +56,7 @@ export async function POST(request: Request) {
   const { data: s, error: sErr } = await db
     .from("iv_sessions")
     .select(
-      "id, patient_full_name, patient_first_name, patient_last_name, patient_email, service_name, kind, template_hint, session_date, chart, pc_infusion_number, pc_vial_count",
+      "id, patient_full_name, patient_first_name, patient_last_name, patient_email, service_name, kind, template_hint, session_date, chart, pc_infusion_number, pc_vial_count, pb_note_id, pb_client_record_id",
     )
     .eq("id", claimed.session_id)
     .maybeSingle();
@@ -109,6 +109,9 @@ export async function POST(request: Request) {
       sessionDate: s.session_date,
       chart: s.chart ?? {},
       pc: { infusionNumber: s.pc_infusion_number, vialCount: s.pc_vial_count },
+      // Set once this session was posted — drives update-vs-create on re-post.
+      pbNoteId: s.pb_note_id,
+      pbClientRecordId: s.pb_client_record_id,
     },
     identity: {
       fullName: s.patient_full_name,
