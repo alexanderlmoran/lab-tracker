@@ -301,12 +301,12 @@ function LabCard({
       }`}
     >
       <div className="flex min-w-0 flex-col gap-0.5">
-        <p className="truncate text-[13px] font-medium leading-tight text-zinc-900">
-          {labLabel}
-        </p>
-        <p className="truncate text-[12px] text-zinc-500">
+        {/* Patient-first (Alex, 2026-06-11): the NAME is the line staff scan
+            for; the lab type is the detail. */}
+        <p className="truncate text-[13px] font-semibold leading-tight text-zinc-900">
           {formatPersonName(row.patient_name)}
         </p>
+        <p className="truncate text-[12px] text-zinc-500">{labLabel}</p>
         {showMeta && (expected || row.tracking_number || row.pickup_confirmation) ? (
           <div className="flex flex-col gap-0.5 text-[10px] text-zinc-400">
             {expected ? <span className="truncate">↳ {expected}</span> : null}
@@ -433,24 +433,25 @@ function MergedDupCard({
     <button
       type="button"
       onClick={() => onOpen(lead, hasPendingPdf)}
+      // Whole-card tint of the merge accent (the light pinkish purple) so a
+      // merged unit reads at a glance in ANY merge view; text stays zinc.
       className={`flex w-full flex-col gap-1 rounded-md border-2 border-dashed p-1.5 text-left shadow-sm transition-shadow hover:shadow ${
         hasPendingPdf
           ? "border-amber-400 bg-amber-50"
-          : "border-purple-300 bg-purple-50/60"
+          : "border-purple-300 bg-purple-100"
       }`}
     >
       <div className="flex items-start justify-between gap-2">
-        <p className="min-w-0 flex-1 truncate text-[13px] font-medium leading-tight text-zinc-900">
-          {isDupes ? labelForCase(lead) : formatPersonName(lead.patient_name)}
+        {/* Patient-first, same as LabCard (Alex, 2026-06-11). */}
+        <p className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-tight text-zinc-900">
+          {formatPersonName(lead.patient_name)}
         </p>
         <span className="shrink-0 rounded bg-purple-200 px-1.5 text-[10px] font-semibold text-purple-800">
           {isDupes ? `merged ×${rows.length}` : `${rows.length} labs`}
         </span>
       </div>
       {isDupes ? (
-        <p className="truncate text-[12px] text-zinc-500">
-          {formatPersonName(lead.patient_name)}
-        </p>
+        <p className="truncate text-[12px] text-zinc-500">{labelForCase(lead)}</p>
       ) : (
         <p className="truncate text-[11px] text-zinc-500">
           {mode === "date" && lead.collection_date ? `${lead.collection_date} · ` : ""}
