@@ -333,11 +333,16 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
   display: inline-flex;
-  align-items: center;
+  /* Titles WRAP to a second line in narrow lanes (10+ columns) instead of
+     truncating — the dot tops-aligns beside line one. */
+  align-items: flex-start;
+  line-height: 1.2;
   gap: 7px;
 }
 .kanban-col .col-head-title::before {
   content: "";
+  margin-top: 3px; /* optically centers on line one of a wrapped title */
+  flex-shrink: 0;
   width: 7px;
   height: 7px;
   border-radius: 999px;

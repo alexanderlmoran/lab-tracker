@@ -525,8 +525,12 @@ function StaticColumn({
       }`}
       data-col={col}
     >
-      <header className="flex items-center justify-between gap-1 px-1.5 py-1">
-        <h3 className={`col-head-title min-w-0 truncate ${needsAction ? "text-amber-800" : ""}`}>
+      {/* Full titles wrap to a second line in the narrow lanes — truncating to
+          "COMPLETE UPLO…" hid which lane was which. flex-wrap lets the
+          sort/count controls drop below the title when both can't fit (e.g.
+          an active sort pill on a long-titled column). */}
+      <header className="flex flex-wrap items-start justify-between gap-x-1 gap-y-0.5 px-1.5 py-1">
+        <h3 className={`col-head-title min-w-0 ${needsAction ? "text-amber-800" : ""}`}>
           {needsAction ? "● " : ""}
           {COLUMN_LABEL[col]}
         </h3>
@@ -855,6 +859,16 @@ export function LabKanbanBoard({
     el.addEventListener("close", onClose);
     return () => el.removeEventListener("close", onClose);
   }, []);
+
+  // Background workers advance cases asynchronously (Approve → on PB ~10s
+  // later; hourly scrapes stage results) — without this the board shows stale
+  // lanes until a manual reload (the 2026-06-11 "manual upload stuck in
+  // Pending Upload" confusion). router.refresh() re-pulls server data; client
+  // state (open dialog, sorts, merge view) is untouched.
+  useEffect(() => {
+    const id = setInterval(() => router.refresh(), 45_000);
+    return () => clearInterval(id);
+  }, [router]);
 
   return (
     <div className="flex h-full flex-col">

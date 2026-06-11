@@ -3,9 +3,10 @@
 import { useRef, useState, useTransition } from "react";
 import { uploadResultPdf } from "./probe-actions";
 
-// Pick a PDF from disk and stage it on a case for review — the manual fallback
-// for any lab the scraper can't pull (no scraper, EBOO, session-down, etc.).
-// Lands the card in Pending Upload exactly like a scraped result.
+// Pick a PDF from disk and post it on a case — the manual fallback for any
+// lab the scraper can't pull (no scraper, EBOO, session-down, etc.). The
+// upload is auto-approved (the uploader is the reviewer) and queued straight
+// to PracticeBetter; the card lands in Complete Uploaded when PB confirms.
 export function ManualUploadButton({
   caseId,
   onUploaded,
@@ -59,7 +60,7 @@ export function ManualUploadButton({
         type="button"
         onClick={() => inputRef.current?.click()}
         disabled={busy}
-        title="Pick a result PDF from your computer to attach for review"
+        title="Pick a result PDF from your computer — it posts to PracticeBetter without a separate Approve"
         className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
       >
         {busy ? "Uploading…" : `⬆ ${label}`}

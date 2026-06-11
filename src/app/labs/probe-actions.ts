@@ -160,9 +160,14 @@ export async function setCaseAccession(input: {
  * no scraper (Kennedy Krieger, MembersPanel, Custom…), un-downloadable reports
  * (Vibrant EBOO), or any portal the scrape can't reach. Mirrors the worker's
  * postResultReady → /api/worker/result-ready staging: upload to the lab-pdfs
- * bucket, insert a lab_case_pdfs row, and tick step 4 (+ cascade 1/2/3) so the
- * card lands in Pending Upload for the normal Approve → PB flow. Does NOT touch
- * the accession (manual uploads aren't a portal match).
+ * bucket, insert a lab_case_pdfs row, and tick step 4 (+ cascade 1/2/3). Does
+ * NOT touch the accession (manual uploads aren't a portal match).
+ *
+ * AUTO-APPROVES (Alex, 2026-06-11): the human picked this exact file for this
+ * exact case — a second Approve click was redundant. The PDF goes straight to
+ * the PB queue and the card lands in Complete Uploaded when the PB worker
+ * confirms. If the auto-approve/enqueue step fails, the card falls back to
+ * Pending Upload where the normal Approve button still works.
  */
 export async function uploadResultPdf(input: {
   caseId: string;
@@ -230,12 +235,40 @@ export async function uploadResultPdf(input: {
     await db.from("lab_cases").update(updates).eq("id", input.caseId);
   }
 
+  // Auto-approve + enqueue for PB (mirrors result-ready's autoApprove block):
+  // the uploader IS the reviewer. Best-effort — a failure here leaves the PDF
+  // staged in Pending Upload with the normal Approve button as the fallback.
+  let autoQueued = false;
+  const { error: auditErr } = await db.from("lab_case_audit").insert({
+    case_id: input.caseId,
+    pdf_id: pdfRow.id,
+    action: "approve",
+    actor_label: user.email ?? "staff",
+    notes: "auto-approved (manual upload — uploader is the reviewer)",
+  });
+  if (!auditErr) {
+    const { error: jobErr } = await db.from("pb_upload_jobs").upsert(
+      {
+        case_id: input.caseId,
+        pdf_id: pdfRow.id,
+        status: "queued",
+        last_error: null,
+        claimed_at: null,
+        finished_at: null,
+      },
+      { onConflict: "case_id,pdf_id" },
+    );
+    autoQueued = !jobErr;
+  }
+
   await db.from("lab_events").insert({
     case_id: input.caseId,
     kind: "case_edited",
     actor: source,
-    note: `Result PDF uploaded manually (${filename}, ${bytes.length} bytes)`,
-    meta: { pdf_id: pdfRow.id, manual: true },
+    note: autoQueued
+      ? `Result PDF uploaded manually (${filename}, ${bytes.length} bytes) — auto-approved, queued for PracticeBetter`
+      : `Result PDF uploaded manually (${filename}, ${bytes.length} bytes) — auto-queue failed, waiting in Pending Upload for Approve`,
+    meta: { pdf_id: pdfRow.id, manual: true, auto_queued: autoQueued },
   });
 
   revalidatePath("/labs");
