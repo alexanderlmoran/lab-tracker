@@ -25,11 +25,19 @@ export function useDismiss(
         cb.current();
       }
     }
+    function onScroll(e: Event) {
+      // Scrolling inside the popover (a long suggestion list) is fine; any
+      // outside scroll dismisses, so fixed-positioned menus can't drift from
+      // their anchor. (Native selects close on scroll too.)
+      if (!ref.current?.contains(e.target as Node)) cb.current();
+    }
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);
+    document.addEventListener("scroll", onScroll, true);
     return () => {
       document.removeEventListener("mousedown", onDoc);
       document.removeEventListener("keydown", onKey);
+      document.removeEventListener("scroll", onScroll, true);
     };
   }, [active, ref]);
 }

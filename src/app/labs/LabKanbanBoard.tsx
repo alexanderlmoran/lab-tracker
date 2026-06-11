@@ -142,8 +142,23 @@ function SortControl({
   onChange: (s: ColumnSort) => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Viewport coords for the menu. The .kanban-col sections clip their contents
+  // (overflow:hidden in hud.css for the rounded gradient), and the columns are
+  // narrower than the menu — so an absolute menu gets its left edge cut off.
+  // position:fixed escapes the clip; useDismiss closes on any outside scroll
+  // so the menu can't drift from its anchor.
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
   const wrapRef = useRef<HTMLDivElement | null>(null);
   useDismiss(wrapRef, open, () => setOpen(false));
+
+  function toggle() {
+    if (!open && wrapRef.current) {
+      const r = wrapRef.current.getBoundingClientRect();
+      // Right-align to the button, clamped so column 1 stays on-screen.
+      setMenuPos({ top: r.bottom + 4, left: Math.max(8, r.right - 128) });
+    }
+    setOpen((v) => !v);
+  }
 
   function pick(field: SortField) {
     onChange(
@@ -158,7 +173,7 @@ function SortControl({
     <div ref={wrapRef} className="relative">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
         aria-label={`Sort ${COLUMN_LABEL[col]}`}
         title={
           sort
@@ -174,7 +189,10 @@ function SortControl({
         {sort ? `${SORT_FIELD_LABEL[sort.field]} ${sort.dir === "asc" ? "↑" : "↓"}` : "⇅"}
       </button>
       {open ? (
-        <div className="absolute right-0 top-full z-20 mt-1 w-32 overflow-hidden rounded-md border border-zinc-200 bg-white py-0.5 shadow-lg">
+        <div
+          className="fixed z-50 w-32 overflow-hidden rounded-md border border-zinc-200 bg-white py-0.5 shadow-lg"
+          style={{ top: menuPos.top, left: menuPos.left }}
+        >
           {(Object.keys(SORT_FIELD_LABEL) as SortField[]).map((f) => {
             const isActive = sort?.field === f;
             return (
