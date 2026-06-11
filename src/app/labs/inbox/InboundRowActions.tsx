@@ -237,15 +237,24 @@ export function InboundRowActions({
         >
           {pending ? "Posting…" : "Post to PB"}
         </button>
-      ) : suggested?.patientName && suggested?.labName ? (
+      ) : null}
+      {/* Always offered when the parse produced enough to create a case: the
+          auto-match can be a DIFFERENT order of the same patient (e.g. a
+          Quest forward matching her Kennedy Krieger case) — posting there
+          would attach the report to the wrong lab. */}
+      {suggested?.patientName && suggested?.labName ? (
         <button
           type="button"
           onClick={onCreateAndPost}
           disabled={pending}
           title={`Create a ${suggested.labName} case for ${suggested.patientName}${suggested.collectionDate ? ` (collected ${suggested.collectionDate})` : ""} and post the PDF to PracticeBetter`}
-          className="rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+          className={
+            caseId
+              ? "rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+              : "rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+          }
         >
-          {pending ? "Posting…" : "Create case + Post to PB"}
+          {pending ? "Posting…" : "New case + Post to PB"}
         </button>
       ) : null}
       <button
