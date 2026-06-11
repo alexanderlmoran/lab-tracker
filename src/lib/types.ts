@@ -9,7 +9,11 @@ export type EmailKind =
   | "nadia_all_received"
   | "rof_allison"
   | "stale_digest"
-  | "rof_reminder";
+  | "rof_reminder"
+  // Internal staff notice that a result landed on PracticeBetter (#21) —
+  // distinct from "complete_uploaded" (the PATIENT email for step 5) so the
+  // history never implies the patient was emailed when only staff were.
+  | "complete_upload_notice";
 
 export type EmailStatus = "queued" | "sent" | "failed" | "skipped";
 

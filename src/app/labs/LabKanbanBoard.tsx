@@ -603,6 +603,15 @@ export function LabKanbanBoard({
     return out;
   }, [rows]);
 
+  // Optimistic column overrides for drag-drop: the card jumps to its target
+  // lane the moment the move is confirmed instead of waiting ~seconds for the
+  // server action + full refresh. Cleared when fresh rows arrive (the server
+  // truth) or reverted if the action fails.
+  const [optimisticCols, setOptimisticCols] = useState<Record<string, ColumnKey>>({});
+  useEffect(() => {
+    setOptimisticCols({});
+  }, [rows]);
+
   const grouped: Record<ColumnKey, LabCase[]> = {
     untouched: [],
     ready_to_ship: [],
@@ -616,7 +625,10 @@ export function LabKanbanBoard({
     completed: [],
   };
   for (const r of filtered) {
-    grouped[getColumnFor(r, { hasPendingPdf: pendingPdfSet.has(r.id) })].push(r);
+    grouped[
+      optimisticCols[r.id] ??
+        getColumnFor(r, { hasPendingPdf: pendingPdfSet.has(r.id) })
+    ].push(r);
   }
   for (const col of LAB_BOARD_COLUMN_ORDER) {
     // Float likely-ready cards to the top of their column so the "go get this
@@ -697,17 +709,29 @@ export function LabKanbanBoard({
     ) {
       return;
     }
+    // Jump the card to its lane NOW; the server action + refresh follow.
+    setOptimisticCols((prev) => ({ ...prev, [caseId]: targetCol }));
     startMove(async () => {
       let res;
       if (targetCol === "completed") {
         res = await archiveLabCase(caseId);
       } else {
         const plan = planColumnJump(row, targetCol);
-        if (plan.length === 0) return;
+        if (plan.length === 0) {
+          setOptimisticCols((prev) => {
+            const { [caseId]: _, ...rest } = prev;
+            return rest;
+          });
+          return;
+        }
         const maxStep = Math.max(...plan.map((p) => p.step)) as StepNumber;
         res = await setStepCompleted({ caseId, step: maxStep, completed: true, cascadePrior: true });
       }
       if (res && !res.ok) {
+        setOptimisticCols((prev) => {
+          const { [caseId]: _, ...rest } = prev;
+          return rest;
+        });
         window.alert(res.error ?? "Could not move the card.");
         return;
       }

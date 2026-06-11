@@ -12,7 +12,7 @@ import { Resend } from "resend";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { loadEmailConfig, INTERNAL_SUBJECT } from "./render";
 import { getCaseStaleness, getStaleDaysThreshold } from "@/lib/columns";
-import type { LabCase } from "@/lib/types";
+import type { EmailKind, LabCase } from "@/lib/types";
 
 type DispatchResult = { ok: true; messageId?: string } | { ok: false; error: string };
 
@@ -70,6 +70,11 @@ async function dispatchInternal(args: {
   subject: string;
   html: string;
   text: string;
+  /** When set, the send is logged to email_logs per case (queued → sent /
+   * failed) so it shows in the case's email history — same wiring as the
+   * Nadia/Allison dispatch in internal.ts. Cron digests omit it (they span
+   * many cases and have their own lab_events trail). */
+  log?: { caseIds: string[]; kind: EmailKind };
 }): Promise<DispatchResult> {
   const ctx = await loadEmailConfig();
   const isTestRedirect = Boolean(ctx.testRedirect);
@@ -77,6 +82,25 @@ async function dispatchInternal(args: {
   const actualSubject = isTestRedirect
     ? `[TEST → ${args.to}] ${args.subject}`
     : args.subject;
+
+  const db = getSupabaseAdmin();
+  const logIds: string[] = [];
+  if (args.log) {
+    for (const caseId of args.log.caseIds) {
+      const { data } = await db
+        .from("email_logs")
+        .insert({
+          case_id: caseId,
+          kind: args.log.kind,
+          status: "queued",
+          to_address: args.to,
+        })
+        .select("id")
+        .single();
+      if (data?.id) logIds.push(data.id);
+    }
+  }
+
   try {
     const resend = getResend();
     const result = await resend.emails.send({
@@ -88,9 +112,21 @@ async function dispatchInternal(args: {
       text: args.text,
     });
     if (result.error) throw new Error(result.error.message);
+    for (const id of logIds) {
+      await db
+        .from("email_logs")
+        .update({ status: "sent", resend_message_id: result.data?.id ?? null })
+        .eq("id", id);
+    }
     return { ok: true, messageId: result.data?.id };
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Send failed";
+    for (const id of logIds) {
+      await db
+        .from("email_logs")
+        .update({ status: "failed", error_message: msg })
+        .eq("id", id);
+    }
     return { ok: false, error: msg };
   }
 }
@@ -136,6 +172,10 @@ ${ref}<p style="margin:12px 0 0;font-size:13px;"><a href="${caseUrl}" style="col
     subject: INTERNAL_SUBJECT.complete_upload,
     html,
     text,
+    // Logged per case so the PB-completion notice shows in the case's email
+    // history (Alex, 2026-06-11) — under its own kind, NOT "complete_uploaded"
+    // (the patient email), so history never implies the patient was emailed.
+    log: { caseIds: [c.id], kind: "complete_upload_notice" },
   });
 }
 

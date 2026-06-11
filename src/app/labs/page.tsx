@@ -73,22 +73,22 @@ export default async function LabsPage({
   const labBoardCases = [...activeCases, ...archivedCases];
   const cases = activeCases;
 
-  // Touch counts (open contact attempts + emails sent) for the kanban cards.
-  // One batched query for everything currently visible — falls back to
-  // {} if it throws so an analytics hiccup never breaks the board.
-  const cardCounts = await getCardCountsForCases(
-    Array.from(new Set([...labBoardCases, ...focusedCases].map((c) => c.id))),
-  ).catch(() => ({}));
-
-  // Cases that have an attached PDF awaiting Approve / Wrong-PDF click.
-  // Drives the "Pending Upload" Kanban column.
-  const pendingPdfCaseIds = await listCaseIdsWithPendingPdf(
-    Array.from(new Set([...labBoardCases, ...focusedCases].map((c) => c.id))),
-  ).catch(() => [] as string[]);
-
-  // New inbound lab emails (backlog #15) — surfaced as a dismissible banner on
-  // the main board in addition to the always-on Inbox nav badge in HudPulse.
-  const unreadInbox = await countUnreadInbox();
+  // Secondary lookups for the visible cases, IN PARALLEL — these were three
+  // sequential awaits, which added a full Supabase round-trip each to EVERY
+  // render. router.refresh() re-runs this whole page after each click, so
+  // this is the main lever on click→render latency.
+  //   - cardCounts: touch counts (open contact attempts + emails) per card
+  //   - pendingPdfCaseIds: PDFs awaiting Approve (drives Pending Upload lane)
+  //   - unreadInbox: inbound lab emails banner (backlog #15)
+  // Each falls back benignly so an analytics hiccup never breaks the board.
+  const visibleIds = Array.from(
+    new Set([...labBoardCases, ...focusedCases].map((c) => c.id)),
+  );
+  const [cardCounts, pendingPdfCaseIds, unreadInbox] = await Promise.all([
+    getCardCountsForCases(visibleIds).catch(() => ({})),
+    listCaseIdsWithPendingPdf(visibleIds).catch(() => [] as string[]),
+    countUnreadInbox().catch(() => 0),
+  ]);
 
   const isPatientFocus = tab === "patients";
   const focusedPatientName = focusedCases[0]?.patient_name ?? null;
