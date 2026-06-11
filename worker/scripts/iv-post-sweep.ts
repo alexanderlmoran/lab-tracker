@@ -15,10 +15,11 @@ const SECRET = process.env.WORKER_SHARED_SECRET;
 if (!BASE || !SECRET) throw new Error("TRACKER_BASE_URL + WORKER_SHARED_SECRET required");
 
 const days = process.env.IV_SWEEP_DAYS ?? "2";
+const minAge = process.env.IV_SWEEP_MINAGE ?? "0"; // 0 = full-day catch-all
 const dry = process.env.IV_SWEEP_DRY === "1";
 
 async function main() {
-  const res = await request(`${BASE}/api/worker/iv-post/sweep?days=${days}${dry ? "&dryRun=1" : ""}`, {
+  const res = await request(`${BASE}/api/worker/iv-post/sweep?days=${days}&minAgeMin=${minAge}${dry ? "&dryRun=1" : ""}`, {
     method: "POST",
     headers: { authorization: `Bearer ${SECRET}` },
   });

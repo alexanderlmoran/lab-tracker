@@ -8,13 +8,29 @@
 // and no in-flight/held/done job already (don't churn human-held ones; a failed
 // job IS retried).
 //
-// Auth: Bearer ${WORKER_SHARED_SECRET}.  Query: ?days=N (window, default 2),
-// ?dryRun=1 (report only, write nothing).
+// Auth: Bearer ${WORKER_SHARED_SECRET}.  Query: ?days=N (lookback window, default
+// 2), ?minAgeMin=N (only enqueue IVs that OCCURRED at least N min ago — never a
+// future appointment; default 60), ?dryRun=1 (report only, write nothing).
 
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 
 export const dynamic = "force-dynamic";
+
+/** Wall-clock "now" in clinic time (America/New_York), as epoch ms but labeled
+ *  as if UTC — because iv_sessions.start_at is the Zenoti local clock stored
+ *  with a +00:00 offset (e.g. an 11am ET appt is "11:00:00+00:00"). Comparing
+ *  both in this same frame is correct. */
+function nowEasternAsUtcMs(): { ms: number; date: string } {
+  const p = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).formatToParts(new Date());
+  const g = (t: string) => Number(p.find((x) => x.type === t)?.value);
+  const ms = Date.UTC(g("year"), g("month") - 1, g("day"), g("hour") % 24, g("minute"), g("second"));
+  const date = `${String(g("year"))}-${String(g("month")).padStart(2, "0")}-${String(g("day")).padStart(2, "0")}`;
+  return { ms, date };
+}
 
 export async function POST(request: Request) {
   const expected = process.env.WORKER_SHARED_SECRET;
@@ -25,29 +41,33 @@ export async function POST(request: Request) {
 
   const url = new URL(request.url);
   const days = Math.max(0, Math.min(30, Number(url.searchParams.get("days") ?? "2")));
+  const minAgeMin = Math.max(0, Math.min(1440, Number(url.searchParams.get("minAgeMin") ?? "60")));
   const dryRun = url.searchParams.get("dryRun") === "1";
 
   const db = getSupabaseAdmin();
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
-  const from = new Date(today);
+  const { ms: nowMs, date: todayEt } = nowEasternAsUtcMs();
+  const cutoffMs = nowMs - minAgeMin * 60_000;
+  const from = new Date(nowMs);
   from.setUTCDate(from.getUTCDate() - days);
   const fromStr = from.toISOString().slice(0, 10);
-  const toStr = today.toISOString().slice(0, 10);
 
   const { data: sessions, error } = await db
     .from("iv_sessions")
-    .select("id, service_name, session_date, kind")
+    .select("id, service_name, session_date, kind, start_at")
     .eq("cancelled", false)
     .eq("is_add_on", false)
     .not("kind", "in", "(ebo,addon)")
     .is("pb_note_id", null)
-    .gte("session_date", fromStr)
-    .lte("session_date", toStr);
+    .gte("session_date", fromStr);
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
 
-  const sess = sessions ?? [];
-  if (sess.length === 0) return NextResponse.json({ ok: true, window: { from: fromStr, to: toStr }, eligible: 0, enqueued: 0 });
+  // OCCURRED guard: only IVs that have already happened (>= minAgeMin ago). A
+  // missing start_at falls back to the day having arrived. This is what stops the
+  // sweep from posting a note for an appointment still in the future.
+  const occurred = (s: { start_at: string | null; session_date: string }) =>
+    s.start_at ? new Date(s.start_at).getTime() <= cutoffMs : s.session_date <= todayEt;
+  const sess = (sessions ?? []).filter(occurred);
+  if (sess.length === 0) return NextResponse.json({ ok: true, window: { from: fromStr, minAgeMin }, eligible: 0, enqueued: 0 });
 
   const ids = sess.map((s) => s.id);
   const { data: jobs } = await db.from("iv_post_jobs").select("session_id, status").in("session_id", ids);
@@ -62,10 +82,10 @@ export async function POST(request: Request) {
   if (dryRun) {
     return NextResponse.json({
       ok: true,
-      window: { from: fromStr, to: toStr },
+      window: { from: fromStr, minAgeMin },
       eligible: sess.length,
       wouldEnqueue: toEnqueue.length,
-      sample: toEnqueue.slice(0, 10).map((s) => ({ service: s.service_name, date: s.session_date })),
+      sample: toEnqueue.slice(0, 10).map((s) => ({ service: s.service_name, date: s.session_date, start_at: s.start_at })),
     });
   }
 
@@ -74,5 +94,5 @@ export async function POST(request: Request) {
       .from("iv_post_jobs")
       .upsert({ session_id: s.id, status: "queued", last_error: null, finished_at: null, claimed_at: null }, { onConflict: "session_id" });
   }
-  return NextResponse.json({ ok: true, window: { from: fromStr, to: toStr }, eligible: sess.length, enqueued: toEnqueue.length });
+  return NextResponse.json({ ok: true, window: { from: fromStr, minAgeMin }, eligible: sess.length, enqueued: toEnqueue.length });
 }

@@ -1,16 +1,18 @@
-// IV auto-post LOOP (Fly process). Two jobs in one supervised loop:
+// IV auto-post LOOP (Fly process). One supervised loop that:
 //   • drains the IV post queue every IV_DRAIN_INTERVAL_MS (default 5 min) so
-//     staff "Chart & post" clicks post promptly; and
-//   • once per day at 5pm America/New_York, runs the auto-post SWEEP so a note
-//     never goes missing — every occurred-but-unposted IV is enqueued, then the
-//     same drain posts the >=95 matches (flagged incomplete) and holds the rest.
+//     staff "Chart & post" clicks post promptly;
+//   • runs a PERIODIC sweep every IV_SWEEP_EVERY_MIN (default 60 min) that
+//     enqueues IVs which occurred >= IV_SWEEP_MINAGE_MIN ago (default 60) — i.e.
+//     a note appears ~1h after each infusion; and
+//   • runs a FULL-DAY catch-all sweep (minAge 0) at each IV_SWEEP_TIMES entry
+//     (default "17:00,19:30" — 5pm, then a 7:30pm backstop) so the whole day is
+//     guaranteed posted by close.
+// The sweep's OCCURRED guard means a future appointment is never posted early.
 //
 // Must run under scripts/pb-egress-entrypoint.sh on Fly (the drain posts to PB,
 // which blocks datacenter IPs — see pbdrain/reconcile).
 //
 // Run:  cd worker && npx tsx scripts/iv-autopost-loop.ts
-// Env:  IV_SWEEP_HOUR_ET (default 17), IV_SWEEP_DAYS (default 2),
-//       IV_DRAIN_INTERVAL_MS (default 300000)
 
 import { request } from "undici";
 import { loadEnvLocal } from "../src/lib/load-env.js";
@@ -25,40 +27,51 @@ const PB_PASS = process.env.PB_PASSWORD;
 if (!BASE || !SECRET) throw new Error("TRACKER_BASE_URL + WORKER_SHARED_SECRET required");
 if (!PB_USER || !PB_PASS) throw new Error("PB_USERNAME + PB_PASSWORD required");
 
-const SWEEP_HOUR_ET = Number(process.env.IV_SWEEP_HOUR_ET ?? 17); // 5pm Eastern
+const SWEEP_TIMES = (process.env.IV_SWEEP_TIMES ?? "17:00,19:30").split(",").map((s) => s.trim()).filter(Boolean);
+const SWEEP_EVERY_MIN = Number(process.env.IV_SWEEP_EVERY_MIN ?? 60);
+const SWEEP_MINAGE_MIN = Number(process.env.IV_SWEEP_MINAGE_MIN ?? 60);
 const SWEEP_DAYS = process.env.IV_SWEEP_DAYS ?? "2";
 const DRAIN_MS = Number(process.env.IV_DRAIN_INTERVAL_MS ?? 5 * 60 * 1000);
 
 const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Current hour (0-23) + date (YYYY-MM-DD) in clinic time (America/New_York). */
-function nowEastern(): { hour: number; date: string } {
+/** Current "HH:MM" + date (YYYY-MM-DD) in clinic time (America/New_York). */
+function nowEastern(): { hm: string; date: string } {
   const tz = "America/New_York";
-  const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "2-digit", hour12: false }).format(new Date()));
+  const hm = new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
   const date = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-  return { hour: hour % 24, date };
+  return { hm, date };
 }
 
-async function runSweep() {
-  const res = await request(`${BASE}/api/worker/iv-post/sweep?days=${SWEEP_DAYS}`, { method: "POST", headers: { authorization: `Bearer ${SECRET}` } });
+async function runSweep(minAgeMin: number, label: string) {
+  const res = await request(`${BASE}/api/worker/iv-post/sweep?days=${SWEEP_DAYS}&minAgeMin=${minAgeMin}`, { method: "POST", headers: { authorization: `Bearer ${SECRET}` } });
   const txt = await res.body.text();
-  if (res.statusCode !== 200) { log(`!! sweep ${res.statusCode}: ${txt.slice(0, 150)}`); return; }
-  log(`sweep → ${txt}`);
+  if (res.statusCode !== 200) { log(`!! sweep(${label}) ${res.statusCode}: ${txt.slice(0, 150)}`); return; }
+  log(`sweep(${label}) → ${txt}`);
 }
 
 async function main() {
-  log(`IV auto-post loop up — drain every ${Math.round(DRAIN_MS / 1000)}s, sweep daily at ${SWEEP_HOUR_ET}:00 ET`);
+  log(`IV auto-post loop up — drain every ${Math.round(DRAIN_MS / 1000)}s, periodic sweep every ${SWEEP_EVERY_MIN}m (≥${SWEEP_MINAGE_MIN}m old), full sweeps at ${SWEEP_TIMES.join(", ")} ET`);
   let pb: PbSession | null = null;
-  let lastSweptDate: string | null = null;
+  let lastPeriodicMs = 0;
+  const doneToday = new Set<string>(); // "<date> <HH:MM>" full-sweeps already run
 
   for (;;) {
     try {
-      const { hour, date } = nowEastern();
-      // Daily 5pm ET auto-post sweep (enqueue the day's unposted IVs).
-      if (hour >= SWEEP_HOUR_ET && lastSweptDate !== date) {
-        await runSweep();
-        lastSweptDate = date;
+      const { hm, date } = nowEastern();
+      // Full-day catch-all sweeps at the configured times (5pm, 7:30pm).
+      for (const t of SWEEP_TIMES) {
+        const key = `${date} ${t}`;
+        if (hm >= t && !doneToday.has(key)) {
+          await runSweep(0, t);
+          doneToday.add(key);
+        }
+      }
+      // Periodic "post ~1h after" sweep (occurred >= minAge ago).
+      if (Date.now() - lastPeriodicMs >= SWEEP_EVERY_MIN * 60_000) {
+        await runSweep(SWEEP_MINAGE_MIN, `every${SWEEP_EVERY_MIN}m`);
+        lastPeriodicMs = Date.now();
       }
       if (!pb) { pb = await pbLogin(PB_USER!, PB_PASS!); log("PB session established"); }
       const n = await drainIvPosts(pb);
