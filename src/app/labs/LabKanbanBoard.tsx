@@ -76,6 +76,32 @@ const TRACKING_META_HIDDEN = new Set<ColumnKey>([
   "completed",
 ]);
 
+// Per-column sort (the little ⇅ control in each column header). "default" keeps
+// the board's ready-first ordering. "typehx" = group by lab type, then newest
+// first within each type (type-by-history).
+type SortKey = "default" | "name" | "date" | "type" | "typehx";
+const SORT_LABEL: Record<SortKey, string> = {
+  default: "Sort",
+  name: "A–Z",
+  date: "Date",
+  type: "Type",
+  typehx: "Type/date",
+};
+function sortUnits(units: LabCase[][], key: SortKey): LabCase[][] {
+  if (key === "default") return units;
+  const rep = (u: LabCase[]) => u[0]; // representative card (merged groups use the first)
+  const name = (c: LabCase) => formatPersonName(c.patient_name).toLowerCase();
+  const date = (c: LabCase) => c.collection_date ?? "";
+  const type = (c: LabCase) => labelForCase(c).toLowerCase();
+  const cmp: Record<Exclude<SortKey, "default">, (a: LabCase[], b: LabCase[]) => number> = {
+    name: (a, b) => name(rep(a)).localeCompare(name(rep(b))),
+    date: (a, b) => date(rep(b)).localeCompare(date(rep(a))),
+    type: (a, b) => type(rep(a)).localeCompare(type(rep(b))),
+    typehx: (a, b) => type(rep(a)).localeCompare(type(rep(b))) || date(rep(b)).localeCompare(date(rep(a))),
+  };
+  return [...units].sort(cmp[key]);
+}
+
 function LabCard({
   row,
   onOpen,
@@ -333,6 +359,8 @@ function StaticColumn({
   isDropOver,
   onCardDrop,
   onColDragOver,
+  sort,
+  onSortChange,
 }: {
   col: ColumnKey;
   count: number;
@@ -343,6 +371,9 @@ function StaticColumn({
   onCardDrop?: (caseId: string, col: ColumnKey) => void;
   /** Drag entered (col) / left (null) this column. */
   onColDragOver?: (col: ColumnKey | null) => void;
+  /** This column's current sort + a setter (the ⇅ control). */
+  sort?: SortKey;
+  onSortChange?: (key: SortKey) => void;
 }) {
   // Pending Upload is the one lane that owes a human action (Approve → PB). Make
   // it pop when it has cases so it can't hide among the 9 equal-width columns.
@@ -373,20 +404,41 @@ function StaticColumn({
       }`}
       data-col={col}
     >
-      <header className="flex items-center justify-between px-1.5 py-1">
-        <h3 className={`col-head-title ${needsAction ? "text-amber-800" : ""}`}>
+      <header className="flex items-center justify-between gap-1 px-1.5 py-1">
+        <h3 className={`col-head-title min-w-0 truncate ${needsAction ? "text-amber-800" : ""}`}>
           {needsAction ? "● " : ""}
           {COLUMN_LABEL[col]}
         </h3>
-        <span
-          className={
-            needsAction
-              ? "rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold text-white"
-              : "col-head-count"
-          }
-        >
-          {count}
-        </span>
+        <div className="flex shrink-0 items-center gap-1">
+          {/* ⇅ per-column sort: organize the cards in this lane by name / date /
+              lab type. Shows a dot when an active (non-default) sort is on. */}
+          <select
+            aria-label={`Sort ${COLUMN_LABEL[col]}`}
+            title="Sort the cards in this column"
+            value={sort ?? "default"}
+            onChange={(e) => onSortChange?.(e.target.value as SortKey)}
+            className={`cursor-pointer rounded border bg-white px-0.5 text-[10px] ${
+              (sort ?? "default") !== "default"
+                ? "border-indigo-300 text-indigo-700"
+                : "border-zinc-200 text-zinc-500 hover:text-zinc-700"
+            }`}
+          >
+            {(Object.keys(SORT_LABEL) as SortKey[]).map((k) => (
+              <option key={k} value={k}>
+                {SORT_LABEL[k]}
+              </option>
+            ))}
+          </select>
+          <span
+            className={
+              needsAction
+                ? "rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold text-white"
+                : "col-head-count"
+            }
+          >
+            {count}
+          </span>
+        </div>
       </header>
       <div className="flex min-h-[40px] flex-col gap-1.5 p-0.5 lg:flex-1 lg:overflow-y-auto">
         {children}
@@ -478,6 +530,8 @@ export function LabKanbanBoard({
   const router = useRouter();
   const [, startMove] = useTransition();
   const [dragOverCol, setDragOverCol] = useState<ColumnKey | null>(null);
+  // Per-column sort (the ⇅ control in each column header). Empty = default order.
+  const [sortByCol, setSortByCol] = useState<Partial<Record<ColumnKey, SortKey>>>({});
 
   // Drag a card onto a column to move it there. Applies the column's defining
   // step(s) (planColumnJump → setStepCompleted with cascadePrior), or archives
@@ -672,7 +726,7 @@ export function LabKanbanBoard({
           // Units actually rendered here. With merge-dupes a group's cards
           // collapse into one merged card in the group's lead column, so the
           // count reflects rendered units (not raw rows) — no ghost left behind.
-          const units = unitsFor(col);
+          const units = sortUnits(unitsFor(col), sortByCol[col] ?? "default");
           return (
             <StaticColumn
               key={col}
@@ -681,6 +735,8 @@ export function LabKanbanBoard({
               isDropOver={dragOverCol === col}
               onCardDrop={handleDropCase}
               onColDragOver={setDragOverCol}
+              sort={sortByCol[col] ?? "default"}
+              onSortChange={(k) => setSortByCol((s) => ({ ...s, [col]: k }))}
             >
               {units.length === 0 ? (
                 <p className="px-2 py-3 text-[11px] text-zinc-400">—</p>
