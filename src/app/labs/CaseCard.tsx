@@ -17,6 +17,7 @@ import { archiveLabCase } from "./actions";
 import { formatPersonName } from "@/lib/format";
 import type { EmailConfirmHandle } from "./EmailConfirmDialog";
 import type { ColumnJumpHandle } from "./ColumnJumpDialog";
+import { useDismiss } from "./use-dismiss";
 
 function timeAgo(iso: string) {
   const ms = Date.now() - new Date(iso).getTime();
@@ -66,18 +67,10 @@ export function CaseCard({
     dialogRef.current?.close();
   }
 
-  // Close menu on outside click
-  useEffect(() => {
-    if (!menuOpen) return;
-    function onDocClick(e: MouseEvent) {
-      if (!cardRef.current?.contains(e.target as Node)) {
-        setMenuOpen(false);
-        setMoveSubOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [menuOpen]);
+  useDismiss(cardRef, menuOpen, () => {
+    setMenuOpen(false);
+    setMoveSubOpen(false);
+  });
 
   function onArchive() {
     setMenuOpen(false);

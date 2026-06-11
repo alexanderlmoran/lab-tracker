@@ -9,6 +9,7 @@ import {
   getWorkflowSteps,
 } from "@/lib/columns";
 import { StepChecklist } from "./StepChecklist";
+import { useDismiss } from "./use-dismiss";
 import { ActivityLog } from "./ActivityLog";
 import { EmailLogPanel } from "./EmailLogPanel";
 import { BarcodeScanner } from "./BarcodeScanner";
@@ -212,16 +213,7 @@ function ContactAttemptButton({
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const router = useRouter();
 
-  // Close on outside click — the dropdown is a plain absolute div, not a
-  // <dialog>, so we wire dismissal ourselves.
-  useEffect(() => {
-    if (!menuOpen) return;
-    function onDoc(e: MouseEvent) {
-      if (!wrapRef.current?.contains(e.target as Node)) setMenuOpen(false);
-    }
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [menuOpen]);
+  useDismiss(wrapRef, menuOpen, () => setMenuOpen(false));
 
   function record(reason: string) {
     setMenuOpen(false);

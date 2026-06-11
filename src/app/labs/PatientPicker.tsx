@@ -6,6 +6,7 @@ import {
   searchPatients,
   type PatientSuggestion,
 } from "./patient-search-action";
+import { useDismiss } from "./use-dismiss";
 
 const inputClass =
   "mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-900 focus:ring-2 focus:ring-zinc-900/10";
@@ -67,17 +68,10 @@ export function PatientPicker({
   }, [query]);
 
   // Close the suggestion list when the user clicks outside the picker.
-  useEffect(() => {
-    if (!open) return;
-    function onDoc(e: MouseEvent) {
-      if (!containerRef.current?.contains(e.target as Node)) {
-        setOpen(false);
-        setActiveIdx(-1);
-      }
-    }
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
+  useDismiss(containerRef, open, () => {
+    setOpen(false);
+    setActiveIdx(-1);
+  });
 
   function applySuggestion(s: PatientSuggestion) {
     if (s.name) setName(s.name);

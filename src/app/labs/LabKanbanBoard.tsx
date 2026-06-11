@@ -28,6 +28,7 @@ import {
   EmailRailChip,
   type CardCounts,
 } from "./card-counts";
+import { useDismiss } from "./use-dismiss";
 
 function formatExpectedRange(min: string | null, max: string | null): string | null {
   if (!min && !max) return null;
@@ -76,30 +77,139 @@ const TRACKING_META_HIDDEN = new Set<ColumnKey>([
   "completed",
 ]);
 
-// Per-column sort (the little ⇅ control in each column header). "default" keeps
-// the board's ready-first ordering. "typehx" = group by lab type, then newest
-// first within each type (type-by-history).
-type SortKey = "default" | "name" | "date" | "type" | "typehx";
-const SORT_LABEL: Record<SortKey, string> = {
-  default: "Sort",
-  name: "A–Z",
+// Per-column sort (the little control in each column header). null = the
+// board's default ready-first ordering. Each field has a natural direction
+// (names A–Z, dates newest-first) and the ↑/↓ arrow flips it.
+type SortField = "name" | "date" | "type" | "typehx";
+type SortDir = "asc" | "desc";
+type ColumnSort = { field: SortField; dir: SortDir } | null;
+const SORT_FIELD_LABEL: Record<SortField, string> = {
+  name: "Name",
   date: "Date",
   type: "Type",
-  typehx: "Type/date",
+  typehx: "Type · date",
 };
-function sortUnits(units: LabCase[][], key: SortKey): LabCase[][] {
-  if (key === "default") return units;
-  const rep = (u: LabCase[]) => u[0]; // representative card (merged groups use the first)
+const SORT_NATURAL_DIR: Record<SortField, SortDir> = {
+  name: "asc",
+  date: "desc",
+  type: "asc",
+  typehx: "desc",
+};
+// Persisted so the board comes back the way you left it after a reload.
+const SORT_STORAGE_KEY = "labKanbanSortByCol";
+const MERGE_STORAGE_KEY = "labKanbanMergeMode";
+type MergeMode = "off" | "dupes" | "patient" | "date";
+
+function sortUnits(units: LabCase[][], sort: ColumnSort): LabCase[][] {
+  if (!sort) return units;
+  // Representative card = the unit's most-advanced member — the same one the
+  // merged card displays — so the sort matches what's on screen.
+  const rep = (u: LabCase[]) => u[u.length - 1];
   const name = (c: LabCase) => formatPersonName(c.patient_name).toLowerCase();
-  const date = (c: LabCase) => c.collection_date ?? "";
   const type = (c: LabCase) => labelForCase(c).toLowerCase();
-  const cmp: Record<Exclude<SortKey, "default">, (a: LabCase[], b: LabCase[]) => number> = {
-    name: (a, b) => name(rep(a)).localeCompare(name(rep(b))),
-    date: (a, b) => date(rep(b)).localeCompare(date(rep(a))),
-    type: (a, b) => type(rep(a)).localeCompare(type(rep(b))),
-    typehx: (a, b) => type(rep(a)).localeCompare(type(rep(b))) || date(rep(b)).localeCompare(date(rep(a))),
+  const flip = sort.dir === "asc" ? 1 : -1;
+  // Date-less cards sink to the bottom in EITHER direction (oldest-first must
+  // not float every card with no collection date to the top).
+  const byDate = (a: LabCase, b: LabCase) => {
+    const da = a.collection_date;
+    const db = b.collection_date;
+    if (!da && !db) return 0;
+    if (!da) return 1;
+    if (!db) return -1;
+    return flip * da.localeCompare(db);
   };
-  return [...units].sort(cmp[key]);
+  const cmp: Record<SortField, (a: LabCase[], b: LabCase[]) => number> = {
+    name: (a, b) => flip * name(rep(a)).localeCompare(name(rep(b))),
+    date: (a, b) => byDate(rep(a), rep(b)),
+    type: (a, b) => flip * type(rep(a)).localeCompare(type(rep(b))),
+    // Types stay A–Z; the arrow flips the date order within each type group.
+    typehx: (a, b) => type(rep(a)).localeCompare(type(rep(b))) || byDate(rep(a), rep(b)),
+  };
+  // .sort is stable, so ties keep the board's ready-first ordering.
+  return [...units].sort(cmp[sort.field]);
+}
+
+// The header sort control: a quiet ⇅ when the column is on default order, a
+// compact "Date ↓" pill when sorted. The menu picks the field; picking the
+// active field again flips its direction (same as clicking a table header).
+function SortControl({
+  col,
+  sort,
+  onChange,
+}: {
+  col: ColumnKey;
+  sort: ColumnSort;
+  onChange: (s: ColumnSort) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  useDismiss(wrapRef, open, () => setOpen(false));
+
+  function pick(field: SortField) {
+    onChange(
+      sort?.field === field
+        ? { field, dir: sort.dir === "asc" ? "desc" : "asc" }
+        : { field, dir: SORT_NATURAL_DIR[field] },
+    );
+    setOpen(false);
+  }
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label={`Sort ${COLUMN_LABEL[col]}`}
+        title={
+          sort
+            ? `Sorted by ${SORT_FIELD_LABEL[sort.field].toLowerCase()} (${sort.dir === "asc" ? "ascending" : "descending"})`
+            : "Sort the cards in this column"
+        }
+        className={
+          sort
+            ? "flex items-center gap-0.5 whitespace-nowrap rounded-full border border-indigo-200 bg-indigo-50 px-1.5 text-[10px] font-medium leading-4 text-indigo-700 hover:bg-indigo-100"
+            : "rounded px-0.5 text-[11px] leading-4 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+        }
+      >
+        {sort ? `${SORT_FIELD_LABEL[sort.field]} ${sort.dir === "asc" ? "↑" : "↓"}` : "⇅"}
+      </button>
+      {open ? (
+        <div className="absolute right-0 top-full z-20 mt-1 w-32 overflow-hidden rounded-md border border-zinc-200 bg-white py-0.5 shadow-lg">
+          {(Object.keys(SORT_FIELD_LABEL) as SortField[]).map((f) => {
+            const isActive = sort?.field === f;
+            return (
+              <button
+                key={f}
+                type="button"
+                onClick={() => pick(f)}
+                title={isActive ? "Flip direction" : undefined}
+                className={`flex w-full items-center justify-between px-2.5 py-1 text-left text-[11px] ${
+                  isActive
+                    ? "bg-indigo-50 font-medium text-indigo-700"
+                    : "text-zinc-700 hover:bg-zinc-50"
+                }`}
+              >
+                <span>{SORT_FIELD_LABEL[f]}</span>
+                {isActive ? <span>{sort.dir === "asc" ? "↑" : "↓"}</span> : null}
+              </button>
+            );
+          })}
+          {sort ? (
+            <button
+              type="button"
+              onClick={() => {
+                onChange(null);
+                setOpen(false);
+              }}
+              className="block w-full border-t border-zinc-100 px-2.5 py-1 text-left text-[11px] text-zinc-500 hover:bg-zinc-50"
+            >
+              Clear — ready first
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function LabCard({
@@ -371,9 +481,9 @@ function StaticColumn({
   onCardDrop?: (caseId: string, col: ColumnKey) => void;
   /** Drag entered (col) / left (null) this column. */
   onColDragOver?: (col: ColumnKey | null) => void;
-  /** This column's current sort + a setter (the ⇅ control). */
-  sort?: SortKey;
-  onSortChange?: (key: SortKey) => void;
+  /** This column's current sort + a setter (the header ⇅/pill control). */
+  sort?: ColumnSort;
+  onSortChange?: (s: ColumnSort) => void;
 }) {
   // Pending Upload is the one lane that owes a human action (Approve → PB). Make
   // it pop when it has cases so it can't hide among the 9 equal-width columns.
@@ -410,25 +520,9 @@ function StaticColumn({
           {COLUMN_LABEL[col]}
         </h3>
         <div className="flex shrink-0 items-center gap-1">
-          {/* ⇅ per-column sort: organize the cards in this lane by name / date /
-              lab type. Shows a dot when an active (non-default) sort is on. */}
-          <select
-            aria-label={`Sort ${COLUMN_LABEL[col]}`}
-            title="Sort the cards in this column"
-            value={sort ?? "default"}
-            onChange={(e) => onSortChange?.(e.target.value as SortKey)}
-            className={`cursor-pointer rounded border bg-white px-0.5 text-[10px] ${
-              (sort ?? "default") !== "default"
-                ? "border-indigo-300 text-indigo-700"
-                : "border-zinc-200 text-zinc-500 hover:text-zinc-700"
-            }`}
-          >
-            {(Object.keys(SORT_LABEL) as SortKey[]).map((k) => (
-              <option key={k} value={k}>
-                {SORT_LABEL[k]}
-              </option>
-            ))}
-          </select>
+          {onSortChange ? (
+            <SortControl col={col} sort={sort ?? null} onChange={onSortChange} />
+          ) : null}
           <span
             className={
               needsAction
@@ -530,8 +624,47 @@ export function LabKanbanBoard({
   const router = useRouter();
   const [, startMove] = useTransition();
   const [dragOverCol, setDragOverCol] = useState<ColumnKey | null>(null);
-  // Per-column sort (the ⇅ control in each column header). Empty = default order.
-  const [sortByCol, setSortByCol] = useState<Partial<Record<ColumnKey, SortKey>>>({});
+  // Per-column sort (the header control). Missing key = default ready-first
+  // order. Persisted to localStorage so a reload keeps the arrangement.
+  const [sortByCol, setSortByCol] = useState<
+    Partial<Record<ColumnKey, NonNullable<ColumnSort>>>
+  >({});
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(SORT_STORAGE_KEY);
+      if (!raw) return;
+      const parsed: unknown = JSON.parse(raw);
+      const clean: Partial<Record<ColumnKey, NonNullable<ColumnSort>>> = {};
+      for (const [col, s] of Object.entries(
+        (parsed ?? {}) as Record<string, NonNullable<ColumnSort>>,
+      )) {
+        if (
+          col in COLUMN_LABEL &&
+          s &&
+          s.field in SORT_FIELD_LABEL &&
+          (s.dir === "asc" || s.dir === "desc")
+        ) {
+          clean[col as ColumnKey] = { field: s.field, dir: s.dir };
+        }
+      }
+      setSortByCol(clean);
+    } catch {
+      // corrupt/legacy storage — fall back to default order
+    }
+  }, []);
+  function setColumnSort(col: ColumnKey, next: ColumnSort) {
+    setSortByCol((s) => {
+      const out = { ...s };
+      if (next) out[col] = next;
+      else delete out[col];
+      try {
+        window.localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(out));
+      } catch {
+        // storage unavailable (private mode) — sort still works for the session
+      }
+      return out;
+    });
+  }
 
   // Drag a card onto a column to move it there. Applies the column's defining
   // step(s) (planColumnJump → setStepCompleted with cascadePrior), or archives
@@ -576,7 +709,26 @@ export function LabKanbanBoard({
   // columns. "patient" / "date" collapse a patient's cards WITHIN each column
   // (by patient, or by patient+collection-date) so a busy patient reads as one
   // unit per lane. "off" expands everything.
-  const [mergeMode, setMergeMode] = useState<"off" | "dupes" | "patient" | "date">("dupes");
+  const [mergeMode, setMergeModeState] = useState<MergeMode>("dupes");
+  // Hydrated + persisted like the column sorts, so a reload keeps the view.
+  useEffect(() => {
+    try {
+      const m = window.localStorage.getItem(MERGE_STORAGE_KEY);
+      if (m === "off" || m === "dupes" || m === "patient" || m === "date") {
+        setMergeModeState(m);
+      }
+    } catch {
+      // storage unavailable — keep the default
+    }
+  }, []);
+  function setMergeMode(next: MergeMode) {
+    setMergeModeState(next);
+    try {
+      window.localStorage.setItem(MERGE_STORAGE_KEY, next);
+    } catch {
+      // storage unavailable (private mode) — the toggle still works in-session
+    }
+  }
 
   // Board-wide merged-group plan. A same-accession group is ONE physical order
   // split across cards; when those cards land in DIFFERENT columns (only one
@@ -708,7 +860,7 @@ export function LabKanbanBoard({
             <button
               key={m}
               type="button"
-              onClick={() => setMergeMode((cur) => (cur === m ? "off" : m))}
+              onClick={() => setMergeMode(mergeMode === m ? "off" : m)}
               title={title}
               className={`rounded-md border px-2 py-0.5 text-[11px] font-medium ${
                 mergeMode === m
@@ -726,7 +878,7 @@ export function LabKanbanBoard({
           // Units actually rendered here. With merge-dupes a group's cards
           // collapse into one merged card in the group's lead column, so the
           // count reflects rendered units (not raw rows) — no ghost left behind.
-          const units = sortUnits(unitsFor(col), sortByCol[col] ?? "default");
+          const units = sortUnits(unitsFor(col), sortByCol[col] ?? null);
           return (
             <StaticColumn
               key={col}
@@ -735,8 +887,8 @@ export function LabKanbanBoard({
               isDropOver={dragOverCol === col}
               onCardDrop={handleDropCase}
               onColDragOver={setDragOverCol}
-              sort={sortByCol[col] ?? "default"}
-              onSortChange={(k) => setSortByCol((s) => ({ ...s, [col]: k }))}
+              sort={sortByCol[col] ?? null}
+              onSortChange={(s) => setColumnSort(col, s)}
             >
               {units.length === 0 ? (
                 <p className="px-2 py-3 text-[11px] text-zinc-400">—</p>
