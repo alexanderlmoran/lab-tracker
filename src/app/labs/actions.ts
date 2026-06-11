@@ -887,6 +887,9 @@ export async function setStepCompleted(input: {
   note?: string;
   cascadePrior?: boolean;
   cascadeSiblings?: boolean;
+  /** Internal (sibling-cascade replays only): apply the toggle without firing
+   * the Nadia/Allison group emails — the cascade fires them once at the end. */
+  _skipWorkflowEmails?: boolean;
 }): Promise<ActionResult> {
   const user = await requireSignedIn();
   const parsed = StepToggleInput.safeParse(input);
@@ -894,20 +897,56 @@ export async function setStepCompleted(input: {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }
   const { caseId, step, completed, note, cascadePrior, cascadeSiblings } = parsed.data;
+  const skipWorkflowEmails = input._skipWorkflowEmails === true;
 
   // Move the whole same-accession group together. Resolve the lead card first
   // (this call), then replay the identical toggle on each sibling WITHOUT
-  // re-cascading siblings (avoids loops) so every card's own side-effects
-  // (expected dates, tracking arm, Nadia/Allison) still run consistently.
+  // re-cascading siblings (avoids loops). The replays SUPPRESS the Nadia/
+  // Allison triggers — otherwise one click fires the per-case email once PER
+  // sibling — and the group-level email fires exactly once below, after the
+  // whole group has moved (so the Nadia all-at-step-5 gate sees final state).
   if (cascadeSiblings) {
     const { accessionSiblingIds } = await import("@/lib/labs/siblings");
     const ids = await accessionSiblingIds(caseId);
     const siblingIds = ids.filter((id) => id !== caseId);
-    const lead = await setStepCompleted({ caseId, step, completed, note, cascadePrior });
+    const lead = await setStepCompleted({
+      caseId, step, completed, note, cascadePrior, _skipWorkflowEmails: true,
+    });
     if (!lead.ok) return lead;
     for (const sibId of siblingIds) {
-      const r = await setStepCompleted({ caseId: sibId, step, completed, note, cascadePrior });
+      const r = await setStepCompleted({
+        caseId: sibId, step, completed, note, cascadePrior, _skipWorkflowEmails: true,
+      });
       if (!r.ok) return r;
+    }
+    if (completed && step === 5) {
+      try {
+        const { maybeFireNadiaAllReceived } = await import("@/lib/workflow");
+        await maybeFireNadiaAllReceived(caseId, user.email ?? "admin");
+      } catch (err) {
+        console.error("[workflow] nadia trigger failed", err);
+      }
+    }
+    if (completed && step === 6) {
+      try {
+        const { maybeFireAllisonRof } = await import("@/lib/workflow");
+        await maybeFireAllisonRof(caseId, user.email ?? "admin");
+        // Stamp the siblings too (no extra email): the one email covered the
+        // patient's packet, and the stamp keeps a later direct step-6 toggle
+        // on a sibling from re-emailing Allison for the same physical order.
+        if (siblingIds.length > 0) {
+          await getSupabaseAdmin()
+            .from("lab_cases")
+            .update({
+              allison_rof_emailed_at: new Date().toISOString(),
+              step9_sales_followup: true,
+            })
+            .in("id", siblingIds)
+            .is("allison_rof_emailed_at", null);
+        }
+      } catch (err) {
+        console.error("[workflow] allison trigger failed", err);
+      }
     }
     return { ok: true };
   }
@@ -1055,7 +1094,7 @@ export async function setStepCompleted(input: {
   // the patient's active labs are at step 5. PracticeBetter auto-push lived
   // here too; removed 2026-05-12 along with the rest of the abandoned PB
   // integration.
-  if (completed && step === 5) {
+  if (completed && step === 5 && !skipWorkflowEmails) {
     try {
       const { maybeFireNadiaAllReceived } = await import("@/lib/workflow");
       await maybeFireNadiaAllReceived(caseId, user.email ?? "admin");
@@ -1065,7 +1104,7 @@ export async function setStepCompleted(input: {
   }
 
   // Step 6 (ROF booked) → email Allison + auto-tick step 9.
-  if (completed && step === 6) {
+  if (completed && step === 6 && !skipWorkflowEmails) {
     try {
       const { maybeFireAllisonRof } = await import("@/lib/workflow");
       await maybeFireAllisonRof(caseId, user.email ?? "admin");

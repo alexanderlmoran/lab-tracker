@@ -1,6 +1,7 @@
 // Canonical lab catalog. Source of truth for the lab-name combobox, CSV
 // import normalization (Lab Shipping sheet "Carrier" + Zenoti "Item Name"),
 // and turnaround-based result-date prediction.
+import { easternDateIso } from "@/lib/format";
 //
 // Naming conventions in lab_cases.lab_name / lab_panel:
 //   lab_name  = provider canonical short name ("Vibrant", "DoctorsData")
@@ -345,7 +346,9 @@ export function predictResultDates(
   sampleSentAt: Date,
   entry: LabCatalogEntry,
 ): { minIso: string | null; maxIso: string | null } {
-  const toIso = (d: Date) => d.toISOString().slice(0, 10);
+  // Eastern, not toISOString (UTC): an evening FedEx delivery is already
+  // "tomorrow" in UTC, which shifted every predicted window a day late.
+  const toIso = (d: Date) => easternDateIso(d);
   const min = entry.turnaroundDaysMin;
   const max = entry.turnaroundDaysMax;
   if (min == null && max == null) return { minIso: null, maxIso: null };

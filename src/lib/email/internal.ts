@@ -23,8 +23,18 @@ function nadiaAddress(): string {
   return process.env.NADIA_EMAIL?.trim() || "nadia@centnerwellness.com";
 }
 
-function allisonAddress(): string {
-  return process.env.ALLISON_EMAIL?.trim() || "allison@centnerwellness.com";
+// ALLISON_EMAIL has never been verified to exist. When it's unset, do NOT
+// guess an external mailbox (the ROF email carries patient name/email/labs —
+// PHI to a possibly-wrong recipient). Route to the internal digest inbox,
+// flagged in the subject, until the real address is configured.
+function allisonAddress(): { to: string; configured: boolean } {
+  const configured = process.env.ALLISON_EMAIL?.trim();
+  if (configured) return { to: configured, configured: true };
+  const internal =
+    process.env.DIGEST_EMAIL?.trim() ||
+    process.env.NADIA_EMAIL?.trim() ||
+    "nadia@centnerwellness.com";
+  return { to: internal, configured: false };
 }
 
 function labLabelFor(c: LabCase): string {
@@ -154,11 +164,14 @@ export async function sendAllisonRofReview(args: {
   });
   const html = await render(element, { pretty: false });
   const text = await render(element, { plainText: true });
+  const allison = allisonAddress();
   return dispatch({
     caseIds: args.patientCases.map((c) => c.id),
     kind: "rof_allison",
-    to: allisonAddress(),
-    subject: SUBJECT.rof_allison,
+    to: allison.to,
+    subject: allison.configured
+      ? SUBJECT.rof_allison
+      : `[ALLISON_EMAIL not set — review & forward] ${SUBJECT.rof_allison}`,
     html,
     text,
   });

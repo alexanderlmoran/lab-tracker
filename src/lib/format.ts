@@ -4,6 +4,24 @@
 
 import type { AppRole } from "@/lib/auth-guard";
 
+// The clinic operates on Eastern time, but the code runs in two timezones:
+// Vercel/Fly servers are UTC, staff browsers are America/New_York. Any
+// "what calendar day is it" computed with the HOST's timezone disagrees
+// between SSR and the client for ~4-5h every evening (hydration mismatches,
+// off-by-one date windows). This formatter answers in EASTERN regardless of
+// where it runs — use it for every today/date-only comparison.
+const EASTERN_DAY = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/New_York",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+/** YYYY-MM-DD for the given instant (default: now) in the clinic's timezone. */
+export function easternDateIso(d: Date = new Date()): string {
+  return EASTERN_DAY.format(d);
+}
+
 const NAME_PARTICLES = new Set([
   "de",
   "del",

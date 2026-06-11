@@ -11,6 +11,7 @@ import {
   expectedCountdown,
   getCaseStaleness,
   getColumnFor,
+  isProbablyReady,
 } from "@/lib/columns";
 import { planColumnJump } from "@/lib/column-jump";
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
@@ -47,15 +48,6 @@ function dupKey(r: LabCase): string | null {
   if (!ref) return null;
   const who = (r.patient_email || r.patient_name || "").trim().toLowerCase();
   return `${who}::${ref}`;
-}
-
-function isProbablyReady(row: LabCase): boolean {
-  if (row.step4_complete_received) return false;
-  if (row.tracking_status !== "delivered") return false;
-  if (!row.expected_result_at_max) return false;
-  const today = new Date();
-  const today0 = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-  return row.expected_result_at_max <= today0;
 }
 
 // Per-column chip policy (Alex, 2026-06-10): shipping/staleness badges are just

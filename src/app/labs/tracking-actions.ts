@@ -32,10 +32,38 @@ export async function scheduleFedexPickup(
     };
   }
   const { caseIds, ...pickupInput } = input;
+
+  // Idempotency guard — the FedEx call dispatches (and bills) a real truck.
+  // Drop cards already stamped with a pickup for this ready-date, and when
+  // EVERY selected card is covered, return the existing confirmation without
+  // calling FedEx at all (double-click / retry safe).
+  let targetIds = caseIds ?? [];
+  if (targetIds.length > 0) {
+    const db = getSupabaseAdmin();
+    const { data: existing } = await db
+      .from("lab_cases")
+      .select("id, pickup_confirmation, pickup_scheduled_date")
+      .in("id", targetIds);
+    const already = (existing ?? []).filter(
+      (r) => r.pickup_confirmation && r.pickup_scheduled_date === pickupInput.readyDate,
+    );
+    if (already.length > 0 && already.length === targetIds.length) {
+      return {
+        ok: true,
+        data: {
+          confirmationNumber: already[0].pickup_confirmation as string,
+          stamped: 0,
+        },
+      };
+    }
+    const alreadyIds = new Set(already.map((r) => r.id as string));
+    targetIds = targetIds.filter((id) => !alreadyIds.has(id));
+  }
+
   try {
     const r = await schedulePickup(pickupInput);
     let stamped = 0;
-    if (caseIds && caseIds.length > 0) {
+    if (targetIds.length > 0) {
       const db = getSupabaseAdmin();
       const { data } = await db
         .from("lab_cases")
@@ -44,11 +72,11 @@ export async function scheduleFedexPickup(
           pickup_scheduled_date: pickupInput.readyDate,
           pickup_carrier: "fedex",
         })
-        .in("id", caseIds)
+        .in("id", targetIds)
         .select("id");
       stamped = (data ?? []).length;
       await db.from("lab_events").insert(
-        caseIds.map((id) => ({
+        targetIds.map((id) => ({
           case_id: id,
           kind: "case_edited" as const,
           actor: user.email ?? "staff",

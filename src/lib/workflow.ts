@@ -67,19 +67,34 @@ export async function maybeFireNadiaAllReceived(
   const token = crypto.randomUUID();
   const now = new Date();
   const expires = new Date(now.getTime() + 30 * 86_400_000);
-  const siblingIds = siblings.map((c) => c.id);
+  const siblingIds = siblings.map((c) => c.id).sort();
 
-  // Stamp every sibling with the same token so the click confirms the batch.
-  // 30-day expiry caps the blast radius of a stale link.
-  await db
+  // ATOMIC claim: the outstanding-token read above is check-then-act — two
+  // concurrent invocations (two staff tabs, worker + UI) can both pass it and
+  // both send. Claim the batch by stamping the LOCK row (smallest sibling id)
+  // with a conditional update that only succeeds when no outstanding token
+  // exists; the loser updates 0 rows and skips the send.
+  const lockId = siblingIds[0];
+  const stamp = {
+    nadia_confirm_token: token,
+    nadia_confirm_sent_at: now.toISOString(),
+    nadia_confirm_expires_at: expires.toISOString(),
+    nadia_confirmed_at: null,
+  };
+  const { data: claimed } = await db
     .from("lab_cases")
-    .update({
-      nadia_confirm_token: token,
-      nadia_confirm_sent_at: now.toISOString(),
-      nadia_confirm_expires_at: expires.toISOString(),
-      nadia_confirmed_at: null,
-    })
-    .in("id", siblingIds);
+    .update(stamp)
+    .eq("id", lockId)
+    .or("nadia_confirm_token.is.null,nadia_confirmed_at.not.is.null")
+    .select("id");
+  if (!claimed || claimed.length === 0) return; // another invocation won the race
+
+  // Stamp the rest of the batch with the same token so the click confirms the
+  // whole group. 30-day expiry caps the blast radius of a stale link.
+  const restIds = siblingIds.filter((id) => id !== lockId);
+  if (restIds.length > 0) {
+    await db.from("lab_cases").update(stamp).in("id", restIds);
+  }
 
   const result = await sendNadiaAllReceived({
     cases: received,

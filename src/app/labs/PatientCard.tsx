@@ -10,6 +10,7 @@ import {
   getCaseStaleness,
   getColumnFor,
   groupByDate,
+  isProbablyReady,
   type PatientGroup,
 } from "@/lib/columns";
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
@@ -62,29 +63,6 @@ function formatExpectedRange(min: string | null, max: string | null): string | n
   };
   if (min && max && min !== max) return `${fmt(min)} – ${fmt(max)}`;
   return fmt(max ?? min ?? "");
-}
-
-/**
- * "Probably ready" alert criteria — surfaces a case that very likely has
- * results back from the lab but hasn't been marked as complete yet.
- *
- * Triggers when:
- *   • tracking shows the sample was delivered to the lab, AND
- *   • the expected-result-by date (catalog turnaround + sample-sent date)
- *     has passed, AND
- *   • step 4 (complete results received) is not yet checked.
- *
- * Deliberately does NOT auto-toggle step 4 — the human-confirmation gate is
- * core to the workflow. The badge tells staff "go look," not "consider it
- * done."
- */
-function isProbablyReady(row: LabCase): boolean {
-  if (row.step4_complete_received) return false;
-  if (row.tracking_status !== "delivered") return false;
-  if (!row.expected_result_at_max) return false;
-  const today = new Date();
-  const today0 = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-  return row.expected_result_at_max <= today0;
 }
 
 function LabRow({

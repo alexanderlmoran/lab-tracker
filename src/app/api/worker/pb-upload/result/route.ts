@@ -61,6 +61,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "job not found" }, { status: 404 });
   }
 
+  // Idempotency: a re-delivered outcome for an already-terminal job (worker
+  // retried after a lost response) must not re-run the step flips, the sibling
+  // cascade, or the Nadia/staff notification emails.
+  if (job.status === "succeeded" || job.status === "failed") {
+    return NextResponse.json({ ok: true, alreadyRecorded: true });
+  }
+
   if (parsed.outcome === "success") {
     await db
       .from("pb_upload_jobs")

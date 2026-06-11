@@ -118,7 +118,12 @@ export async function GET(request: Request) {
   //       The scraper only stages a PDF that matches the accession, so probing a
   //       not-yet-ready case is a safe no-op. The window bounds portal load.
   const today = new Date().toISOString().slice(0, 10);
-  const GRACE_DAYS = 21;
+  // 60d grace past the predicted max: a case whose results genuinely land slow
+  // (or whose accession was entered late) used to fall out of the feed ~56d
+  // after its anchor and silently NEVER auto-pull again. Probing a not-ready
+  // case is a safe no-op (accession-matched), so the wider window only costs
+  // portal requests, not correctness.
+  const GRACE_DAYS = 60;
   const graceFloor = new Date(Date.now() - GRACE_DAYS * 86_400_000)
     .toISOString()
     .slice(0, 10);

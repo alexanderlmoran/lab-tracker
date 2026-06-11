@@ -1,5 +1,6 @@
 import type { LabCase, StepNumber } from "./types";
 import { isReadyToShip } from "./labs/pickup";
+import { easternDateIso } from "./format";
 
 export type ColumnKey =
   | "untouched"
@@ -417,13 +418,28 @@ export type CaseStaleness = {
   daysSinceProgress: number;
 };
 
-/** Days from local-today to an ISO date (YYYY-MM-DD). Negative = past. */
+/** Days from today (Eastern — the clinic's day, identical on UTC servers and
+ * staff browsers, so SSR and the client agree) to an ISO date. Negative = past. */
 export function daysFromTodayIso(iso: string): number {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const target = new Date(iso + "T00:00:00");
-  if (Number.isNaN(target.getTime())) return 0;
-  return Math.round((target.getTime() - today.getTime()) / 86_400_000);
+  const target = Date.parse(iso + "T00:00:00Z");
+  if (Number.isNaN(target)) return 0;
+  const today = Date.parse(easternDateIso() + "T00:00:00Z");
+  return Math.round((target - today) / 86_400_000);
+}
+
+/**
+ * "Probably ready" alert — this case very likely has results back at the
+ * portal but hasn't been marked complete: sample delivered, expected-result-by
+ * date passed, step 4 still unchecked. Deliberately does NOT auto-toggle
+ * step 4 — the badge tells staff "go look," not "consider it done." Shared by
+ * the by-lab and by-patient boards; Eastern calendar day so SSR (UTC) and the
+ * client render the same answer.
+ */
+export function isProbablyReady(row: LabCase): boolean {
+  if (row.step4_complete_received) return false;
+  if (row.tracking_status !== "delivered") return false;
+  if (!row.expected_result_at_max) return false;
+  return row.expected_result_at_max <= easternDateIso();
 }
 
 export type ExpectedCountdown = {
