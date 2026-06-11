@@ -32,6 +32,7 @@ const SWEEP_EVERY_MIN = Number(process.env.IV_SWEEP_EVERY_MIN ?? 60);
 const SWEEP_MINAGE_MIN = Number(process.env.IV_SWEEP_MINAGE_MIN ?? 60);
 const SWEEP_DAYS = process.env.IV_SWEEP_DAYS ?? "2";
 const DRAIN_MS = Number(process.env.IV_DRAIN_INTERVAL_MS ?? 5 * 60 * 1000);
+const RELOGIN_MS = Number(process.env.IV_RELOGIN_MS ?? 3 * 60 * 60 * 1000); // re-login every ~3h (PB sessions expire)
 
 const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -54,6 +55,7 @@ async function runSweep(minAgeMin: number, label: string) {
 async function main() {
   log(`IV auto-post loop up — drain every ${Math.round(DRAIN_MS / 1000)}s, periodic sweep every ${SWEEP_EVERY_MIN}m (≥${SWEEP_MINAGE_MIN}m old), full sweeps at ${SWEEP_TIMES.join(", ")} ET`);
   let pb: PbSession | null = null;
+  let pbLoginMs = 0;
   let lastPeriodicMs = 0;
   const doneToday = new Set<string>(); // "<date> <HH:MM>" full-sweeps already run
 
@@ -73,9 +75,17 @@ async function main() {
         await runSweep(SWEEP_MINAGE_MIN, `every${SWEEP_EVERY_MIN}m`);
         lastPeriodicMs = Date.now();
       }
-      if (!pb) { pb = await pbLogin(PB_USER!, PB_PASS!); log("PB session established"); }
-      const n = await drainIvPosts(pb);
-      if (n) log(`drained ${n} job(s)`);
+      // (Re-)login if we have no session or the current one is aging out.
+      if (!pb || Date.now() - pbLoginMs > RELOGIN_MS) {
+        pb = await pbLogin(PB_USER!, PB_PASS!);
+        pbLoginMs = Date.now();
+        log("PB session established");
+      }
+      const { processed, authError } = await drainIvPosts(pb);
+      if (processed) log(`drained ${processed} job(s)`);
+      // A 401 means the PB session expired mid-run — drop it so we re-login next
+      // cycle; the failed jobs self-heal when the next sweep re-enqueues them.
+      if (authError) { log("PB 401 — re-login next cycle"); pb = null; }
     } catch (e) {
       log(`!! cycle error: ${e instanceof Error ? e.message : e}`);
       pb = null; // re-login next cycle (covers expired PB session)

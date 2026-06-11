@@ -15,7 +15,7 @@ async function main() {
   if (!process.env.PB_USERNAME || !process.env.PB_PASSWORD) throw new Error("PB_USERNAME + PB_PASSWORD required");
   const pb = await pbLogin(process.env.PB_USERNAME, process.env.PB_PASSWORD);
   log("PB session established");
-  const n = await drainIvPosts(pb);
-  log(`done; processed ${n} job(s)`);
+  const { processed } = await drainIvPosts(pb);
+  log(`done; processed ${processed} job(s)`);
 }
 main().catch((e) => { log(`fatal: ${e instanceof Error ? e.stack ?? e.message : String(e)}`); process.exit(1); });

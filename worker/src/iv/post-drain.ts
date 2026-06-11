@@ -125,19 +125,25 @@ async function handle(claim: Claim, pb: PbSession) {
 }
 
 /** Drain up to `max` queued IV post jobs with an established PB session.
- *  Returns the number of jobs processed. */
-export async function drainIvPosts(pb: PbSession, max = 50): Promise<number> {
+ *  Returns the count processed and whether a PB AUTH error (401) was seen — the
+ *  caller should then re-login (the PB session expires after a few hours, and a
+ *  swallowed 401 would otherwise wedge the loop forever). Jobs that failed on a
+ *  401 are left as 'failed' and self-heal: the next sweep re-enqueues them. */
+export async function drainIvPosts(pb: PbSession, max = 50): Promise<{ processed: number; authError: boolean }> {
   let processed = 0;
+  let authError = false;
   while (processed < max) {
     const claim = await claimNext();
     if (!claim) break;
     try {
       await handle(claim, pb);
     } catch (e) {
-      await report({ jobId: claim.job.id, sessionId: claim.session.id, outcome: "failed", error: e instanceof Error ? e.message : String(e) });
-      log(`!! failed session=${claim.session.id}: ${e instanceof Error ? e.message : e}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/\b401\b|unauthor/i.test(msg)) authError = true;
+      await report({ jobId: claim.job.id, sessionId: claim.session.id, outcome: "failed", error: msg });
+      log(`!! failed session=${claim.session.id}: ${msg}`);
     }
     processed++;
   }
-  return processed;
+  return { processed, authError };
 }
