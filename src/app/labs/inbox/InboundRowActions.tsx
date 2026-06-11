@@ -5,10 +5,21 @@ import {
   applyInboundEmail,
   dismissInboundEmail,
   forwardKkEmailToBodyBio,
+  postInboundToPb,
   rematchInboundEmail,
+  reparseInboundEmail,
 } from "./actions";
 import type { LabCase } from "@/lib/types";
 import { formatPersonName } from "@/lib/format";
+
+/** Parsed fields the "Create case + Post" path prefills from. */
+export type InboundSuggested = {
+  patientName?: string | null;
+  labName?: string | null;
+  collectionDate?: string | null;
+  patientDob?: string | null;
+  patientEmail?: string | null;
+};
 
 export function InboundRowActions({
   inboundId,
@@ -18,6 +29,8 @@ export function InboundRowActions({
   alreadyApplied,
   dismissOnly = false,
   forwardable = false,
+  canReparse = false,
+  suggested = null,
 }: {
   inboundId: string;
   matchedCaseId: string | null;
@@ -28,6 +41,10 @@ export function InboundRowActions({
   dismissOnly?: boolean;
   /** Kennedy Krieger emails: show "Forward to BodyBio". */
   forwardable?: boolean;
+  /** Gmail-ingested rows can re-run extraction + Claude parse + match. */
+  canReparse?: boolean;
+  /** Claude-parsed fields, for the create-case-and-post path. */
+  suggested?: InboundSuggested | null;
 }) {
   const [pending, startTransition] = useTransition();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -65,6 +82,68 @@ export function InboundRowActions({
     });
   }
 
+  function onReparse() {
+    startTransition(async () => {
+      const r = await reparseInboundEmail({ inboundId });
+      if (!r.ok) alert(r.error);
+    });
+  }
+
+  function onPostToPb() {
+    if (!caseId) {
+      alert("Pick a case first (or use Create case + Post).");
+      return;
+    }
+    const target = activeCases.find((c) => c.id === caseId);
+    if (
+      !confirm(
+        `Post this email's PDF as the RESULT on ${target ? `${formatPersonName(target.patient_name)} · ${target.lab_name}` : "the selected case"}?\n\nIt stages auto-approved and uploads to PracticeBetter.`,
+      )
+    ) {
+      return;
+    }
+    startTransition(async () => {
+      const r = await postInboundToPb({ inboundId, caseId });
+      if (!r.ok) alert(r.error);
+    });
+  }
+
+  function onCreateAndPost() {
+    if (!suggested?.patientName || !suggested?.labName) return;
+    if (
+      !confirm(
+        `Create a new case and post this PDF to PracticeBetter?\n\nPatient: ${formatPersonName(suggested.patientName)}\nLab: ${suggested.labName}\nCollection date: ${suggested.collectionDate ?? "(none parsed)"}`,
+      )
+    ) {
+      return;
+    }
+    startTransition(async () => {
+      const r = await postInboundToPb({
+        inboundId,
+        createCase: {
+          patientName: suggested.patientName!,
+          labName: suggested.labName!,
+          collectionDate: suggested.collectionDate ?? null,
+          patientDob: suggested.patientDob ?? null,
+          patientEmail: suggested.patientEmail ?? null,
+        },
+      });
+      if (!r.ok) alert(r.error);
+    });
+  }
+
+  const reparseBtn = canReparse ? (
+    <button
+      type="button"
+      onClick={onReparse}
+      disabled={pending}
+      className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
+      title="Re-run PDF extraction + Claude parse + case match for this email"
+    >
+      {pending ? "Working…" : "Re-parse"}
+    </button>
+  ) : null;
+
   function onDismiss() {
     if (!confirm("Dismiss this report? It stays in the audit log.")) return;
     startTransition(async () => {
@@ -92,6 +171,7 @@ export function InboundRowActions({
     return (
       <div className="flex flex-wrap items-center gap-2">
         {forwardBtn}
+        {reparseBtn}
         <button
           type="button"
           onClick={onDismiss}
@@ -107,6 +187,7 @@ export function InboundRowActions({
   return (
     <div className="flex flex-wrap items-center gap-2">
       {forwardBtn}
+      {reparseBtn}
       <select
         value={step}
         onChange={(e) => setStep(Number(e.target.value) as 2 | 4)}
@@ -141,10 +222,32 @@ export function InboundRowActions({
         type="button"
         onClick={onApply}
         disabled={pending || !caseId}
-        className="rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+        title="Only tick the step on the case — does NOT upload the PDF"
+        className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
       >
-        Apply
+        Mark step only
       </button>
+      {caseId ? (
+        <button
+          type="button"
+          onClick={onPostToPb}
+          disabled={pending}
+          title="Stage this email's PDF as the case result — auto-approved → PracticeBetter"
+          className="rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+        >
+          {pending ? "Posting…" : "Post to PB"}
+        </button>
+      ) : suggested?.patientName && suggested?.labName ? (
+        <button
+          type="button"
+          onClick={onCreateAndPost}
+          disabled={pending}
+          title={`Create a ${suggested.labName} case for ${suggested.patientName}${suggested.collectionDate ? ` (collected ${suggested.collectionDate})` : ""} and post the PDF to PracticeBetter`}
+          className="rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+        >
+          {pending ? "Posting…" : "Create case + Post to PB"}
+        </button>
+      ) : null}
       <button
         type="button"
         onClick={onDismiss}

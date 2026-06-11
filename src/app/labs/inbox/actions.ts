@@ -281,6 +281,163 @@ export async function applyInboundEmail(input: {
   return { ok: true };
 }
 
+/** Re-run extraction + Claude parse + case match for one ingested row — the
+ * recovery button for rows that failed transiently (bad API key, the
+ * pdf-parse import bug) without waiting to re-receive the email. */
+export async function reparseInboundEmail(input: {
+  inboundId: string;
+}): Promise<ActionResult<{ status: string }>> {
+  await requireSignedIn();
+  const { reprocessInboundEmail } = await import("@/lib/gmail/sync");
+  const r = await reprocessInboundEmail(input.inboundId);
+  revalidatePath("/labs/inbox");
+  if (!r.ok) return { ok: false, error: r.error ?? "Re-parse failed" };
+  return { ok: true, data: { status: r.status ?? "parsed" } };
+}
+
+const PostToPbInput = z.object({
+  inboundId: z.string().uuid(),
+  /** Post onto an existing case… */
+  caseId: z.string().uuid().nullable().optional(),
+  /** …or create one first (outside labs — patient-forwarded Quest etc.). */
+  createCase: z
+    .object({
+      patientName: z.string().min(1),
+      labName: z.string().min(1),
+      patientEmail: z.string().nullable().optional(),
+      patientDob: z.string().nullable().optional(),
+      collectionDate: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .nullable()
+        .optional(),
+    })
+    .optional(),
+});
+
+/**
+ * Post the email's PDF as a case's RESULT: re-fetch the attachment bytes from
+ * Gmail (the sync stores only extracted text), then stage them through the
+ * manual-upload path — which auto-approves and queues to PracticeBetter; the
+ * card lands in Complete Uploaded when the PB worker confirms. `createCase`
+ * makes the case first (with the report's collection date, so PB's Date
+ * Ordered is right), inheriting email/DOB from the patient's existing cases
+ * so the new card groups under the same patient.
+ */
+export async function postInboundToPb(input: {
+  inboundId: string;
+  caseId?: string | null;
+  createCase?: {
+    patientName: string;
+    labName: string;
+    patientEmail?: string | null;
+    patientDob?: string | null;
+    collectionDate?: string | null;
+  };
+}): Promise<ActionResult<{ caseId: string }>> {
+  const user = await requireSignedIn();
+  const parsed = PostToPbInput.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+  const { inboundId, createCase } = parsed.data;
+  let caseId = parsed.data.caseId ?? null;
+  if (!caseId && !createCase) {
+    return { ok: false, error: "Pick a case, or provide new-case details." };
+  }
+  const db = getSupabaseAdmin();
+
+  const { data: row } = await db
+    .from("inbound_emails")
+    .select("id, external_id, source, subject")
+    .eq("id", inboundId)
+    .maybeSingle();
+  if (!row) return { ok: false, error: "Email not found" };
+  const externalId = (row as { external_id: string | null }).external_id;
+  if ((row as { source: string }).source !== "gmail_poll" || !externalId) {
+    return { ok: false, error: "Only Gmail-ingested emails can be posted (no stored PDF bytes)." };
+  }
+
+  const auth = await getAuthorizedGmailClient();
+  if (!auth) return { ok: false, error: "Gmail not connected." };
+  const gmail = google.gmail({ version: "v1", auth: auth.auth });
+  const full = await gmail.users.messages.get({ userId: "me", id: externalId, format: "full" });
+  const parts = collectPdfParts(full.data.payload ?? undefined);
+  if (parts.length === 0) return { ok: false, error: "No PDF attachment on this email." };
+  // First PDF; Allison's forwards carry exactly one. Multi-PDF emails can be
+  // posted per attachment later if that ever becomes a real shape.
+  const part = parts[0];
+  const att = await gmail.users.messages.attachments.get({
+    userId: "me",
+    messageId: externalId,
+    id: part.attachmentId,
+  });
+  if (!att.data.data) return { ok: false, error: "Couldn't download the attachment." };
+  const pdfBase64 = decodeBase64Url(att.data.data).toString("base64");
+
+  if (!caseId && createCase) {
+    // Inherit identity from the patient's existing cases when the name
+    // matches — the boards group patients by email, so an empty email would
+    // orphan the new card.
+    const { data: kin } = await db
+      .from("lab_cases")
+      .select("patient_email, patient_dob")
+      .ilike("patient_name", createCase.patientName)
+      .neq("patient_email", "")
+      .limit(1)
+      .maybeSingle();
+    const { data: created, error: createErr } = await db
+      .from("lab_cases")
+      .insert({
+        patient_name: createCase.patientName,
+        patient_email:
+          createCase.patientEmail ||
+          ((kin as { patient_email: string } | null)?.patient_email ?? ""),
+        patient_dob:
+          createCase.patientDob ?? (kin as { patient_dob: string | null } | null)?.patient_dob ?? null,
+        lab_name: createCase.labName,
+        collection_date: createCase.collectionDate ?? null,
+      })
+      .select("id")
+      .single();
+    if (createErr || !created) {
+      return { ok: false, error: createErr?.message ?? "Couldn't create the case" };
+    }
+    caseId = (created as { id: string }).id;
+    await db.from("lab_events").insert({
+      case_id: caseId,
+      kind: "case_created",
+      actor: user.email ?? "staff",
+      note: `Created from inbox email "${(row as { subject: string | null }).subject ?? ""}"`,
+      meta: { inbound_id: inboundId },
+    });
+  }
+
+  const { uploadResultPdf } = await import("../probe-actions");
+  const up = await uploadResultPdf({
+    caseId: caseId!,
+    pdfBase64,
+    filename: part.filename || "inbound.pdf",
+  });
+  if (!up.ok) return { ok: false, error: up.error };
+
+  await db
+    .from("inbound_emails")
+    .update({
+      parser_status: "applied",
+      applied_action: "posted_to_pb",
+      matched_case_id: caseId,
+      reviewed_by: user.email ?? "admin",
+      reviewed_at: new Date().toISOString(),
+    })
+    .eq("id", inboundId);
+
+  revalidatePath("/labs");
+  revalidatePath("/labs/inbox");
+  revalidatePath(`/labs/${caseId}`);
+  return { ok: true, data: { caseId: caseId! } };
+}
+
 export async function dismissInboundEmail(input: {
   inboundId: string;
 }): Promise<ActionResult> {

@@ -37,7 +37,7 @@ export function decodeBase64Url(input: string): Buffer {
   return Buffer.from(normalized + pad, "base64");
 }
 
-function findHeader(
+export function findHeader(
   headers: gmail_v1.Schema$MessagePartHeader[] | undefined,
   name: string,
 ): string | null {
@@ -67,7 +67,7 @@ export function collectPdfParts(
   return acc;
 }
 
-function extractBodyText(payload: gmail_v1.Schema$MessagePart): string {
+export function extractBodyText(payload: gmail_v1.Schema$MessagePart): string {
   if (payload.mimeType === "text/plain" && payload.body?.data) {
     return decodeBase64Url(payload.body.data).toString("utf8");
   }
@@ -294,4 +294,123 @@ export async function syncGmailInbox(): Promise<SyncResult> {
     .eq("id", "primary");
 
   return result;
+}
+
+/**
+ * Re-run the full pipeline (attachment extraction → Claude parse → case
+ * match) for ONE already-ingested row. The recovery path for rows that
+ * failed transiently — a bad ANTHROPIC_API_KEY, the pdf-parse import bug —
+ * without waiting for the email to be re-received. Replaces the row's
+ * attachments and parse fields in place.
+ */
+export async function reprocessInboundEmail(
+  inboundId: string,
+): Promise<{ ok: boolean; status?: string; error?: string }> {
+  const auth = await getAuthorizedGmailClient();
+  if (!auth) return { ok: false, error: "Gmail not connected" };
+  const gmail = google.gmail({ version: "v1", auth: auth.auth });
+  const db = getSupabaseAdmin();
+
+  const { data: row } = await db
+    .from("inbound_emails")
+    .select("id, external_id, source")
+    .eq("id", inboundId)
+    .maybeSingle();
+  const externalId = (row as { external_id: string | null } | null)?.external_id;
+  if (!row || (row as { source: string }).source !== "gmail_poll" || !externalId) {
+    return { ok: false, error: "Not a Gmail-ingested row" };
+  }
+
+  const full = await gmail.users.messages.get({ userId: "me", id: externalId, format: "full" });
+  const payload = full.data.payload;
+  if (!payload) return { ok: false, error: "Gmail returned no payload" };
+
+  const subject = findHeader(payload.headers, "Subject");
+  const fromAddr = findHeader(payload.headers, "From");
+  const bodyText = extractBodyText(payload);
+  const pdfParts = collectPdfParts(payload);
+
+  const attachmentTexts: Array<{ filename: string; text: string }> = [];
+  const attachmentErrors: string[] = [];
+  for (const part of pdfParts) {
+    try {
+      const att = await gmail.users.messages.attachments.get({
+        userId: "me",
+        messageId: externalId,
+        id: part.attachmentId,
+      });
+      if (!att.data.data) continue;
+      const buf = decodeBase64Url(att.data.data);
+      const ab = new ArrayBuffer(buf.byteLength);
+      new Uint8Array(ab).set(buf);
+      attachmentTexts.push({ filename: part.filename, text: await extractPdfText(ab) });
+    } catch (err) {
+      // NOT silent (the sync loop's per-part catch hid the pdf-parse bug for
+      // weeks): failures surface in parser_error below.
+      attachmentErrors.push(
+        `${part.filename}: ${err instanceof Error ? err.message : "extract failed"}`,
+      );
+    }
+  }
+
+  await db.from("inbound_attachments").delete().eq("inbound_email_id", inboundId);
+  if (attachmentTexts.length > 0) {
+    await db.from("inbound_attachments").insert(
+      attachmentTexts.map((a) => ({
+        inbound_email_id: inboundId,
+        filename: a.filename,
+        content_type: "application/pdf",
+        size_bytes: null,
+        storage_path: null,
+        extracted_text: a.text,
+      })),
+    );
+  }
+
+  if (
+    isNotificationOnlyEmail({ subject, bodyText, attachmentCount: attachmentTexts.length })
+  ) {
+    const detectedLab = detectLabFromEmail({ subject, fromAddress: fromAddr, bodyText });
+    await db
+      .from("inbound_emails")
+      .update({
+        parser_status: "needs_manual_pull",
+        parser_error: null,
+        parser_extracted: detectedLab ? { lab_name: detectedLab } : null,
+      })
+      .eq("id", inboundId);
+    return { ok: true, status: "needs_manual_pull" };
+  }
+
+  try {
+    const { data: caseRows } = await db.from("lab_cases").select("*");
+    const extracted = await parseLabReportWithClaude({
+      subject,
+      fromAddress: fromAddr,
+      bodyText,
+      attachmentTexts,
+    });
+    const match = matchCase(extracted, (caseRows ?? []) as LabCase[]);
+    await db
+      .from("inbound_emails")
+      .update({
+        parser_status: "parsed",
+        parser_error: attachmentErrors.length ? `attachments: ${attachmentErrors.join("; ")}` : null,
+        parser_extracted: extracted,
+        matched_case_id: match.caseId,
+        matched_confidence: match.confidence,
+      })
+      .eq("id", inboundId);
+    return { ok: true, status: "parsed" };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Parse failed";
+    await db
+      .from("inbound_emails")
+      .update({
+        parser_status: "failed",
+        parser_error: attachmentErrors.length ? `${msg} | attachments: ${attachmentErrors.join("; ")}` : msg,
+      })
+      .eq("id", inboundId);
+    return { ok: false, error: msg };
+  }
 }

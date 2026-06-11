@@ -244,6 +244,18 @@ export default async function InboxPage() {
                         activeCases={slimCases}
                         alreadyApplied={false}
                         forwardable={isKk}
+                        canReparse
+                        suggested={
+                          ext
+                            ? {
+                                patientName: ext.patient_name ?? null,
+                                labName: ext.lab_name ?? null,
+                                collectionDate: ext.collected_date ?? null,
+                                patientDob: ext.patient_dob ?? null,
+                                patientEmail: ext.patient_email ?? null,
+                              }
+                            : null
+                        }
                       />
                     ) : isManualPull ? (
                       <InboundRowActions
@@ -254,6 +266,7 @@ export default async function InboxPage() {
                         alreadyApplied={false}
                         dismissOnly
                         forwardable={isKk}
+                        canReparse
                       />
                     ) : null}
                   </div>
