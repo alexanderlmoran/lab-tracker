@@ -47,6 +47,9 @@ export type ResultReadyPayload = {
    * (complete) — so a drip lab (Vibrant/Access) can't auto-complete a case off
    * a partial report. The result-ready route already understands this flag. */
   isPartial?: boolean;
+  /** Patient name as the portal shows it for the matched row. result-ready
+   * rejects the stage (409) when the last name doesn't match the case. */
+  portalPatientName?: string;
   /** Reconciliation engine: approve + enqueue the PB upload without a human
    * click (only set when the capture graded ≥ the auto-post threshold). */
   autoApprove?: boolean;

@@ -74,12 +74,15 @@ export const genovaScraper: LabScraper = {
           pdfBase64: buf.toString("base64"),
           pdfFilename: `genova_${normalizeName(`${match.patientLastName}, ${match.patientFirstName}`).replace(/\s+/g, "_")}_${orderNo}.pdf`,
           resultIssuedAt: match.dateReleased || undefined,
+          portalPatientName: `${match.patientFirstName ?? ""} ${match.patientLastName ?? ""}`.trim() || undefined,
         });
       } catch (err) {
-        errors.push({
-          caseId: c.caseId,
-          message: err instanceof Error ? err.message : String(err),
-        });
+        const message = err instanceof Error ? err.message : String(err);
+        // A non-PDF report body = the session died mid-run. Abort the WHOLE run
+        // loudly (a lab-level error in scrape-all / /run) instead of burying it
+        // as a per-case error that reads like "not ready" — the old masking bug.
+        if (/session (may have )?expired/i.test(message)) throw err;
+        errors.push({ caseId: c.caseId, message });
       }
     }
 
@@ -162,18 +165,20 @@ function isReady(a: GdxActivity): boolean {
 
 function matchActivity(c: OpenCase, activities: GdxActivity[]): GdxActivity | null {
   if (c.labExternalRef) {
-    const byRef = activities.find((a) => a.order?.orderNo?.trim() === c.labExternalRef!.trim());
-    if (byRef) return byRef;
+    // An accession was entered → ONLY its exact order may match. No name
+    // fallback: the patient's OTHER order would be the wrong lab.
+    return activities.find((a) => a.order?.orderNo?.trim() === c.labExternalRef!.trim()) ?? null;
   }
+  // No accession → name (+ DOB when both sides have it), and ONLY when
+  // unambiguous: exactly one matching activity, else wait for an accession.
   const nameNorm = normalizeName(c.patientName);
   const dobNorm = normalizeDob(c.patientDob);
-  return (
-    activities.find(
-      (a) =>
-        normalizeName(`${a.patientLastName ?? ""}, ${a.patientFirstName ?? ""}`) === nameNorm &&
-        (dobNorm === "" || normalizeDob(a.patientDateOfBirth ?? null) === dobNorm),
-    ) ?? null
+  const matches = activities.filter(
+    (a) =>
+      normalizeName(`${a.patientLastName ?? ""}, ${a.patientFirstName ?? ""}`) === nameNorm &&
+      (dobNorm === "" || normalizeDob(a.patientDateOfBirth ?? null) === dobNorm),
   );
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function normalizeName(s: string): string {

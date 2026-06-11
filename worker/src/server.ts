@@ -79,6 +79,7 @@ app.post<{ Params: { lab: string } }>("/run/:lab", async (req, reply) => {
             pdfFilename: r.pdfFilename,
             resultIssuedAt: r.resultIssuedAt,
             source: `worker:${labKey}`,
+            portalPatientName: r.portalPatientName,
           });
           posted += 1;
         } catch (err) {
@@ -393,6 +394,7 @@ app.post<{
               pdfFilename: f.pdfFilename,
               resultIssuedAt: f.resultIssuedAt,
               source: `manual-probe:${labKey}`,
+              portalPatientName: f.portalPatientName,
             });
             staged += 1;
           } catch (err) {

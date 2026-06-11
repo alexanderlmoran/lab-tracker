@@ -75,6 +75,7 @@ async function scrapeLab(labKey: string): Promise<void> {
           source: `worker:${labKey}`,
           // Drip labs stage as partial unless the scraper proves completeness.
           isPartial: PARTIAL_PRONE_LABS.has(labKey) || Boolean(r.isPartial),
+          portalPatientName: r.portalPatientName,
         });
         posted += 1;
       } catch (err) {

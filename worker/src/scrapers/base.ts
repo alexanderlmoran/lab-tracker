@@ -27,6 +27,10 @@ export type ScrapeResult = {
    * full order). Drip labs (Vibrant/Access) are also force-staged partial by
    * scrape-all until per-portal completeness detection exists. */
   isPartial?: boolean;
+  /** The patient name as the PORTAL shows it for the matched row. Passed to
+   * result-ready, which REJECTS the stage when the last name doesn't match the
+   * case's patient — the server-side guard against a scraper mismatch. */
+  portalPatientName?: string;
 };
 
 export type ScrapeRun = {

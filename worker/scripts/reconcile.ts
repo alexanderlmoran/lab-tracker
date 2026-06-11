@@ -358,6 +358,7 @@ async function runOnce() {
             isPartial: !complete,
             autoApprove: auto,
             confidence: grade.score,
+            portalPatientName: found.portalPatientName,
           });
         } catch (err) {
           tally.errors++;

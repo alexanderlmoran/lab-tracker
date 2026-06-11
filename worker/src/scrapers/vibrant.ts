@@ -290,11 +290,18 @@ export const vibrantScraper: LabScraper = {
           // than risk attaching the wrong order's report (patient-safety). The
           // accession-less auto-feed and the manual "search for lab to post"
           // both land here; result-ready then writes the matched accession back.
-          const candidates = await findPatientByName(token, c.patientName);
           const dobNorm = normalizeDob(c.patientDob);
-          const dobMatches = dobNorm
-            ? candidates.filter((p) => normalizeDob(p.patient_birthdate) === dobNorm)
-            : candidates;
+          // A DOB on the CASE is required: name alone can't distinguish two
+          // patients with the same name, and "exactly 1 candidate" only proves
+          // uniqueness within this clinic's portal view, not identity.
+          if (!dobNorm) continue;
+          const candidates = await findPatientByName(token, c.patientName);
+          // A full first page (25) means the search was too broad to trust the
+          // uniqueness check — the page cap hides further same-name patients.
+          if (candidates.length >= 25) continue;
+          const dobMatches = candidates.filter(
+            (p) => normalizeDob(p.patient_birthdate) === dobNorm,
+          );
           patientEntry = dobMatches.length === 1 ? dobMatches[0] : null;
           if (patientEntry && patientEntry.Order.length === 1) {
             accessionId = patientEntry.Order[0].accession_id;
@@ -321,6 +328,9 @@ export const vibrantScraper: LabScraper = {
           pdfFilename: `vibrant_${accessionId}.pdf`,
           resultIssuedAt: parseFinalDate(reports[0].final_report_date),
           isPartial: !isOrderComplete(status),
+          portalPatientName: patientEntry
+            ? `${patientEntry.patient_first_name} ${patientEntry.patient_last_name}`
+            : undefined,
         });
       } catch (err) {
         errors.push({

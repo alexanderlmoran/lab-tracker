@@ -86,6 +86,7 @@ export const doctorsdataScraper: LabScraper = {
           labExternalRef: match.LabID ?? term,
           pdfBase64: buf.toString("base64"),
           pdfFilename: `doctorsdata_${normalizeName(match.PatientName ?? "").replace(/\s+/g, "_")}_${match.LabID ?? "report"}.pdf`,
+          portalPatientName: match.PatientName ?? undefined,
         });
       } catch (err) {
         errors.push({
@@ -268,11 +269,17 @@ function isReady(r: DdRow): boolean {
 
 function matchRow(c: OpenCase, rows: DdRow[]): DdRow | null {
   if (c.labExternalRef) {
-    const byRef = rows.find((r) => r.LabID?.trim() === c.labExternalRef!.trim());
-    if (byRef) return byRef;
+    // An accession was entered → ONLY its exact result may match. No name
+    // fallback: when this accession's report isn't released yet, a name match
+    // would grab the patient's OTHER order — the wrong lab (patient-safety).
+    return rows.find((r) => r.LabID?.trim() === c.labExternalRef!.trim()) ?? null;
   }
+  // No accession: DoctorsData exposes no DOB, so the name is the only key.
+  // Require it to be UNAMBIGUOUS — exactly one row in the search window —
+  // else skip; two same-name patients/orders can't be told apart here.
   const nameNorm = normalizeName(c.patientName);
-  return rows.find((r) => normalizeName(r.PatientName ?? "") === nameNorm) ?? null;
+  const matches = rows.filter((r) => normalizeName(r.PatientName ?? "") === nameNorm);
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function lastNameOf(patientName: string): string {

@@ -35,7 +35,24 @@ const Body = z.object({
   autoApprove: z.boolean().optional().default(false),
   /** Capture-confidence score (0-100) recorded on the audit/flag for context. */
   confidence: z.number().optional(),
+  /** The patient name as the PORTAL shows it for the matched report. When
+   * present, the stage is REJECTED (409) unless the last name matches the
+   * case's patient — the server-side guard against a scraper mismatch. */
+  portalPatientName: z.string().optional(),
 });
+
+// Loose last-name key for the patient-identity gate: "PADGETT, NICOLE" /
+// "Marc Nicole Padgett" / "nicole padgett" all → "padgett". Lenient on
+// purpose — first-name spelling variance must not block real results.
+function lastNameKey(s: string): string {
+  const clean = s.replace(/[^a-zA-Z, ]/g, " ").trim().toLowerCase();
+  if (!clean) return "";
+  if (clean.includes(",")) {
+    return clean.split(",")[0]!.trim().split(/\s+/).pop() ?? "";
+  }
+  const parts = clean.split(/\s+/);
+  return parts[parts.length - 1] ?? "";
+}
 
 export async function POST(request: Request) {
   const expected = process.env.WORKER_SHARED_SECRET;
@@ -60,16 +77,62 @@ export async function POST(request: Request) {
 
   const { data: kase, error: caseErr } = await db
     .from("lab_cases")
-    .select("id, lab_external_ref")
+    .select("id, lab_external_ref, patient_name")
     .eq("id", parsed.caseId)
     .single();
   if (caseErr || !kase) {
     return NextResponse.json({ ok: false, error: "case not found" }, { status: 404 });
   }
 
+  // PATIENT-SAFETY GATE: the worker pairs caseId↔PDF on its side; this is the
+  // server's independent check that the report belongs to this case's patient.
+  // Mismatch = reject + a loud activity-log entry (NOT a silent skip).
+  if (parsed.portalPatientName) {
+    const portalKey = lastNameKey(parsed.portalPatientName);
+    const caseKey = lastNameKey((kase.patient_name as string | null) ?? "");
+    if (portalKey && caseKey && portalKey !== caseKey) {
+      await db.from("lab_events").insert({
+        case_id: parsed.caseId,
+        kind: "case_edited",
+        actor: parsed.source,
+        note: `REJECTED a result PDF — portal patient "${parsed.portalPatientName}" does not match this case's patient "${kase.patient_name}" (accession ${parsed.labExternalRef})`,
+        meta: { rejected_external_ref: parsed.labExternalRef, portal_patient: parsed.portalPatientName },
+      });
+      return NextResponse.json(
+        { ok: false, error: "portal patient does not match case patient" },
+        { status: 409 },
+      );
+    }
+  }
+
   const pdfBytes = Buffer.from(parsed.pdfBase64, "base64");
   if (pdfBytes.length === 0) {
     return NextResponse.json({ ok: false, error: "empty pdf" }, { status: 400 });
+  }
+
+  // Idempotency: a retried post (lost response, hourly re-scrape before step5
+  // flips) must not stage the same report twice — that meant a duplicate
+  // lab_case_pdfs row and, on autoApprove, a SECOND queued PB upload. Same
+  // case + accession + size + partial-flag on a live (un-superseded) row =
+  // the same report; return the existing row. A partial that has GROWN (Access
+  // back-fill) has a different size and still stages normally.
+  const { data: dupRow } = await db
+    .from("lab_case_pdfs")
+    .select("id")
+    .eq("case_id", parsed.caseId)
+    .eq("external_ref", parsed.labExternalRef)
+    .eq("size_bytes", pdfBytes.length)
+    .eq("is_partial", parsed.isPartial ?? false)
+    .is("superseded_at", null)
+    .limit(1)
+    .maybeSingle();
+  if (dupRow) {
+    return NextResponse.json({
+      ok: true,
+      pdfId: dupRow.id,
+      deduped: true,
+      autoApproved: false,
+    });
   }
 
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
@@ -114,13 +177,26 @@ export async function POST(request: Request) {
   // stages the real portal report even when the card's accession was wrong
   // (Vinay Mittal: card had 2606086632, portal had a different #) — adopt the
   // report's accession so future auto-pulls match and the record is right.
-  // Scheduled scrapes match by the existing accession, so they never differ
-  // here; this only fixes a genuinely mismatched one.
+  // GUARDED: only adopt when the case had no accession, or when the portal
+  // patient name corroborated above — an UNVERIFIED mismatch keeps the staff-
+  // entered accession (overwriting it would re-point every future auto-pull
+  // at the possibly-wrong order) and flags it in the activity log instead.
   if (kase.lab_external_ref !== parsed.labExternalRef) {
-    await db
-      .from("lab_cases")
-      .update({ lab_external_ref: parsed.labExternalRef })
-      .eq("id", parsed.caseId);
+    const corroborated = Boolean(parsed.portalPatientName); // mismatches already 409'd above
+    if (!kase.lab_external_ref || corroborated) {
+      await db
+        .from("lab_cases")
+        .update({ lab_external_ref: parsed.labExternalRef })
+        .eq("id", parsed.caseId);
+    } else {
+      await db.from("lab_events").insert({
+        case_id: parsed.caseId,
+        kind: "case_edited",
+        actor: parsed.source,
+        note: `Staged report's accession (${parsed.labExternalRef}) differs from the case's (${kase.lab_external_ref}) and the portal patient couldn't be verified — kept the existing accession; review at Approve.`,
+        meta: { pdf_id: pdfRow.id, report_external_ref: parsed.labExternalRef },
+      });
+    }
   }
 
   // A PDF arriving from the scraper IS the signal that the lab has the

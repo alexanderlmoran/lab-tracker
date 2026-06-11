@@ -98,6 +98,7 @@ function result(recipe: LabRecipe, c: OpenCase, match: DiscoveredRow, buf: Buffe
     pdfBase64: buf.toString("base64"),
     pdfFilename: `${recipe.key}_${normalizeName(match.name ?? c.patientName).replace(/\s+/g, "_")}_${ref}.pdf`,
     resultIssuedAt: match.resultIssuedAt,
+    portalPatientName: match.name ?? undefined,
   };
 }
 
@@ -129,16 +130,19 @@ function matchRow(c: OpenCase, rows: DiscoveredRow[], recipe: LabRecipe): Discov
       return rows.find((r) => r.ref?.trim() === c.labExternalRef!.trim()) ?? null;
     }
   }
-  // No usable accession → match by name (+ dob when both sides have it).
+  // No usable accession → match by name (+ dob when both sides have it), and
+  // ONLY when the match is UNAMBIGUOUS: exactly one compatible row. The old
+  // `.find` took the FIRST of a multi-order patient's rows — i.e. possibly the
+  // wrong lab. One row ↔ one case, or we skip and wait for an accession
+  // (patient-safety; mirrors the Vibrant single-order rule).
   const nameNorm = normalizeName(c.patientName);
   const dobNorm = normalizeDob(c.patientDob);
-  return (
-    rows.find((r) => {
-      if (normalizeName(r.name ?? "") !== nameNorm) return false;
-      const rDob = normalizeDob(r.dob ?? null);
-      return dobNorm === "" || rDob === "" || rDob === dobNorm;
-    }) ?? null
-  );
+  const matches = rows.filter((r) => {
+    if (normalizeName(r.name ?? "") !== nameNorm) return false;
+    const rDob = normalizeDob(r.dob ?? null);
+    return dobNorm === "" || rDob === "" || rDob === dobNorm;
+  });
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function lastNameOf(patientName: string): string {

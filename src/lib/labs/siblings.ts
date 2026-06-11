@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
+import { sameLab } from "@/lib/scrapers/normalize-lab";
 
 // Same-accession duplicate cards = separate lab_cases rows that are the SAME
 // physical lab order (e.g. a Zenoti-sync row + a bulk-import row), sharing the
@@ -16,7 +17,7 @@ export async function accessionSiblingIds(caseId: string): Promise<string[]> {
   const db = getSupabaseAdmin();
   const { data: c } = await db
     .from("lab_cases")
-    .select("patient_email, patient_name, lab_external_ref")
+    .select("patient_email, patient_name, lab_external_ref, lab_name")
     .eq("id", caseId)
     .maybeSingle();
   const ref = ((c?.lab_external_ref as string | null) ?? "").trim();
@@ -26,14 +27,23 @@ export async function accessionSiblingIds(caseId: string): Promise<string[]> {
   const name = ((c.patient_name as string | null) ?? "").trim();
   let q = db
     .from("lab_cases")
-    .select("id, lab_external_ref")
+    .select("id, lab_external_ref, lab_name")
     .is("deleted_at", null)
     .is("archived_at", null);
   q = email ? q.ilike("patient_email", email) : q.ilike("patient_name", name);
   const { data: rows } = await q;
 
+  // Same lab REQUIRED: accession numbers are per-vendor namespaces, so two
+  // different labs for one patient can collide on the ref string — without
+  // this guard a step cascade would drag an unrelated lab's card along.
+  // sameLab canonicalizes portal sub-panels ("Vibrant · EBOO" ≡ "Vibrant")
+  // and falls back to trimmed equality for non-portal labs.
   const ids = (rows ?? [])
-    .filter((r) => ((r.lab_external_ref as string | null) ?? "").trim() === ref)
+    .filter(
+      (r) =>
+        ((r.lab_external_ref as string | null) ?? "").trim() === ref &&
+        sameLab((r.lab_name as string | null) ?? "", (c.lab_name as string | null) ?? ""),
+    )
     .map((r) => r.id as string);
   return Array.from(new Set<string>([caseId, ...ids]));
 }
