@@ -376,20 +376,32 @@ export async function postInboundToPb(input: {
   const pdfBase64 = decodeBase64Url(att.data.data).toString("base64");
 
   if (!caseId && createCase) {
+    // Reports print names as "ALVAREZ, LIDIA"; the tracker stores
+    // "Lidia Alvarez". Normalize comma-form to First Last so the new card
+    // reads like its siblings and the kin lookup below can match.
+    const rawName = createCase.patientName.trim();
+    const patientName = rawName.includes(",")
+      ? rawName
+          .split(",")
+          .map((p) => p.trim())
+          .reverse()
+          .join(" ")
+      : rawName;
     // Inherit identity from the patient's existing cases when the name
     // matches — the boards group patients by email, so an empty email would
-    // orphan the new card.
+    // orphan the new card. (Lidia's first Quest post landed with "" email
+    // because the comma-form name matched nothing.)
     const { data: kin } = await db
       .from("lab_cases")
       .select("patient_email, patient_dob")
-      .ilike("patient_name", createCase.patientName)
+      .ilike("patient_name", patientName)
       .neq("patient_email", "")
       .limit(1)
       .maybeSingle();
     const { data: created, error: createErr } = await db
       .from("lab_cases")
       .insert({
-        patient_name: createCase.patientName,
+        patient_name: patientName,
         patient_email:
           createCase.patientEmail ||
           ((kin as { patient_email: string } | null)?.patient_email ?? ""),
