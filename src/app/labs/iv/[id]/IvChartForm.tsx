@@ -10,7 +10,7 @@ import {
   type IvSessionDetail,
   type Vitals,
 } from "../actions";
-import { ivChartMissing, QUICK_FILL_NORMAL } from "../chart-util";
+import { ivChartMissing, IV_PROVIDERS, QUICK_FILL_NORMAL } from "../chart-util";
 
 const INPUT =
   "w-full rounded border border-zinc-300 px-2 py-1 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none";
@@ -81,10 +81,15 @@ export function IvChartForm({ session }: { session: IvSessionDetail }) {
       components: c.components?.length ? c.components : [{ name: "", standardDose: "", addOnDose: "", lot: "", exp: "" }],
       infusionReaction: c.infusionReaction ?? { occurred: false },
       ivRemoval: c.ivRemoval,
+      provider: c.provider ?? session.therapist_name ?? "",
       pc: c.pc ?? {},
       notes: c.notes ?? "",
     };
   });
+  // Provider options = known providers + this session's Zenoti therapist.
+  const providerOptions = Array.from(
+    new Set([session.therapist_name, ...IV_PROVIDERS].filter(Boolean) as string[]),
+  );
   const [pending, startTransition] = useTransition();
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -153,6 +158,24 @@ export function IvChartForm({ session }: { session: IvSessionDetail }) {
           ⚡ Quick fill (normal)
         </button>
       </div>
+
+      <Section title="Provider">
+        <div className="max-w-xs">
+          <div className={LABEL}>Performed by (change if a different provider did it)</div>
+          <input
+            className={INPUT}
+            list="iv-providers"
+            value={chart.provider ?? ""}
+            placeholder="Provider name"
+            onChange={(e) => set({ provider: e.target.value })}
+          />
+          <datalist id="iv-providers">
+            {providerOptions.map((p) => (
+              <option key={p} value={p} />
+            ))}
+          </datalist>
+        </div>
+      </Section>
 
       {isPc && (
         <Section title="Phosphatidylcholine Infusion">

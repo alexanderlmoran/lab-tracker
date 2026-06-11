@@ -38,6 +38,9 @@ export type IvChartInput = {
   components?: Array<{ name?: string; standardDose?: string; addOnDose?: string; lot?: string; exp?: string }>;
   imMedication?: { name?: string; dose?: string; location?: string };
   imShotGiven?: boolean;
+  /** Provider who performed the IV (defaults to the Zenoti therapist; staff can
+   *  override if a different provider did it). Surfaced in the PB note summary. */
+  provider?: string;
   infusionReaction?: { occurred?: boolean; note?: string };
   ivRemoval?: boolean;
   pc?: { infusionNumber?: number | null; vialCount?: string };
@@ -279,11 +282,11 @@ export function ivChartMissing(chart: IvChartInput): string[] {
   return m;
 }
 
-/** PB note summary — flags incomplete charting so the gap is visible in PB
- *  itself (the note still posts; this is the "to-do" marker). */
+/** PB note summary. We keep the "incomplete" flag OUT of PB (it lives on the
+ *  board instead) — the summary just records the performing provider when set. */
 export function ivNoteSummary(chart: IvChartInput): string {
-  const missing = ivChartMissing(chart);
-  return missing.length ? `⚠ INCOMPLETE — still to chart: ${missing.join(", ")}` : "";
+  const p = (chart.provider ?? "").trim();
+  return p ? `Provider: ${p}` : "";
 }
 
 /** Compose the PB note title for a session (PC infusions get the #N (#vials)). */

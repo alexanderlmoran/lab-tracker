@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { confirmIvMatchAndPost, enqueueIvPost, type HeldIvPost } from "./actions";
+import { confirmIvMatchAndPost, enqueueIvPost, markIvAlreadyDone, type HeldIvPost } from "./actions";
+
+const PB_URL = "https://my.practicebetter.io";
 
 /** IV posts the worker held for a human to resolve (low-confidence match, no
  *  template, etc.). Lets staff re-try or vouch for the matched patient. */
@@ -45,9 +47,27 @@ export function HeldReview({ held }: { held: HeldIvPost[] }) {
                 {h.matchReason ?? "held"}
               </span>
               <span className="ml-auto flex items-center gap-2">
+                <a
+                  href={PB_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded border border-zinc-300 bg-white px-2 py-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100"
+                  title="Open PracticeBetter to search the chart / account notes"
+                >
+                  PB ↗
+                </a>
                 <Link href={`/labs/iv/${h.sessionId}`} className="rounded border border-zinc-300 bg-white px-2 py-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100">
                   Open
                 </Link>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => run(h.jobId, () => markIvAlreadyDone(h.sessionId))}
+                  className="rounded border border-zinc-300 bg-white px-2 py-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-50"
+                  title="Already charted by hand in PB — dismiss from review"
+                >
+                  {busy ? "…" : "Already done"}
+                </button>
                 <button
                   type="button"
                   disabled={busy}

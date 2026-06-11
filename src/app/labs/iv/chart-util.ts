@@ -28,6 +28,15 @@ export function isIvChartIncomplete(chart: IvChart | null | undefined): boolean 
  * same almost every time. Leaves the real per-visit data (vitals, components,
  * PC #/vials) for the nurse to enter.
  */
+/** Known IV providers (from the appointment history) for the form's provider
+ *  picker. The session's Zenoti therapist is added on top of this if missing. */
+export const IV_PROVIDERS = [
+  "Alexander Moran",
+  "Rich Rocha",
+  "Rolando Mendoza",
+  "Catherine Alas",
+];
+
 export const QUICK_FILL_NORMAL: Partial<IvChart> = {
   assessment: {
     initialCheckIn: true,

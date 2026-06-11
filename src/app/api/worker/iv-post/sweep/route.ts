@@ -57,6 +57,7 @@ export async function POST(request: Request) {
     .eq("cancelled", false)
     .eq("is_add_on", false)
     .not("kind", "in", "(ebo,addon)")
+    .neq("charting_status", "skipped") // "Already done" → don't re-enqueue
     .is("pb_note_id", null)
     .gte("session_date", fromStr);
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });

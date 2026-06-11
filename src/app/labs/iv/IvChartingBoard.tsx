@@ -1,9 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
-import type { IvChart, IvSessionRow } from "./actions";
+import { useRouter } from "next/navigation";
+import { useMemo, useState, useTransition } from "react";
+import { markIvAlreadyDone, type IvChart, type IvSessionRow } from "./actions";
 import { isIvChartIncomplete } from "./chart-util";
+
+const PB_URL = "https://my.practicebetter.io";
 
 const KIND_STYLE: Record<string, { label: string; cls: string }> = {
   standard: { label: "Standard", cls: "bg-zinc-100 text-zinc-700 border-zinc-300" },
@@ -61,6 +64,21 @@ export function IvChartingBoard({
       }),
     [rows],
   );
+
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const markDone = (id: string) => {
+    setBusyId(id);
+    startTransition(async () => {
+      try {
+        await markIvAlreadyDone(id);
+        router.refresh();
+      } finally {
+        setBusyId(null);
+      }
+    });
+  };
 
   const tableMissing =
     !!loadError &&
@@ -161,7 +179,9 @@ export function IvChartingBoard({
                       ) : null}
                     </td>
                     <td className="px-3 py-2 text-zinc-700">{tmpl}</td>
-                    <td className="px-3 py-2 text-zinc-700">{r.therapist_name || "—"}</td>
+                    <td className="px-3 py-2 text-zinc-700">
+                      {(r.chart as IvChart)?.provider || r.therapist_name || "—"}
+                    </td>
                     <td className="px-3 py-2">
                       <span
                         className={`inline-flex rounded px-1.5 py-0.5 text-[11px] font-medium ${s.cls}`}
@@ -178,13 +198,35 @@ export function IvChartingBoard({
                           </span>
                         )}
                     </td>
-                    <td className="px-3 py-2 text-right">
-                      <Link
-                        href={`/labs/iv/${r.id}`}
-                        className="rounded border border-zinc-300 px-2 py-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100"
-                      >
-                        Chart →
-                      </Link>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <a
+                          href={PB_URL}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="rounded border border-zinc-300 px-2 py-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100"
+                          title="Open PracticeBetter to search the chart / account notes"
+                        >
+                          PB ↗
+                        </a>
+                        {r.charting_status !== "posted" && r.charting_status !== "skipped" && (
+                          <button
+                            type="button"
+                            disabled={pending && busyId === r.id}
+                            onClick={() => markDone(r.id)}
+                            className="rounded border border-zinc-300 px-2 py-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-50"
+                            title="Already charted by hand in PB — dismiss from the board"
+                          >
+                            {pending && busyId === r.id ? "…" : "Already done"}
+                          </button>
+                        )}
+                        <Link
+                          href={`/labs/iv/${r.id}`}
+                          className="rounded border border-zinc-300 px-2 py-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100"
+                        >
+                          Chart →
+                        </Link>
+                      </div>
                     </td>
                   </tr>
                 );

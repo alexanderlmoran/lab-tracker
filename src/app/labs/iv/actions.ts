@@ -104,6 +104,8 @@ export type IvChart = {
   /** Intramuscular medication given alongside the IV (e.g. B12), if any. */
   imMedication?: { name?: string; dose?: string; location?: string };
   imShotGiven?: boolean;
+  /** Provider who performed the IV (defaults to the Zenoti therapist). */
+  provider?: string;
   infusionReaction?: { occurred?: boolean; note?: string };
   ivRemoval?: boolean;
   /** Phosphatidylcholine infusions only. */
@@ -167,11 +169,15 @@ export async function listHeldIvPosts(): Promise<HeldIvPost[]> {
   const db = getSupabaseAdmin();
   const { data, error } = await db
     .from("iv_post_jobs")
-    .select("id, session_id, match_score, match_reason, pb_client_record_id, iv_sessions(service_name, patient_full_name, session_date)")
+    .select("id, session_id, match_score, match_reason, pb_client_record_id, iv_sessions(service_name, patient_full_name, session_date, kind)")
     .eq("status", "held")
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
-  return (data ?? []).map((j: Record<string, unknown>) => {
+  return (data ?? [])
+    // EBOO/EBO2 are charted by hand in PB — they hold by design, not a problem to
+    // review, so keep them out of the "needs review" list.
+    .filter((j: Record<string, unknown>) => ((j.iv_sessions ?? {}) as Record<string, unknown>).kind !== "ebo")
+    .map((j: Record<string, unknown>) => {
     const s = (j.iv_sessions ?? {}) as Record<string, unknown>;
     const reason = (j.match_reason as string | null) ?? null;
     return {
@@ -196,6 +202,18 @@ export async function confirmIvMatchAndPost(sessionId: string, clientRecordId: s
   const { error: uErr } = await db.from("iv_sessions").update({ pb_client_record_id: clientRecordId }).eq("id", sessionId);
   if (uErr) throw new Error(uErr.message);
   await enqueueIvPost(sessionId);
+  return { ok: true };
+}
+
+/** Mark an IV as already charted by hand in PB — dismiss it from review + the
+ *  board (status "skipped"), and drop its post job so the sweep won't re-enqueue. */
+export async function markIvAlreadyDone(sessionId: string): Promise<{ ok: true }> {
+  await requireSignedIn();
+  const db = getSupabaseAdmin();
+  await db.from("iv_post_jobs").delete().eq("session_id", sessionId);
+  const { error } = await db.from("iv_sessions").update({ charting_status: "skipped" }).eq("id", sessionId);
+  if (error) throw new Error(error.message);
+  revalidatePath("/labs/iv");
   return { ok: true };
 }
 
