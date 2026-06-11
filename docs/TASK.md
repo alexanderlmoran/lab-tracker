@@ -16,22 +16,34 @@ Active + deferred work for the IV charting feature. See also
 
 ## Open
 
-- **Quick-entry card (board)** — shipped a "⚡ Quick fill (normal)" button on the
-  per-session form (stamps the normal-visit boilerplate). _Open:_ optionally add
-  an inline quick-entry card on the `/labs/iv` board so a nurse can chart all
-  variables + post without opening the detail page. Confirm scope with Alex.
+- **Add-on auto-merge** — add-ons are currently *skipped* from standalone posting
+  (held: "include on the base IV note"); the nurse adds their components to the
+  base session's chart by hand. _Open:_ auto-merge an add-on's components into the
+  visit's base note (needs reliable base↔add-on linkage via Zenoti guest+visit).
 
-- **Fly worker scheduling (deploy last mile)** — the app is live on Vercel, but
-  the worker automation isn't scheduled in prod. Needs:
-  1. loop wrappers — `iv-post-worker.ts` (≤50 then exits) + `zenoti-iv-sync.ts`
-     are one-shot; add `--loop` modes or loop scripts;
+- **Held-review patient search** — "Confirm & post" vouches for the matcher's best
+  candidate. For holds with *no* candidate (patient not in PB / not seeded), add a
+  patient search so staff can pick the record. (Tie/ambiguous holds already warn.)
+
+- **Quick-entry card (board)** — shipped a "⚡ Quick fill (normal)" button on the
+  per-session form. _Open:_ optionally an inline quick-entry card on the board to
+  chart + post without opening the detail page.
+
+- **Fly worker scheduling (deploy last mile)** — app is live on Vercel; worker
+  automation isn't scheduled in prod yet. Needs:
+  1. loop wrappers — `iv-post-worker.ts` (≤50 then exits), `zenoti-iv-sync.ts`,
+     and `iv-post-sweep.ts` are one-shot; add `--loop` modes or a loop script.
+     The IV loop should run **sweep → drain** each cycle (sweep enqueues, worker
+     posts).
   2. `iv-post` MUST run via `bash scripts/pb-egress-entrypoint.sh` (Tailscale
      exit node) — it touches PB, which blocks Fly datacenter IPs (err 8000);
-  3. two `[processes]` entries in `worker/fly.toml`;
+  3. `[processes]` entries in `worker/fly.toml` (iv-sync + iv-post[+sweep]);
   4. `fly deploy` (footgun: leaves the zenoti machine stopped → `fly machine
      start`);
   5. **fresh Zenoti capture** for `ZENOTI_SESSION_B64` (human-only login via
      `/lab-portal-capture`) so the prod board auto-populates.
+  - Note: `PB_TEST_PATIENT_ID` is blank in `.env.local` (scripts use the Leila
+    fallback `641868664a3099220158325b`); set it to be safe.
 
 ## Done (2026-06-11)
 
@@ -46,3 +58,14 @@ Active + deferred work for the IV charting feature. See also
 - **Post-regardless-flag:** posting works with an empty/partial chart; the
   session is flagged "incomplete" on the board + form, and the PB note `summary`
   carries a "⚠ INCOMPLETE — still to chart: …" marker.
+- **The 5 review gaps (all verified live):**
+  1. **Auto-post sweep** — `/api/worker/iv-post/sweep` enqueues every occurred,
+     un-posted IV (window-bounded, `dryRun`); drain worker posts ≥95 matches
+     flagged-incomplete, holds the rest. Notes never go missing.
+  2. **IM Medication / IM Shot** — form fields + note mapping (form-driven IM rows
+     + yes/no). Verified persisting.
+  3. **Add-on skip** — add-ons held ("include on the base IV note"), no stray note.
+  4. **Base-template fallback** — `__base_iv__` (→ Immune Boost ref) covers
+     custom/chelation/unmatched so they post instead of holding.
+  5. **Held-review panel** on `/labs/iv` — Re-try, Open, "Confirm & post" (force-
+     post to the vouched patient); ambiguous/tie holds flagged for manual check.
