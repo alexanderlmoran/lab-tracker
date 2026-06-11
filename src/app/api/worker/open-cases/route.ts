@@ -70,14 +70,14 @@ export async function GET(request: Request) {
   }
 
   const db = getSupabaseAdmin();
+  const SELECT_COLS =
+    "id, patient_name, patient_dob, patient_email, lab_name, lab_external_ref, step1_sample_sent, step2_partial_received, step4_complete_received, expected_result_at_min, expected_result_at_max, collection_date, tracking_delivered_at, created_at, dismissed_refs";
   // No exact lab_name filter at the DB: the staff-typed lab_name ("Access
   // Custom", "access · custom") often doesn't equal the scraper's canonical
   // portal, so we normalize and match in JS (sameLab) instead.
   const { data, error } = await db
     .from("lab_cases")
-    .select(
-      "id, patient_name, patient_dob, patient_email, lab_name, lab_external_ref, step1_sample_sent, step2_partial_received, step4_complete_received, expected_result_at_min, expected_result_at_max, collection_date, tracking_delivered_at, created_at, dismissed_refs",
-    )
+    .select(SELECT_COLS)
     .not("lab_external_ref", "is", null)
     .eq("step5_complete_uploaded", false)
     .is("archived_at", null)
@@ -85,6 +85,28 @@ export async function GET(request: Request) {
 
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+  }
+
+  // Vibrant CAN match by patient name + DOB (DOB-verified), so accession-LESS
+  // Vibrant cards — which the accession-gated query above skips — can still
+  // auto-pull. Pull them in a bounded second query (Vibrant lab names, DOB set,
+  // created within ~120d) ONLY for the Vibrant feed. The scraper requires an
+  // unambiguous single-order match, and result-ready writes the matched
+  // accession back, so the next scrape is accession-matched.
+  let accessionlessVibrant: unknown[] = [];
+  if (sameLab(lab, "Vibrant")) {
+    const since = new Date(Date.now() - 120 * 86_400_000).toISOString();
+    const { data: vless } = await db
+      .from("lab_cases")
+      .select(SELECT_COLS)
+      .is("lab_external_ref", null)
+      .ilike("lab_name", "%vibrant%")
+      .not("patient_dob", "is", null)
+      .eq("step5_complete_uploaded", false)
+      .is("archived_at", null)
+      .is("deleted_at", null)
+      .gte("created_at", since);
+    accessionlessVibrant = vless ?? [];
   }
 
   // A case is scrapeable when either:
@@ -136,7 +158,9 @@ export async function GET(request: Request) {
     return pollStartsBy(c) <= today && (!max || max >= graceFloor);
   };
 
-  const rows = ((data ?? []) as Row[]).filter((c) => sameLab(c.lab_name, lab));
+  const rows = [...((data ?? []) as Row[]), ...(accessionlessVibrant as Row[])].filter((c) =>
+    sameLab(c.lab_name, lab),
+  );
 
   // Staged completion re-checks — Access only (backlog #20). Access drips a
   // partial first then back-fills the complete panel over ~2 weeks. Once a

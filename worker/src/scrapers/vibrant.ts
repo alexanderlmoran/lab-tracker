@@ -284,15 +284,22 @@ export const vibrantScraper: LabScraper = {
           // Skip and retry next cycle.
           patientEntry = await findPatientByAccession(token, accessionId);
         } else if (c.patientName) {
-          // No accession on the case → match by patient name (+ dob).
+          // No accession on the case → match by patient name (+ DOB), but ONLY
+          // when it's unambiguous: exactly one DOB-verified patient AND exactly
+          // one order. A multi-order patient (or a DOB miss) is skipped rather
+          // than risk attaching the wrong order's report (patient-safety). The
+          // accession-less auto-feed and the manual "search for lab to post"
+          // both land here; result-ready then writes the matched accession back.
           const candidates = await findPatientByName(token, c.patientName);
           const dobNorm = normalizeDob(c.patientDob);
-          patientEntry =
-            candidates.find((p) => normalizeDob(p.patient_birthdate) === dobNorm) ??
-            candidates[0] ??
-            null;
-          if (patientEntry && patientEntry.Order.length > 0) {
+          const dobMatches = dobNorm
+            ? candidates.filter((p) => normalizeDob(p.patient_birthdate) === dobNorm)
+            : candidates;
+          patientEntry = dobMatches.length === 1 ? dobMatches[0] : null;
+          if (patientEntry && patientEntry.Order.length === 1) {
             accessionId = patientEntry.Order[0].accession_id;
+          } else {
+            patientEntry = null; // ambiguous → leave for an accession set or manual upload
           }
         }
 
