@@ -51,13 +51,15 @@ function dupKey(r: LabCase): string | null {
   return `${who}::${ref}`;
 }
 
-// Per-column chip policy (Alex, 2026-06-10): shipping/staleness badges are just
-// noise once a card is past results. ROF lanes keep ONLY the email indicator
-// (the Nadia/Allison-email correlation); Protocol-received + Completed show none.
-type BadgeTier = "full" | "minimal" | "none";
+// Per-column chip policy (Alex, 2026-06-11): once the result is ON PB the
+// shipping/staleness chips are noise. Complete Uploaded + ROF Scheduled keep
+// ONLY the human-contact signals (✉ emails + 📞 attempts — who still needs a
+// call); the last three lanes (ROF Done, Protocol received, Completed) show
+// nothing. Mirrored in the Legend — update both together.
+type BadgeTier = "full" | "contact" | "none";
 function badgeTier(col: ColumnKey): BadgeTier {
-  if (col === "closed" || col === "completed") return "none";
-  if (col === "rof_scheduled" || col === "rof_done") return "minimal";
+  if (col === "rof_done" || col === "closed" || col === "completed") return "none";
+  if (col === "complete_results" || col === "rof_scheduled") return "contact";
   return "full";
 }
 // Tracking #, expected window and pickup are operational shipping info — hide
@@ -264,7 +266,7 @@ function LabCard({
   // column — there are 10 lanes now — never squeezes the lab/patient text into
   // one-word-per-line. Only render the row when there's at least one chip so
   // sparse cards (TODO / Ready to ship) stay tight. The set shown is tiered:
-  // "none" → nothing; "minimal" → just the email indicator (+ review); "full" → all.
+  // "none" → nothing; "contact" → ✉ emails + 📞 attempts only; "full" → all.
   const fullChips =
     hasPendingPdf ||
     Boolean(row.tracking_status) ||
@@ -278,8 +280,8 @@ function LabCard({
   const hasChips =
     tier === "none"
       ? false
-      : tier === "minimal"
-        ? hasPendingPdf || counts.emailCount > 0
+      : tier === "contact"
+        ? counts.openAttempts > 0 || counts.emailCount > 0
         : fullChips;
 
   return (
@@ -359,7 +361,6 @@ function LabCard({
                   dup ×{dupSiblings.length + 1}
                 </RailChip>
               ) : null}
-              <AttemptRailChip openAttempts={counts.openAttempts} />
               {countdown ? (
                 <RailChip
                   className={
@@ -385,6 +386,8 @@ function LabCard({
               ) : null}
             </>
           ) : null}
+          {/* Contact signals render for BOTH "full" and "contact" tiers. */}
+          <AttemptRailChip openAttempts={counts.openAttempts} />
           <EmailRailChip emailCount={counts.emailCount} />
           {tier === "full" && stale.stale ? (
             <RailChip
@@ -422,6 +425,10 @@ function MergedDupCard({
   // the dialog reflects where the order actually is.
   const lead = rows[rows.length - 1];
   const isDupes = mode === "dupes";
+  // Same per-column policy as LabCard: ACC#/TRK are shipping-era info — hide
+  // them from Complete Uploaded onward (they were showing in Protocol
+  // received, where they're noise).
+  const showMeta = !TRACKING_META_HIDDEN.has(getColumnFor(lead));
   // Sub-panels of one physical order usually share ONE tracking # — dedupe so
   // the card shows "TRK 7917…" once, not the same number repeated ×3.
   const trackings = [
@@ -457,7 +464,7 @@ function MergedDupCard({
           {labels.join(" · ")}
         </p>
       )}
-      {isDupes ? (
+      {isDupes && showMeta ? (
         <div className="flex flex-col gap-0.5 text-[10px] text-zinc-400">
           {lead.lab_external_ref ? <span>ACC# {lead.lab_external_ref}</span> : null}
           {trackings.length ? <span className="truncate">TRK {trackings.join(" · ")}</span> : null}
