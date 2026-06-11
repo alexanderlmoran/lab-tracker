@@ -56,7 +56,7 @@ export async function POST(request: Request) {
   const { data: s, error: sErr } = await db
     .from("iv_sessions")
     .select(
-      "id, patient_full_name, patient_first_name, patient_last_name, patient_email, service_name, kind, template_hint, session_date, chart, pc_infusion_number, pc_vial_count, pb_note_id, pb_client_record_id",
+      "id, patient_full_name, patient_first_name, patient_last_name, patient_email, patient_phone, service_name, kind, template_hint, session_date, chart, pc_infusion_number, pc_vial_count, pb_note_id, pb_client_record_id",
     )
     .eq("id", claimed.session_id)
     .maybeSingle();
@@ -68,6 +68,7 @@ export async function POST(request: Request) {
   // Enrich identity from patients_seed (DOB/email/phone keyed by name or email).
   let dob: string | null = null;
   let seedEmail: string | null = null;
+  let seedPhone: string | null = null;
   const nm = (s.patient_full_name ?? "").trim();
   const em = (s.patient_email ?? "").trim();
   if (nm || em) {
@@ -76,13 +77,14 @@ export async function POST(request: Request) {
     if (em) ors.push(`email.ilike.${em}`);
     const { data: seed } = await db
       .from("patients_seed")
-      .select("dob, email")
+      .select("dob, email, phone")
       .or(ors.join(","))
       .limit(1)
       .maybeSingle();
     if (seed) {
       dob = (seed.dob as string | null) ?? null;
       seedEmail = (seed.email as string | null) ?? null;
+      seedPhone = (seed.phone as string | null) ?? null;
     }
   }
 
@@ -125,6 +127,7 @@ export async function POST(request: Request) {
       lastName: s.patient_last_name,
       email: em || seedEmail,
       dob,
+      phone: (s.patient_phone ?? "").trim() || seedPhone,
     },
     referenceNoteId: ref?.reference_note_id ?? null,
   });

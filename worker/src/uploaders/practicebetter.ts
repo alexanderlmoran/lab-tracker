@@ -61,6 +61,8 @@ export type PbPatient = {
   lastName: string;
   dayOfBirth: string | null;
   emailAddress: string | null;
+  /** homePhone from the records/search profile (used for IV match grading). */
+  phone?: string | null;
 };
 
 export type UploadInput = {
@@ -247,7 +249,7 @@ export async function searchPbPatientCandidates(
     throw new Error(`PB candidate search failed ${res.statusCode}`);
   }
   const json = (await res.body.json()) as {
-    items: Array<{ id: string; profile: { firstName: string; lastName: string; dayOfBirth?: string; emailAddress?: string } }>;
+    items: Array<{ id: string; profile: { firstName: string; lastName: string; dayOfBirth?: string; emailAddress?: string; homePhone?: string; mobilePhone?: string } }>;
   };
   return (json.items ?? []).map((it) => ({
     id: it.id,
@@ -255,6 +257,7 @@ export async function searchPbPatientCandidates(
     lastName: it.profile.lastName,
     dayOfBirth: it.profile.dayOfBirth ?? null,
     emailAddress: it.profile.emailAddress ?? null,
+    phone: it.profile.homePhone ?? it.profile.mobilePhone ?? null,
   }));
 }
 

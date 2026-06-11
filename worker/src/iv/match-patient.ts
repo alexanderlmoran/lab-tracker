@@ -17,6 +17,8 @@ export type PatientIdentity = {
   email?: string | null;
   /** YYYY-MM-DD (or any ISO prefix). */
   dob?: string | null;
+  /** Mobile/contact phone (Zenoti gives this on every appt; patients_seed too). */
+  phone?: string | null;
 };
 
 /** A PB patient candidate (from findPbPatient / records search). */
@@ -26,26 +28,32 @@ export type PbCandidate = {
   lastName?: string | null;
   emailAddress?: string | null;
   dayOfBirth?: string | null;
+  /** PB exposes homePhone on the records/search profile. */
+  phone?: string | null;
 };
 
 export const AUTO_POST_THRESHOLD = 95;
 
-// Signal weights — tuned so ONLY a full name+DOB+email agreement clears 95
-// (the safe bar). Loosen once the engine is proven, like the lab 95→90 plan.
+// Signal weights — tuned so ANY THREE independent identifiers clear 95 (the safe
+// bar): name+dob+email, OR name+email+phone (the no-DOB IV case — DOB is only
+// collected for labs), etc. Two signals (e.g. name+email = 75) still hold.
 const W_NAME_FULL = 45;
 const W_NAME_LAST_ONLY = 18;
 const W_DOB = 35;
 const W_EMAIL = 30;
+const W_PHONE = 25;
 
 const norm = (s?: string | null) => (s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 const dobKey = (s?: string | null) => norm(s).slice(0, 10);
+/** Last 10 digits of a phone (drops country code / formatting) for comparison. */
+const phoneKey = (s?: string | null) => (s ?? "").replace(/\D/g, "").slice(-10);
 
 function fullName(p: { fullName?: string | null; firstName?: string | null; lastName?: string | null }): string {
   if (p.fullName && norm(p.fullName)) return norm(p.fullName);
   return norm(`${p.firstName ?? ""} ${p.lastName ?? ""}`);
 }
 
-export type MatchSignals = { name: "full" | "last" | "none"; dob: boolean; email: boolean };
+export type MatchSignals = { name: "full" | "last" | "none"; dob: boolean; email: boolean; phone: boolean };
 
 /** Score one candidate 0..100 against the session identity, with the signals
  *  that fired (for audit/explainability — same as the engine logs reasons). */
@@ -53,7 +61,7 @@ export function scorePatientMatch(
   session: PatientIdentity,
   cand: PbCandidate,
 ): { score: number; signals: MatchSignals } {
-  const signals: MatchSignals = { name: "none", dob: false, email: false };
+  const signals: MatchSignals = { name: "none", dob: false, email: false, phone: false };
   let score = 0;
 
   const sName = fullName(session);
@@ -84,6 +92,13 @@ export function scorePatientMatch(
     signals.email = true;
   }
 
+  const sPhone = phoneKey(session.phone);
+  const cPhone = phoneKey(cand.phone);
+  if (sPhone.length === 10 && sPhone === cPhone) {
+    score += W_PHONE;
+    signals.phone = true;
+  }
+
   return { score: Math.min(100, score), signals };
 }
 
@@ -112,7 +127,7 @@ export function pickBestMatch(
   const runnerUp = scored[1]?.score ?? 0;
   const clearLead = best.score - runnerUp >= 15;
   const autoPostable = best.score >= threshold && clearLead;
-  const sig = `name=${best.signals.name},dob=${best.signals.dob},email=${best.signals.email}`;
+  const sig = `name=${best.signals.name},dob=${best.signals.dob},email=${best.signals.email},phone=${best.signals.phone}`;
   const reason = autoPostable
     ? `auto-post: score ${best.score} (${sig}), lead +${best.score - runnerUp}`
     : `hold for review: score ${best.score} (${sig})${best.score >= threshold ? `, but runner-up too close (+${best.score - runnerUp})` : ""}`;
