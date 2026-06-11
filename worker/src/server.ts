@@ -387,6 +387,13 @@ app.post<{
         const toStage = matched.length > 0 ? matched : withPdf.length === 1 ? withPdf : [];
         for (const f of toStage) {
           try {
+            // Accession-matched stage = staff just entered THIS accession and
+            // the portal returned its exact report — auto-approve straight to
+            // PB (Salvatore Didonato 2026-06-11: the extra Approve click after
+            // a deliberate search was redundant). The single-report FALLBACK
+            // (accession didn't match — format mismatch heuristic) still waits
+            // in Pending Upload for human review.
+            const accMatched = matched.includes(f);
             await postResultReady({
               caseId: stageCaseId,
               labExternalRef: f.labExternalRef ?? (acc || null),
@@ -395,6 +402,7 @@ app.post<{
               resultIssuedAt: f.resultIssuedAt,
               source: `manual-probe:${labKey}`,
               portalPatientName: f.portalPatientName,
+              autoApprove: accMatched,
             });
             staged += 1;
           } catch (err) {

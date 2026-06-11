@@ -711,10 +711,15 @@ export function CaseDetail({
             ⚠ {destWarning}
           </p>
         ) : null}
-        {/* Req-form auto-fill — renders only for labs that have a template */}
-        <div className="mt-2">
-          <ReqFormButton caseId={row.id} labName={row.lab_name} />
-        </div>
+        {/* Req-form auto-fill — only for labs with a template, and only BEFORE
+            the sample ships (Alex, 2026-06-11): once a card is in Sample Sent
+            or later the requisition already left with the kit, so the button
+            is just clutter from there through Completed. */}
+        {currentCol === "untouched" || currentCol === "ready_to_ship" ? (
+          <div className="mt-2">
+            <ReqFormButton caseId={row.id} labName={row.lab_name} />
+          </div>
+        ) : null}
         {row.tracking_number && row.tracking_status ? (
           <div className="mt-2 flex items-center justify-between gap-3 rounded-md border border-zinc-200 bg-zinc-50 px-2.5 py-1.5">
             <p className="text-[11px] text-zinc-700">
