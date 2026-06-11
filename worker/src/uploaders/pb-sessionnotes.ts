@@ -130,16 +130,36 @@ export function matrixAnswer(
 // ── Scaffold helper ──────────────────────────────────────────────────────
 
 /** Strip the answers from a reference note's content[], leaving the template
- *  scaffold ({id, question, name, object}) ready to attach fresh answers. The
- *  question DEFS are template text (not PHI). */
+ *  scaffold ({id, question, name, object}) ready to attach fresh answers.
+ *
+ *  IMPORTANT: a "reference note" is a real *filled* note, so its free-text
+ *  data leaks two ways — the answer (stripped here) AND `question.rows[].cells`
+ *  (e.g. vial LOT NUMBERS baked into the question def). We sanitize the latter:
+ *  any cell under a `shorttext` column is a free-text data slot, so its label is
+ *  another visit's data — blank it. yes/no cell labels are structural OPTIONS
+ *  (e.g. "Right Antecubital", "Yes") and are kept. */
 export function scaffoldFromNote(note: PbSessionNote): PbContentItem[] {
   return (note.content ?? []).map((c) => ({
     id: c.id,
-    question: c.question,
+    question: sanitizeQuestion(c.question),
     name: c.name,
     publishStatus: "draft",
     object: c.object,
   }));
+}
+
+/** Deep-clone a question and blank any free-text (shorttext) cell labels so a
+ *  reference note's data (lots, doses, locations) can't leak into a new note. */
+export function sanitizeQuestion(question: PbQuestion): PbQuestion {
+  const q = structuredClone(question);
+  const shorttext = (q.columns ?? []).map((col) => col.columnType === "shorttext");
+  for (const row of q.rows ?? []) {
+    if (!Array.isArray(row.cells)) continue;
+    row.cells = row.cells.map((cell, j) =>
+      shorttext[j] ? {} : cell,
+    );
+  }
+  return q;
 }
 
 // ── Create ───────────────────────────────────────────────────────────────

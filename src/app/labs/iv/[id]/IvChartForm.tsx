@@ -206,7 +206,7 @@ export function IvChartForm({ session }: { session: IvSessionDetail }) {
           <button type="button" className="text-xs font-medium text-zinc-600 hover:text-zinc-900" onClick={() => set({ components: [...(chart.components ?? []), { name: "", standardDose: "", addOnDose: "", lot: "", exp: "" }] })}>
             + Add component
           </button>
-          <p className="text-[11px] text-zinc-400">Standard components are pre-filled from the PB template at post time — add add-ons + lot/exp here.</p>
+          <p className="text-[11px] text-zinc-400">This table is exactly what posts to the PB note — enter each component given, with dose and lot/exp.</p>
         </div>
       </Section>
 

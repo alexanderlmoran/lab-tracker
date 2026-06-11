@@ -185,8 +185,9 @@ export function IvChartingBoard({
       )}
 
       <p className="mt-3 text-xs text-zinc-400">
-        Read-only preview. Charting form + one-click PB posting are the next phase — matching is
-        already verified against all 31 IV services.
+        Charting form + confidence-graded PB posting are live. The post worker grades the patient
+        match (name + DOB + email) and auto-posts at ≥95; lower-confidence matches hold for review.
+        EBOO/EBO2 are charted by hand in PB.
       </p>
     </div>
   );
