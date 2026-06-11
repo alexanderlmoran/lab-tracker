@@ -42,6 +42,10 @@ primary_region = "iad"
   # TS_EXIT_NODE. The other process groups don't touch PB, so they run unwrapped.
   pbdrain = "bash scripts/pb-egress-entrypoint.sh npx tsx scripts/pb-upload-worker.ts"
   reconcile = "bash scripts/pb-egress-entrypoint.sh npx tsx scripts/reconcile.ts --patient=all --lab=all --apply --loop"
+  # ivpost drains the IV note queue every ~5 min (staff "Chart & post" clicks post
+  # promptly) AND runs the auto-post sweep daily at 5pm ET so a note never goes
+  # missing. Posts to PB → needs the egress wrapper like pbdrain.
+  ivpost = "bash scripts/pb-egress-entrypoint.sh npx tsx scripts/iv-autopost-loop.ts"
 
 [http_service]
   internal_port = 8080

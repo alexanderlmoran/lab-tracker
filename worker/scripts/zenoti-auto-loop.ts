@@ -12,8 +12,8 @@ import { request } from "undici";
 
 import { loadEnvLocal } from "../src/lib/load-env.js";
 import { zenotiLogin } from "../src/zenoti/login.js";
-import { fetchZenotiLabAppointments } from "../src/zenoti/fetch-browser.js";
-import type { LabAppointment } from "../src/zenoti/types.js";
+import { fetchZenotiLabAppointments, fetchZenotiIvAppointments } from "../src/zenoti/fetch-browser.js";
+import type { IvAppointment, LabAppointment } from "../src/zenoti/types.js";
 
 loadEnvLocal();
 
@@ -85,9 +85,25 @@ async function pushToTracker(
   );
 }
 
+/** Push a day's IV appointments to iv_sessions (powers the /labs/iv board).
+ *  Reuses this loop's Zenoti session — no separate capture needed. */
+async function pushIvToTracker(appts: IvAppointment[], date: string): Promise<void> {
+  if (appts.length === 0) return;
+  const res = await request(`${BASE}/api/worker/iv-sessions`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${SECRET}`, "content-type": "application/json" },
+    body: JSON.stringify({ appointments: appts, date }),
+  });
+  const text = await res.body.text();
+  if (res.statusCode !== 200) throw new Error(`iv-sessions rejected ${res.statusCode}: ${text.slice(0, 200)}`);
+  const json = JSON.parse(text) as { received: number; upserted: number };
+  log(`iv: received=${json.received} upserted=${json.upserted} (${date})`);
+}
+
 async function syncOnce(): Promise<void> {
   const all: LabAppointment[] = [];
   const syncedDates: SyncedDateCensus[] = [];
+  const ivByDate: Array<{ date: string; appts: IvAppointment[] }> = [];
   for (let i = 0; i <= DAYS_AHEAD; i++) {
     const date = addDays(today(), i);
     // includeCancelled so cancellations soft-delete their case AND so the
@@ -104,8 +120,16 @@ async function syncOnce(): Promise<void> {
       date,
       allAppointmentIds: appts.map((a) => a.zenotiAppointmentId),
     });
+    // IV appointments for the same day (same Zenoti session) → iv_sessions.
+    ivByDate.push({ date, appts: await fetchZenotiIvAppointments({ storagePath: STORAGE, date }) });
   }
   await pushToTracker(all, syncedDates);
+  // IV push is best-effort: a failure here must not break the (idempotent) lab sync.
+  try {
+    for (const { date, appts } of ivByDate) await pushIvToTracker(appts, date);
+  } catch (e) {
+    log(`iv sync error (lab sync OK): ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 async function main() {

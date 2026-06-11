@@ -29,19 +29,19 @@ Active + deferred work for the IV charting feature. See also
   per-session form. _Open:_ optionally an inline quick-entry card on the board to
   chart + post without opening the detail page.
 
-- **Fly worker scheduling (deploy last mile)** — app is live on Vercel; worker
-  automation isn't scheduled in prod yet. Needs:
-  1. loop wrappers — `iv-post-worker.ts` (≤50 then exits), `zenoti-iv-sync.ts`,
-     and `iv-post-sweep.ts` are one-shot; add `--loop` modes or a loop script.
-     The IV loop should run **sweep → drain** each cycle (sweep enqueues, worker
-     posts).
-  2. `iv-post` MUST run via `bash scripts/pb-egress-entrypoint.sh` (Tailscale
-     exit node) — it touches PB, which blocks Fly datacenter IPs (err 8000);
-  3. `[processes]` entries in `worker/fly.toml` (iv-sync + iv-post[+sweep]);
-  4. `fly deploy` (footgun: leaves the zenoti machine stopped → `fly machine
-     start`);
-  5. **fresh Zenoti capture** for `ZENOTI_SESSION_B64` (human-only login via
-     `/lab-portal-capture`) so the prod board auto-populates.
+- **Fly deploy (last mile)** — scheduling is now WIRED in code; just needs a
+  deploy:
+  - `ivpost` Fly process (`worker/fly.toml`) runs `iv-autopost-loop.ts` under the
+    PB egress: drains the queue every ~5 min (staff posts) **and runs the sweep
+    daily at 5pm ET** (`IV_SWEEP_HOUR_ET`, default 17) so notes never go missing.
+  - IV board sync is folded into `zenoti-auto-loop.ts` (the `zenoti` process) —
+    it reuses the loop's headless Zenoti login, so **no separate capture is
+    needed**; lab + IV sync share one session.
+  - **To go live:** `cd worker && fly deploy` — FOOTGUN: leaves the always-on
+    zenoti machine stopped → `fly machine start <id>` after (see zenoti deploy
+    gotcha). The egress reuses the existing `TS_AUTHKEY` + `TS_EXIT_NODE` secrets
+    (same as pbdrain/reconcile). First live 5pm sweep auto-posts the day's
+    unposted IVs — confirm that's intended before/at first run.
   - Note: `PB_TEST_PATIENT_ID` is blank in `.env.local` (scripts use the Leila
     fallback `641868664a3099220158325b`); set it to be safe.
 
