@@ -36,6 +36,8 @@ export type IvChartInput = {
   location?: string;
   infusionFlowingWell?: boolean;
   components?: Array<{ name?: string; standardDose?: string; addOnDose?: string; lot?: string; exp?: string }>;
+  imMedication?: { name?: string; dose?: string; location?: string };
+  imShotGiven?: boolean;
   infusionReaction?: { occurred?: boolean; note?: string };
   ivRemoval?: boolean;
   pc?: { infusionNumber?: number | null; vialCount?: string };
@@ -183,6 +185,26 @@ function buildComponents(q: PbQuestion, comps: NonNullable<IvChartInput["compone
   return { question, answer: matrixAnswer(question, valuesByRow) };
 }
 
+/** Is this the "IM Medication" matrix (Dose/Lot/Location), not "IM Shot Given"? */
+function isImMedicationMatrix(q: PbQuestion | undefined): boolean {
+  if (!q || q.object !== "matrix") return false;
+  const title = lc(q.title);
+  return /im medication|intramuscular/.test(title) && !/shot given/.test(title);
+}
+
+/** FORM-DRIVEN IM medication: rebuild the matrix's single row from the entered
+ *  IM med (name → row label; dose/location → cells). */
+function buildImMedication(q: PbQuestion, im: NonNullable<IvChartInput["imMedication"]>) {
+  const n = colCount(q);
+  const doseCol = colIndex(q, (l) => /dose/.test(l));
+  const locCol = colIndex(q, (l) => /location/.test(l));
+  const question: PbQuestion = { ...q, rows: [{ label: im.name ?? "", cells: Array.from({ length: n }, () => ({})) }] };
+  const cells: Array<string | null> = Array.from({ length: n }, () => null);
+  if (doseCol >= 0) cells[doseCol] = im.dose || null;
+  if (locCol >= 0) cells[locCol] = im.location || null;
+  return { question, answer: matrixAnswer(question, [cells]) };
+}
+
 /** Build the answer for one scaffold item from the chart, or null to skip. */
 function answerFor(item: PbContentItem, chart: IvChartInput): unknown {
   const q = item.question;
@@ -199,7 +221,11 @@ function answerFor(item: PbContentItem, chart: IvChartInput): unknown {
     if (/attempt|location/.test(title)) return attemptsAnswer(q, chart);
     if (/infusion reaction/.test(title)) return yesNoMatrix(q, () => (chart.infusionReaction?.occurred ? true : false));
     if (/removal/.test(title)) return yesNoMatrix(q, () => (chart.ivRemoval ? true : null));
-    // IM Medication / IM Shot Given / unfilled components → leave blank.
+    if (/shot given/.test(title)) {
+      // IM shot given → YES on every row; not given / not charted → leave blank.
+      return yesNoMatrix(q, () => (chart.imShotGiven ? true : null));
+    }
+    // IM Medication (rebuilt below if entered) / unfilled components → blank.
     return emptyMatrix(q);
   }
   // Unknown question type → omit an answer (PB keeps the template default).
@@ -215,12 +241,17 @@ export function buildIvNoteContent(
   chart: IvChartInput,
 ): PbContentItem[] {
   const comps = (chart.components ?? []).filter((c) => (c.name ?? "").trim());
+  const im = chart.imMedication;
   return scaffold.map((item) => {
     let question = item.question;
     let answer = answerFor(item, chart);
     // Form-driven components: replace the template rows with the staff's table.
     if (comps.length && isComponentsMatrix(item.question)) {
       const built = buildComponents(item.question!, comps); // isComponentsMatrix guarantees defined
+      question = built.question;
+      answer = built.answer;
+    } else if (im && (im.name ?? "").trim() && isImMedicationMatrix(item.question)) {
+      const built = buildImMedication(item.question!, im);
       question = built.question;
       answer = built.answer;
     }

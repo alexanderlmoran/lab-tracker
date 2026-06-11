@@ -57,6 +57,11 @@ async function rest(method: string, path: string, body?: unknown, prefer?: strin
   return text ? JSON.parse(text) : null;
 }
 
+// Test knobs: IV_ORCH_KIND=addon exercises the add-on skip (#3);
+// IV_ORCH_SKIP_TEMPLATE=1 uses an unseeded hint to exercise the base fallback (#4).
+const ORCH_KIND = process.env.IV_ORCH_KIND || "standard";
+const SKIP_TEMPLATE = process.env.IV_ORCH_SKIP_TEMPLATE === "1";
+
 async function setup() {
   // ── SAFETY: the worker drains the whole queue. Refuse to run if any real
   // queued/claimed job exists (we'd auto-post real clinical notes).
@@ -84,16 +89,20 @@ async function setup() {
   }
 
   // ── template ref + session + queued job.
-  await rest("POST", "iv_template_refs",
-    { template_hint: THINT, reference_note_id: REF_NOTE, note: "TEST-IV-ORCH" },
-    "resolution=merge-duplicates,return=minimal");
+  // SKIP_TEMPLATE: use an UNSEEDED hint so /next must fall back to __base_iv__ (#4).
+  const hint = SKIP_TEMPLATE ? "TEST-IV-ORCH-UNMATCHED-XYZ" : THINT;
+  if (!SKIP_TEMPLATE) {
+    await rest("POST", "iv_template_refs",
+      { template_hint: THINT, reference_note_id: REF_NOTE, note: "TEST-IV-ORCH" },
+      "resolution=merge-duplicates,return=minimal");
+  }
 
   const session = await rest("POST", "iv_sessions",
     {
       zenoti_appointment_id: ZAPPT, patient_first_name: leila.firstName, patient_last_name: leila.lastName,
       patient_full_name: `${leila.firstName} ${leila.lastName}`, patient_email: leila.emailAddress,
-      service_name: "IV - Immune Boost (TEST-IV-ORCH)", kind: "standard", session_date: TODAY,
-      template_hint: THINT, chart: SAMPLE_CHART, charting_status: "ready",
+      service_name: `IV - Orchestration ${ORCH_KIND}`, kind: ORCH_KIND, is_add_on: ORCH_KIND === "addon",
+      session_date: TODAY, template_hint: hint, chart: SAMPLE_CHART, charting_status: "ready",
     },
     "resolution=merge-duplicates,return=representation");
   const sid = (Array.isArray(session) ? session[0] : session).id as string;
@@ -134,6 +143,19 @@ async function requeue() {
   console.log(`✓ re-queued. existing pb_note_id=${s.pb_note_id} — re-run the worker; it should UPDATE this note.`);
 }
 
+/** Simulate the held-review "Confirm & post": stamp the confirmed PB record on
+ *  the session (as confirmIvMatchAndPost does) + re-queue. The worker should
+ *  then force-post to it (reason "posted to staff-confirmed patient"). */
+async function confirm() {
+  const ses = await rest("GET", `iv_sessions?zenoti_appointment_id=eq.${ZAPPT}&select=id`);
+  const s = Array.isArray(ses) ? ses[0] : null;
+  if (!s) throw new Error("test session not found — run setup first");
+  const rec = process.env.PB_TEST_PATIENT_ID || "641868664a3099220158325b"; // Leila (PB_TEST_PATIENT_ID is blank in .env.local)
+  await rest("PATCH", `iv_sessions?id=eq.${s.id}`, { pb_client_record_id: rec }, "return=minimal");
+  await rest("PATCH", `iv_post_jobs?session_id=eq.${s.id}`, { status: "queued", finished_at: null, claimed_at: null }, "return=minimal");
+  console.log(`✓ stamped confirmed record + re-queued — worker should force-post.`);
+}
+
 async function cleanup() {
   const ses = await rest("GET", `iv_sessions?zenoti_appointment_id=eq.${ZAPPT}&select=id,pb_note_id`);
   const s = Array.isArray(ses) ? ses[0] : null;
@@ -156,6 +178,6 @@ async function cleanup() {
 }
 
 const cmd = process.argv[2];
-const fn = cmd === "setup" ? setup : cmd === "verify" ? verify : cmd === "requeue" ? requeue : cmd === "cleanup" ? cleanup : null;
-if (!fn) { console.error("usage: iv-orchestration-test.ts <setup|verify|requeue|cleanup>"); process.exit(1); }
+const fn = cmd === "setup" ? setup : cmd === "verify" ? verify : cmd === "requeue" ? requeue : cmd === "confirm" ? confirm : cmd === "cleanup" ? cleanup : null;
+if (!fn) { console.error("usage: iv-orchestration-test.ts <setup|verify|requeue|confirm|cleanup>"); process.exit(1); }
 fn().catch((e) => { console.error("FATAL", e instanceof Error ? e.message : e); process.exit(1); });

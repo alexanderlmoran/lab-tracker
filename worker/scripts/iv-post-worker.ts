@@ -56,6 +56,14 @@ async function handle(claim: Claim, pb: PbSession) {
     log(`hold (manual EBOO/EBO2) session=${s.id}`);
     return;
   }
+  // Add-ons attach to the visit's BASE IV note (chart their components on the base
+  // session) — they never get a standalone note. Skip them here so the auto-post
+  // sweep can't create stray add-on notes.
+  if (s.kind === "addon") {
+    await report({ jobId: job.id, sessionId: s.id, outcome: "held", score: null, reason: "add-on — include its components on the base IV note (no standalone note)" });
+    log(`skip (add-on) session=${s.id}`);
+    return;
+  }
   if (!referenceNoteId) {
     await report({ jobId: job.id, sessionId: s.id, outcome: "held", score: null, reason: `no reference scaffold for template "${s.templateHint}" — add it to iv_template_refs` });
     log(`hold (no scaffold) session=${s.id}`);
@@ -78,6 +86,25 @@ async function handle(claim: Claim, pb: PbSession) {
     });
     await report({ jobId: job.id, sessionId: s.id, outcome: "success", pbNoteId: s.pbNoteId, pbClientRecordId: s.pbClientRecordId, score: null, reason: "updated existing note (re-post)" });
     log(`UPDATED note=${s.pbNoteId} session=${s.id}`);
+    return;
+  }
+
+  // Staff-confirmed match (resolved a hold in the review screen): the session has
+  // a pb_client_record_id but no note yet → post to that record, skipping the
+  // auto-match gate (a human vouched for it).
+  if (!s.pbNoteId && s.pbClientRecordId) {
+    const ref = await getSessionNote(pb, referenceNoteId);
+    const content = buildIvNoteContent(scaffoldFromNote(ref), s.chart);
+    const title = ivNoteTitle({ serviceName: s.serviceName, templateHint: s.templateHint, kind: s.kind, pc: s.pc });
+    const created = await createSessionNote(pb, {
+      clientRecordId: s.pbClientRecordId,
+      name: title,
+      summary: ivNoteSummary(s.chart),
+      sessionDate: `${s.sessionDate}T12:00:00.000Z`,
+      content,
+    });
+    await report({ jobId: job.id, sessionId: s.id, outcome: "success", pbNoteId: created.id, pbClientRecordId: s.pbClientRecordId, score: null, reason: "posted to staff-confirmed patient" });
+    log(`POSTED (confirmed) note=${created.id} session=${s.id}`);
     return;
   }
 

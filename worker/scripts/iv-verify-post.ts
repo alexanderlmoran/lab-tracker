@@ -19,6 +19,7 @@ import {
   getSessionNote,
   scaffoldFromNote,
   createSessionNote,
+  deleteSessionNote,
 } from "../src/uploaders/pb-sessionnotes.js";
 import { buildIvNoteContent, ivNoteTitle, type IvChartInput } from "../src/iv/build-note-content.js";
 
@@ -53,6 +54,8 @@ const SAMPLE_CHART: IvChartInput = {
     { name: "Vitamin C", standardDose: "500mg/ml", addOnDose: "", lot: "VITC-TEST-1", exp: "2027-12" },
     { name: "Magnesium Chloride", standardDose: "200mg/ml", addOnDose: "100mg", lot: "MAG-TEST-2", exp: "2028-03" },
   ],
+  imMedication: { name: "Methylcobalamin B12", dose: "IM-TEST-10mg", location: "left deltoid" },
+  imShotGiven: true,
   infusionReaction: { occurred: false },
   ivRemoval: true,
   notes: "Automated IV-charting verification — safe to delete.",
@@ -156,6 +159,16 @@ async function main() {
   const remYesCol = (rem?.question?.columns ?? []).findIndex((c: any) => /^yes/i.test(c.label));
   checks.push(["IV removal = YES", remSel === remYesCol && remSel >= 0, `selCol=${remSel} yesCol=${remYesCol}`]);
 
+  // IM Medication rebuilt from the form + IM Shot Given = YES.
+  const imMed = bc.find((c) => /im medication|intramuscular/i.test(c.question?.title ?? "") && !/shot given/i.test(c.question?.title ?? "")) as any;
+  const imLabels = (imMed?.question?.rows ?? []).map((r: any) => r.label);
+  const imFlat = JSON.stringify(rowCells(imMed));
+  checks.push(["IM medication mapped", imLabels.includes("Methylcobalamin B12") && imFlat.includes("IM-TEST-10mg") && imFlat.includes("left deltoid"), JSON.stringify(imLabels)]);
+  const imShot = find(/shot given/, "matrix");
+  const imShotSel = trueCols(rowCells(imShot))[0];
+  const imYesCol = (imShot?.question?.columns ?? []).findIndex((c: any) => /^yes/i.test(c.label));
+  checks.push(["IM shot given = YES", imShotSel === imYesCol && imShotSel >= 0, `selCol=${imShotSel} yesCol=${imYesCol}`]);
+
   // No reference lot leaked into the posted note.
   const backJson = JSON.stringify(bc);
   const leaked = REF_LOTS.filter((lot) => backJson.includes(lot));
@@ -169,7 +182,14 @@ async function main() {
   }
   console.log(`──────────────────────────────────────────────────────`);
   console.log(allPass ? `\n✅ PASS — full production post path verified.` : `\n❌ FAIL — see mismatches above.`);
-  console.log(`\n⚠ Delete test note ${created.id} from Leila's chart in PB when done.`);
+
+  // Auto-clean the test note (we have the delete API now).
+  try {
+    await deleteSessionNote(pb, created.id);
+    console.log(`🧹 deleted test note ${created.id}`);
+  } catch (e) {
+    console.log(`⚠ could not delete test note ${created.id}: ${e instanceof Error ? e.message : e} — delete in PB UI`);
+  }
 }
 
 main().catch((e) => {

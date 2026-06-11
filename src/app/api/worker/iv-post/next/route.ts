@@ -91,11 +91,17 @@ export async function POST(request: Request) {
   // straight '), so match on a NORMALIZED form rather than exact eq — otherwise
   // e.g. "Myers’ Cocktail" never finds "Myers' Cocktail" and the post holds.
   let referenceNoteId: string | null = null;
+  const { data: refs } = await db.from("iv_template_refs").select("template_hint, reference_note_id");
+  const allRefs = refs ?? [];
   const normHint = normalizeTemplateHint(s.template_hint);
   if (normHint) {
-    const { data: refs } = await db.from("iv_template_refs").select("template_hint, reference_note_id");
-    const hit = (refs ?? []).find((r) => normalizeTemplateHint(r.template_hint) === normHint);
-    referenceNoteId = hit?.reference_note_id ?? null;
+    referenceNoteId = allRefs.find((r) => normalizeTemplateHint(r.template_hint) === normHint)?.reference_note_id ?? null;
+  }
+  if (!referenceNoteId) {
+    // Fallback: the base IV template for ad-hoc / custom / chelation / unmatched
+    // services (components are form-driven, so it fits any IV). Keeps a note from
+    // ever being un-postable. Seed iv_template_refs.template_hint = '__base_iv__'.
+    referenceNoteId = allRefs.find((r) => r.template_hint === "__base_iv__")?.reference_note_id ?? null;
   }
   const ref = referenceNoteId ? { reference_note_id: referenceNoteId } : null;
 

@@ -221,6 +221,19 @@ export function IvChartForm({ session }: { session: IvSessionDetail }) {
         </div>
       </Section>
 
+      <Section title="IM Medication (if given)">
+        <div className="space-y-2">
+          <Check label="IM shot given" checked={!!chart.imShotGiven} onChange={(v) => set({ imShotGiven: v })} />
+          {chart.imShotGiven && (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <input className={INPUT} placeholder="Medication (e.g. B12)" value={chart.imMedication?.name ?? ""} onChange={(e) => set({ imMedication: { ...chart.imMedication, name: e.target.value } })} />
+              <input className={INPUT} placeholder="Dose" value={chart.imMedication?.dose ?? ""} onChange={(e) => set({ imMedication: { ...chart.imMedication, dose: e.target.value } })} />
+              <input className={INPUT} placeholder="Location (e.g. left deltoid)" value={chart.imMedication?.location ?? ""} onChange={(e) => set({ imMedication: { ...chart.imMedication, location: e.target.value } })} />
+            </div>
+          )}
+        </div>
+      </Section>
+
       <Section title="Infusion Reaction & Removal">
         <div className="space-y-2">
           <Check label="Infusion reaction occurred" checked={!!chart.infusionReaction?.occurred} onChange={(v) => set({ infusionReaction: { ...chart.infusionReaction, occurred: v } })} />

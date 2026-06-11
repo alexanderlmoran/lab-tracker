@@ -101,6 +101,9 @@ export type IvChart = {
   location?: "right_antecubital" | "left_antecubital" | "left_arm" | "";
   infusionFlowingWell?: boolean;
   components?: ComponentRow[];
+  /** Intramuscular medication given alongside the IV (e.g. B12), if any. */
+  imMedication?: { name?: string; dose?: string; location?: string };
+  imShotGiven?: boolean;
   infusionReaction?: { occurred?: boolean; note?: string };
   ivRemoval?: boolean;
   /** Phosphatidylcholine infusions only. */
@@ -141,6 +144,58 @@ export async function saveIvChart(
   if (error) throw new Error(error.message);
   revalidatePath(`/labs/iv/${id}`);
   revalidatePath("/labs/iv");
+  return { ok: true };
+}
+
+// ── Held-for-review ────────────────────────────────────────────────────
+/** A post job the worker held (low-confidence match, ambiguous, etc.) for a
+ *  human to resolve. */
+export type HeldIvPost = {
+  jobId: string;
+  sessionId: string;
+  serviceName: string;
+  patientName: string | null;
+  sessionDate: string;
+  matchScore: number | null;
+  matchReason: string | null;
+  candidateId: string | null; // best PB candidate the matcher found (if any)
+  isTie: boolean; // reason flags a too-close runner-up → don't offer 1-click confirm
+};
+
+export async function listHeldIvPosts(): Promise<HeldIvPost[]> {
+  await requireSignedIn();
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("iv_post_jobs")
+    .select("id, session_id, match_score, match_reason, pb_client_record_id, iv_sessions(service_name, patient_full_name, session_date)")
+    .eq("status", "held")
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((j: Record<string, unknown>) => {
+    const s = (j.iv_sessions ?? {}) as Record<string, unknown>;
+    const reason = (j.match_reason as string | null) ?? null;
+    return {
+      jobId: j.id as string,
+      sessionId: j.session_id as string,
+      serviceName: (s.service_name as string) ?? "—",
+      patientName: (s.patient_full_name as string | null) ?? null,
+      sessionDate: (s.session_date as string) ?? "",
+      matchScore: (j.match_score as number | null) ?? null,
+      matchReason: reason,
+      candidateId: (j.pb_client_record_id as string | null) ?? null,
+      isTie: !!reason && /runner-up too close/i.test(reason),
+    };
+  });
+}
+
+/** Resolve a hold: a human vouched for the matched PB patient → stamp it on the
+ *  session and re-queue. The worker then posts to that record (skips the gate). */
+export async function confirmIvMatchAndPost(sessionId: string, clientRecordId: string): Promise<{ ok: true }> {
+  await requireSignedIn();
+  const db = getSupabaseAdmin();
+  const { error: uErr } = await db.from("iv_sessions").update({ pb_client_record_id: clientRecordId }).eq("id", sessionId);
+  if (uErr) throw new Error(uErr.message);
+  await enqueueIvPost(sessionId);
   return { ok: true };
 }
 
