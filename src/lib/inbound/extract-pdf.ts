@@ -9,6 +9,13 @@ import "server-only";
  * email ingested with zero extracted text and Claude had nothing to parse. */
 export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
   const { PDFParse } = await import("pdf-parse");
+  // pdfjs's Node fake-worker loads pdf.worker.mjs through a VARIABLE dynamic
+  // import the file tracer can't see, so the file never ships to Vercel. This
+  // literal import both gets it traced into the bundle and pre-registers the
+  // worker (globalThis.pdfjsWorker), so the untraceable path never runs. Must
+  // stay AFTER the pdf-parse import — pdf.mjs installs the DOMMatrix polyfill
+  // the worker code needs.
+  await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
   const parser = new PDFParse({ data: new Uint8Array(buf) });
   try {
     const result = await parser.getText();

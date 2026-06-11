@@ -83,6 +83,18 @@ Portals: Access, Cyrex, Spectracell, Genova, GlycanAge, DoctorsData, Vibrant.
   calibrator). Fix: `serverExternalPackages: ["pdf-parse", "pdfjs-dist"]` in
   next.config.ts. Also: pdf-parse v2 is a CLASS API (`new
   PDFParse({data}).getText()`) — the v1-style `default(buffer)` call throws.
+- **pdf.js works on localhost but breaks DEPLOYED** ("DOMMatrix is not
+  defined"): pdfjs loads `@napi-rs/canvas` via createRequire and
+  `pdf.worker.mjs` via a variable dynamic import — both invisible to Vercel's
+  file tracer, so neither ships with the function. Fix:
+  `outputFileTracingIncludes` for the canvas package (next.config.ts) + a
+  literal `import("pdfjs-dist/legacy/build/pdf.worker.mjs")` in
+  extract-pdf.ts. Verify with `.next/server/**/*.nft.json`, and NEVER swallow
+  per-attachment errors (sync surfaces them in `parser_error` now). To test
+  the whole inbox pipeline end-to-end: `npx tsx --env-file=.env.local
+  scripts/send-mock-lab-email.ts` (mock PDF → Resend → labs@ → Gmail sync),
+  and `scripts/diagnose-inbound-attachment.ts <gmailMessageId>` to replay one
+  message's attachment path locally with errors visible.
 - **`.kanban-col` has `overflow: hidden`** (hud.css, for the rounded gradient
   columns) — any `position: absolute` popover inside a column gets CLIPPED at
   the column edge, and the columns are narrower than a typical menu. Use the

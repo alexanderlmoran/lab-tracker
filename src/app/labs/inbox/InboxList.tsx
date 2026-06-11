@@ -130,7 +130,13 @@ export function InboxList({
 }) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [active, setActive] = useState<EmailRow | null>(null);
+  // PDF-less rows (portal notifications, stray text mail) crowd out the rows
+  // that carry an actual result, so they're hidden by default — the toggle
+  // brings them back when someone needs the "pull from portal" reminders.
+  const [showNoPdf, setShowNoPdf] = useState(false);
   const caseById = new Map(activeCases.map((c) => [c.id, c]));
+  const noPdfCount = emails.filter((e) => e.attachments.length === 0).length;
+  const visible = showNoPdf ? emails : emails.filter((e) => e.attachments.length > 0);
 
   // Keep the open dialog rendering the FRESH row after a server action
   // revalidates (post/dismiss/re-parse) — same trick as the kanban dialog.
@@ -154,8 +160,20 @@ export function InboxList({
 
   return (
     <>
+      {noPdfCount > 0 ? (
+        <div className="mb-2 flex justify-end">
+          <button
+            type="button"
+            onClick={() => setShowNoPdf((v) => !v)}
+            className="text-[11px] text-zinc-500 hover:text-zinc-800 hover:underline"
+          >
+            {showNoPdf ? "Hide" : "Show"} {noPdfCount} email{noPdfCount === 1 ? "" : "s"} without a
+            PDF
+          </button>
+        </div>
+      ) : null}
       <ul className="divide-y divide-zinc-100 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
-        {emails.map((e) => {
+        {visible.map((e) => {
           const status = statusFor(e);
           const actionable = e.parser_status === "parsed" || e.parser_status === "pending";
           const conf =
@@ -210,9 +228,11 @@ export function InboxList({
             </li>
           );
         })}
-        {emails.length === 0 ? (
+        {visible.length === 0 ? (
           <li className="p-10 text-center text-sm text-zinc-500">
-            No reports yet — Gmail polling surfaces lab emails here as they arrive.
+            {emails.length === 0
+              ? "No reports yet — Gmail polling surfaces lab emails here as they arrive."
+              : "Every current email is PDF-less — use the toggle above to show them."}
           </li>
         ) : null}
       </ul>

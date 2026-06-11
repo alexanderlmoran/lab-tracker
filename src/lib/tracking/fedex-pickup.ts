@@ -159,6 +159,38 @@ export async function checkPickupAvailability(opts: { readyDate?: string } = {})
   return { ok: res.ok, status: res.status, body: json };
 }
 
+/** Clinic-local clock time "HH:MM:SS" (24h) right now. */
+function clinicTimeNow(): string {
+  return new Date().toLocaleTimeString("en-GB", { timeZone: "America/New_York", hour12: false });
+}
+
+/** Minutes since midnight for an "HH:MM[:SS]" string. */
+function timeToMinutes(hms: string): number {
+  const [h = 0, m = 0] = hms.split(":").map(Number);
+  return h * 60 + m;
+}
+
+/** hms + addMinutes, rounded up to the next 5-minute mark → "HH:MM:00". */
+function roundUpToFiveMinutes(hms: string, addMinutes: number): string {
+  const total = Math.ceil((timeToMinutes(hms) + addMinutes) / 5) * 5;
+  return `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}:00`;
+}
+
+/** The clinic's current UTC offset ("-04:00" EDT / "-05:00" EST), from the tz
+ * database — so the winter flip no longer needs an env change.
+ * FEDEX_PICKUP_UTC_OFFSET still wins when set. */
+function clinicUtcOffset(): string {
+  const env = process.env.FEDEX_PICKUP_UTC_OFFSET;
+  if (env) return env;
+  const part = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    timeZoneName: "longOffset",
+  })
+    .formatToParts(new Date())
+    .find((p) => p.type === "timeZoneName")?.value;
+  return part?.match(/GMT([+-]\d{2}:\d{2})/)?.[1] ?? "-04:00";
+}
+
 export async function schedulePickup(input: SchedulePickupInput): Promise<SchedulePickupResult> {
   const cfg = readPickupConfig();
   if ("missing" in cfg) {
@@ -179,11 +211,39 @@ export async function schedulePickup(input: SchedulePickupInput): Promise<Schedu
   // FedEx project simply isn't authorized for the Pickup product — a portal gate,
   // not a body problem (see TASKS.md). Use checkPickupAvailability() to test that
   // safely (read-only, no truck dispatched).
-  const readyTime = input.readyTime ?? process.env.FEDEX_PICKUP_READY_TIME ?? "14:30:00";
-  const tzOffset = process.env.FEDEX_PICKUP_UTC_OFFSET ?? "-04:00"; // Miami EDT; -05:00 in winter
+  let readyTime = input.readyTime ?? process.env.FEDEX_PICKUP_READY_TIME ?? "14:30:00";
+  const tzOffset = clinicUtcOffset();
   // pickupDateType is required: SAME_DAY when ready today (clinic tz), else FUTURE_DAY.
   const todayLocal = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-  const pickupDateType = input.readyDate <= todayLocal ? "SAME_DAY" : "FUTURE_DAY";
+  if (input.readyDate < todayLocal) {
+    throw new FedExError(`Ready date ${input.readyDate} already passed — pick today or later.`);
+  }
+  const pickupDateType = input.readyDate === todayLocal ? "SAME_DAY" : "FUTURE_DAY";
+  if (pickupDateType === "SAME_DAY") {
+    // FedEx rejects a same-day ready time that's already in the past with a
+    // bare "invalid ready time" — booking after the default 2:30pm used to
+    // dead-end there. Clamp to ~20 min from now instead, and refuse with a
+    // real explanation when that leaves under an hour before close (FedEx's
+    // minimum ready→close window).
+    const now = clinicTimeNow();
+    if (readyTime <= now) {
+      readyTime = roundUpToFiveMinutes(now, 20);
+      if (readyTime < now) {
+        // Rounding crossed midnight — the same-day window is simply over.
+        throw new FedExError(
+          "Too late for a same-day pickup today — schedule for the next business day.",
+        );
+      }
+    }
+    if (timeToMinutes(cfg.closeTime) - timeToMinutes(readyTime) < 60) {
+      throw new FedExError(
+        `Too late for a same-day pickup — earliest ready time is now ${readyTime.slice(0, 5)} ` +
+          `but the pickup close time is ${cfg.closeTime.slice(0, 5)}, and FedEx needs at least an ` +
+          `hour between them. Schedule for the next business day, or drop the package at a FedEx ` +
+          `location today.`,
+      );
+    }
+  }
   const body = {
     associatedAccountNumber: { value: cfg.account },
     originDetail: {
@@ -206,7 +266,8 @@ export async function schedulePickup(input: SchedulePickupInput): Promise<Schedu
         // from the JSON when unset.
         ...(cfg.instructions ? { deliveryInstructions: cfg.instructions } : {}),
       },
-      // Alex's preference: ready 2:30pm, clinic close (customerCloseTime) 4:30pm.
+      // Defaults: ready 2:30pm (clamped forward for late same-day bookings),
+      // clinic close (customerCloseTime) 4:30pm.
       readyDateTimestamp: `${input.readyDate}T${readyTime}${tzOffset}`,
       customerCloseTime: cfg.closeTime,
       pickupDateType,

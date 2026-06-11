@@ -160,6 +160,7 @@ export async function syncGmailInbox(): Promise<SyncResult> {
         const pdfParts = collectPdfParts(payload);
 
         const attachmentTexts: Array<{ filename: string; text: string }> = [];
+        const attachmentErrors: string[] = [];
         for (const part of pdfParts) {
           try {
             const att = await gmail.users.messages.attachments.get({
@@ -174,8 +175,13 @@ export async function syncGmailInbox(): Promise<SyncResult> {
             new Uint8Array(ab).set(buf);
             const text = await extractPdfText(ab);
             attachmentTexts.push({ filename: part.filename, text });
-          } catch {
-            // Attachment fetch / parse failed — skip just this part.
+          } catch (err) {
+            // NOT silent (this swallowed the prod DOMMatrix/file-tracing
+            // failure for a full day while parses "succeeded" off body text):
+            // log it and surface it on the row via parser_error below.
+            const msg = err instanceof Error ? err.message : "extract failed";
+            attachmentErrors.push(`${part.filename}: ${msg}`);
+            console.error(`[gmail-sync] attachment extract failed (${part.filename}):`, err);
           }
         }
 
@@ -200,7 +206,7 @@ export async function syncGmailInbox(): Promise<SyncResult> {
         const inboundId = (emailRow as { id: string }).id;
 
         if (attachmentTexts.length > 0) {
-          await db.from("inbound_attachments").insert(
+          const { error: attInsertErr } = await db.from("inbound_attachments").insert(
             attachmentTexts.map((a) => ({
               inbound_email_id: inboundId,
               filename: a.filename,
@@ -210,6 +216,9 @@ export async function syncGmailInbox(): Promise<SyncResult> {
               extracted_text: a.text,
             })),
           );
+          if (attInsertErr) {
+            console.error(`[gmail-sync] inbound_attachments insert failed:`, attInsertErr.message);
+          }
         }
 
         // Notification-only path: lab said "log in to view" with no PDF.
@@ -219,7 +228,10 @@ export async function syncGmailInbox(): Promise<SyncResult> {
           isNotificationOnlyEmail({
             subject,
             bodyText,
-            attachmentCount: attachmentTexts.length,
+            // PDF PRESENCE, not extraction success — an email whose PDF failed
+            // to extract must surface the failure via the parse path below,
+            // not masquerade as a notification-only "pull from portal" row.
+            attachmentCount: pdfParts.length,
           })
         ) {
           const detectedLab = detectLabFromEmail({
@@ -255,6 +267,9 @@ export async function syncGmailInbox(): Promise<SyncResult> {
             .from("inbound_emails")
             .update({
               parser_status: "parsed",
+              parser_error: attachmentErrors.length
+                ? `attachments: ${attachmentErrors.join("; ")}`
+                : null,
               parser_extracted: extracted,
               matched_case_id: match.caseId,
               matched_confidence: match.confidence,
@@ -381,6 +396,7 @@ export async function reprocessInboundEmail(
       attachmentErrors.push(
         `${part.filename}: ${err instanceof Error ? err.message : "extract failed"}`,
       );
+      console.error(`[gmail-sync] reprocess attachment extract failed (${part.filename}):`, err);
     }
   }
 
@@ -399,7 +415,8 @@ export async function reprocessInboundEmail(
   }
 
   if (
-    isNotificationOnlyEmail({ subject, bodyText, attachmentCount: attachmentTexts.length })
+    // PDF presence, not extraction success — same reasoning as the sync loop.
+    isNotificationOnlyEmail({ subject, bodyText, attachmentCount: pdfParts.length })
   ) {
     const detectedLab = detectLabFromEmail({ subject, fromAddress: fromAddr, bodyText });
     await db
