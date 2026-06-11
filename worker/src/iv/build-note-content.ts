@@ -236,6 +236,25 @@ export function buildIvNoteContent(
   });
 }
 
+/** Which key sections are unfilled. Sibling of the app's ivChartMissing
+ *  (src/app/labs/iv/chart-util.ts) — keep the two in sync. */
+export function ivChartMissing(chart: IvChartInput): string[] {
+  const vEmpty = (v?: Record<string, string | undefined>) => !v || !(v.bp || v.spo2 || v.temp || v.hr || v.resp);
+  const m: string[] = [];
+  if (vEmpty(chart.preVitals)) m.push("pre-vitals");
+  if (vEmpty(chart.postVitals)) m.push("post-vitals");
+  if (!chart.ivStart?.cath) m.push("IV start");
+  if (!(chart.components ?? []).some((c) => (c.name ?? "").trim())) m.push("components");
+  return m;
+}
+
+/** PB note summary — flags incomplete charting so the gap is visible in PB
+ *  itself (the note still posts; this is the "to-do" marker). */
+export function ivNoteSummary(chart: IvChartInput): string {
+  const missing = ivChartMissing(chart);
+  return missing.length ? `⚠ INCOMPLETE — still to chart: ${missing.join(", ")}` : "";
+}
+
 /** Compose the PB note title for a session (PC infusions get the #N (#vials)). */
 export function ivNoteTitle(opts: {
   serviceName: string;

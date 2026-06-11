@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useMemo } from "react";
-import type { IvSessionRow } from "./actions";
+import type { IvChart, IvSessionRow } from "./actions";
+import { isIvChartIncomplete } from "./chart-util";
 
 const KIND_STYLE: Record<string, { label: string; cls: string }> = {
   standard: { label: "Standard", cls: "bg-zinc-100 text-zinc-700 border-zinc-300" },
@@ -167,6 +168,15 @@ export function IvChartingBoard({
                       >
                         {s.label}
                       </span>
+                      {(r.charting_status === "posted" || r.charting_status === "ready") &&
+                        isIvChartIncomplete(r.chart as IvChart) && (
+                          <span
+                            className="ml-1 inline-flex rounded border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800"
+                            title="Posted/charted but charting is incomplete — needs completion"
+                          >
+                            ⚠ incomplete
+                          </span>
+                        )}
                     </td>
                     <td className="px-3 py-2 text-right">
                       <Link

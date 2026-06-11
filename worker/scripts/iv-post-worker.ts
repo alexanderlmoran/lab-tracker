@@ -11,7 +11,7 @@ import { request } from "undici";
 import { loadEnvLocal } from "../src/lib/load-env.js";
 import { pbLogin, searchPbPatientCandidates, type PbSession } from "../src/uploaders/practicebetter.js";
 import { getSessionNote, scaffoldFromNote, createSessionNote } from "../src/uploaders/pb-sessionnotes.js";
-import { buildIvNoteContent, ivNoteTitle, type IvChartInput } from "../src/iv/build-note-content.js";
+import { buildIvNoteContent, ivNoteSummary, ivNoteTitle, type IvChartInput } from "../src/iv/build-note-content.js";
 import { pickBestMatch, type PatientIdentity } from "../src/iv/match-patient.js";
 
 loadEnvLocal();
@@ -83,6 +83,7 @@ async function handle(claim: Claim, pb: PbSession) {
   const created = await createSessionNote(pb, {
     clientRecordId: best.candidate.id,
     name: title,
+    summary: ivNoteSummary(s.chart), // flags incomplete charting in PB ("post regardless, flag to do")
     sessionDate: `${s.sessionDate}T12:00:00.000Z`,
     content,
   });

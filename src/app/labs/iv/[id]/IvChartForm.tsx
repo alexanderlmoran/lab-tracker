@@ -10,6 +10,7 @@ import {
   type IvSessionDetail,
   type Vitals,
 } from "../actions";
+import { ivChartMissing, QUICK_FILL_NORMAL } from "../chart-util";
 
 const INPUT =
   "w-full rounded border border-zinc-300 px-2 py-1 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none";
@@ -92,6 +93,10 @@ export function IvChartForm({ session }: { session: IvSessionDetail }) {
   const set = (patch: Partial<IvChart>) => setChart((c) => ({ ...c, ...patch }));
   const setComp = (i: number, patch: Partial<ComponentRow>) =>
     setChart((c) => ({ ...c, components: (c.components ?? []).map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
+  // Quick fill: stamp the "normal visit" boilerplate (assessment, cath, attempts,
+  // location, flowing, no reaction, removed) without touching vitals/components.
+  const quickFill = () => setChart((c) => ({ ...c, ...QUICK_FILL_NORMAL, assessment: { ...c.assessment, ...QUICK_FILL_NORMAL.assessment } }));
+  const missing = ivChartMissing(chart);
 
   function save(markReady: boolean) {
     setError(null);
@@ -139,6 +144,14 @@ export function IvChartForm({ session }: { session: IvSessionDetail }) {
             Template: {isPc ? "Phosphatidylcholine Infusion" : session.template_hint || "—"} · status: {session.charting_status}
           </p>
         </div>
+        <button
+          type="button"
+          onClick={quickFill}
+          className="shrink-0 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
+          title="Stamp the normal-visit defaults (assessment, 22ga, 1 attempt, R antecubital, flowing, no reaction, removed)"
+        >
+          ⚡ Quick fill (normal)
+        </button>
       </div>
 
       {isPc && (
@@ -190,23 +203,21 @@ export function IvChartForm({ session }: { session: IvSessionDetail }) {
 
       <Section title="Components">
         <div className="space-y-2">
-          <div className="hidden grid-cols-[1fr_90px_90px_90px_90px_24px] gap-2 text-[11px] font-medium text-zinc-500 sm:grid">
-            <span>Product</span><span>Std dose</span><span>Add-on</span><span>Lot #</span><span>Exp</span><span />
+          <div className="hidden grid-cols-[1fr_110px_110px_24px] gap-2 text-[11px] font-medium text-zinc-500 sm:grid">
+            <span>Product</span><span>Std dose</span><span>Add-on</span><span />
           </div>
           {(chart.components ?? []).map((r, i) => (
-            <div key={i} className="grid grid-cols-2 gap-2 sm:grid-cols-[1fr_90px_90px_90px_90px_24px]">
+            <div key={i} className="grid grid-cols-2 gap-2 sm:grid-cols-[1fr_110px_110px_24px]">
               <input className={INPUT} placeholder="Product" value={r.name ?? ""} onChange={(e) => setComp(i, { name: e.target.value })} />
-              <input className={INPUT} placeholder="Std" value={r.standardDose ?? ""} onChange={(e) => setComp(i, { standardDose: e.target.value })} />
+              <input className={INPUT} placeholder="Std dose" value={r.standardDose ?? ""} onChange={(e) => setComp(i, { standardDose: e.target.value })} />
               <input className={INPUT} placeholder="Add-on" value={r.addOnDose ?? ""} onChange={(e) => setComp(i, { addOnDose: e.target.value })} />
-              <input className={INPUT} placeholder="Lot #" value={r.lot ?? ""} onChange={(e) => setComp(i, { lot: e.target.value })} />
-              <input className={INPUT} placeholder="Exp" value={r.exp ?? ""} onChange={(e) => setComp(i, { exp: e.target.value })} />
               <button type="button" aria-label="Remove row" className="text-zinc-400 hover:text-red-600" onClick={() => set({ components: (chart.components ?? []).filter((_, j) => j !== i) })}>×</button>
             </div>
           ))}
-          <button type="button" className="text-xs font-medium text-zinc-600 hover:text-zinc-900" onClick={() => set({ components: [...(chart.components ?? []), { name: "", standardDose: "", addOnDose: "", lot: "", exp: "" }] })}>
+          <button type="button" className="text-xs font-medium text-zinc-600 hover:text-zinc-900" onClick={() => set({ components: [...(chart.components ?? []), { name: "", standardDose: "", addOnDose: "" }] })}>
             + Add component
           </button>
-          <p className="text-[11px] text-zinc-400">This table is exactly what posts to the PB note — enter each component given, with dose and lot/exp.</p>
+          <p className="text-[11px] text-zinc-400">This table is exactly what posts to the PB note — enter each component given, with its dose. (Lot # / stock tracking is coming separately.)</p>
         </div>
       </Section>
 
@@ -245,7 +256,10 @@ export function IvChartForm({ session }: { session: IvSessionDetail }) {
             Chart & post to PB
           </button>
         )}
-        {queued && !error && <span className="text-xs text-green-700">Queued — worker grades the patient match (auto-posts at ≥95, else holds for review).</span>}
+        {!isEbo && missing.length > 0 && !queued && !error && (
+          <span className="text-xs text-amber-700">⚠ Posts anyway, flagged incomplete — still to fill: {missing.join(", ")}.</span>
+        )}
+        {queued && !error && <span className="text-xs text-green-700">Queued — worker grades the patient match (auto-posts at ≥95, else holds for review).{missing.length ? " Flagged incomplete." : ""}</span>}
         {savedAt && !queued && !error && <span className="text-xs text-green-700">Saved {savedAt}</span>}
         {error && <span className="text-xs text-red-700">{error}</span>}
       </div>
