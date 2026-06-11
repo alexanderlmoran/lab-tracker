@@ -75,3 +75,11 @@ Portals: Access, Cyrex, Spectracell, Genova, GlycanAge, DoctorsData, Vibrant.
 - **Root `tsconfig.json` must exclude `worker/`** or Vercel builds break.
 - Multi-panel Zenoti tests (Vibrant Zoomer) arrive as N services → N cards
   sharing one kit/accession. That's expected, not a duplicate.
+- **`.kanban-col` has `overflow: hidden`** (hud.css, for the rounded gradient
+  columns) — any `position: absolute` popover inside a column gets CLIPPED at
+  the column edge, and the columns are narrower than a typical menu. Use the
+  `SortControl` pattern: `position: fixed` from the anchor's
+  `getBoundingClientRect()` + `useDismiss` (which closes on outside scroll so
+  the fixed menu can't drift). Also: grep the WHOLE repo for a CSS selector
+  (`hud.css`, not just `globals.css`) and render-verify UI changes in Chrome —
+  tsc/build can't catch visual clipping.
