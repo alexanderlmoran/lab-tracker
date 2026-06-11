@@ -38,3 +38,39 @@ export type LabAppointment = {
    * appointment was cancelled after the fact. */
   cancelled: boolean;
 };
+
+/** A Zenoti "IV -" appointment, classified for charting. Shares the patient +
+ * scheduling fields of LabAppointment but carries the IV classification
+ * (see classifyIvService in iv-mapping.ts) instead of a labName. Consumed by
+ * the IV Charting tab and, later, the PB session-note poster. */
+export type IvAppointment = {
+  zenotiAppointmentId: string;
+  zenotiGuestId: string;
+
+  patientFirstName: string;
+  patientLastName: string;
+  patientFullName: string;
+  patientEmail: string | null;
+  patientPhone: string | null;
+
+  /** Raw Zenoti service name, e.g. "IV - Glutathione Push (Add-on)". */
+  serviceName: string;
+  serviceId: string;
+
+  /** standard | addon | pc | custom | ebo — drives charting behavior. */
+  kind: import("./iv-mapping.js").IvKind;
+  /** Add-ons append to the visit's base IV note rather than a standalone note. */
+  isAddOn: boolean;
+  /** Note carries a Weber laser section. */
+  weber: boolean;
+  /** Canonical string to fuzzy-match against the live PB template catalog. */
+  templateHint: string;
+
+  startAt: string | null;
+  collectionDate: string | null;
+
+  note: string | null;
+  therapistName: string | null;
+
+  cancelled: boolean;
+};

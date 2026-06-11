@@ -16,7 +16,8 @@ import { readFile } from "node:fs/promises";
 import { request } from "undici";
 
 import { resolveLabName } from "./lab-mapping.js";
-import type { LabAppointment } from "./types.js";
+import { classifyIvService } from "./iv-mapping.js";
+import type { IvAppointment, LabAppointment } from "./types.js";
 
 const ZENOTI_BASE = "https://centnerwellness.zenoti.com";
 // Pulled from the capture HAR — Centner-specific identifiers.
@@ -93,9 +94,10 @@ export type FetchOpts = {
   includeCancelled?: boolean;
 };
 
-export async function fetchZenotiLabAppointments(
-  opts: FetchOpts,
-): Promise<LabAppointment[]> {
+/** Fetch the raw appointment rows for one day. Shared by the lab and IV
+ *  resolvers so the setDate transport + double-parse lives in exactly one
+ *  place (a second copy would drift — see global reuse rule). */
+async function fetchZenotiApptRows(opts: FetchOpts): Promise<ZenotiApptRow[]> {
   const cookieHeader = await loadCookieHeader(opts.storagePath);
   const body = {
     strAppDate: `${opts.date} 00:00:00`,
@@ -140,7 +142,13 @@ export async function fetchZenotiLabAppointments(
     typeof inner.Appts === "string"
       ? JSON.parse(inner.Appts)
       : (inner.Appts as { appointments?: ZenotiApptRow[] } | undefined);
-  const rows: ZenotiApptRow[] = apptsBlock?.appointments ?? [];
+  return apptsBlock?.appointments ?? [];
+}
+
+export async function fetchZenotiLabAppointments(
+  opts: FetchOpts,
+): Promise<LabAppointment[]> {
+  const rows = await fetchZenotiApptRows(opts);
 
   const out: LabAppointment[] = [];
   for (const r of rows) {
@@ -170,6 +178,49 @@ export async function fetchZenotiLabAppointments(
       serviceName,
       serviceId: r.serviceid ?? "",
       labName,
+      startAt,
+      collectionDate: startAt ? startAt.slice(0, 10) : null,
+      note: nonEmpty(r.note),
+      therapistName: nonEmpty(r.therapistname),
+      cancelled: isCancelled,
+    });
+  }
+  return out;
+}
+
+/** Same transport as fetchZenotiLabAppointments, but keeps the "IV -" services
+ *  and classifies each one (kind / add-on / weber / templateHint) for charting.
+ *  See classifyIvService in iv-mapping.ts. */
+export async function fetchZenotiIvAppointments(
+  opts: FetchOpts,
+): Promise<IvAppointment[]> {
+  const rows = await fetchZenotiApptRows(opts);
+
+  const out: IvAppointment[] = [];
+  for (const r of rows) {
+    const isCancelled = Number(r.cancelOrNoShowStatus ?? "0") !== 0;
+    if (!opts.includeCancelled && isCancelled) {
+      continue;
+    }
+    const serviceName = r.servicename ?? "";
+    const info = classifyIvService(serviceName);
+    if (!info) continue;
+
+    const startAt = parseZenotiStart(r.starttime);
+    out.push({
+      zenotiAppointmentId: r.appointmentid,
+      zenotiGuestId: r.userid,
+      patientFirstName: (r.FName ?? "").trim(),
+      patientLastName: (r.LName ?? "").trim(),
+      patientFullName: (r.Name ?? "").trim(),
+      patientEmail: nonEmpty(r.UserEmail),
+      patientPhone: nonEmpty(r.mobilephone),
+      serviceName,
+      serviceId: r.serviceid ?? "",
+      kind: info.kind,
+      isAddOn: info.isAddOn,
+      weber: info.weber,
+      templateHint: info.templateHint,
       startAt,
       collectionDate: startAt ? startAt.slice(0, 10) : null,
       note: nonEmpty(r.note),

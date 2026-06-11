@@ -18,7 +18,7 @@
 import { readFile } from "node:fs/promises";
 import { request, ProxyAgent, type Dispatcher } from "undici";
 
-const PB_BASE = "https://my.practicebetter.io";
+export const PB_BASE = "https://my.practicebetter.io";
 // This client_id is the public web client; identical for all PB tenants. Pulled
 // from the OAuth call in the capture HAR — not secret.
 const PB_CLIENT_ID = "099153c2625149bc8ecb3e85e03f0022";
@@ -36,7 +36,7 @@ const pbDispatcher: Dispatcher | undefined = process.env.PB_PROXY_URL
 /** Like undici `request`, but routes PB-domain traffic through the residential
  *  proxy when PB_PROXY_URL is configured. Use for every my.practicebetter.io
  *  call; use bare `request` for S3. */
-function pbRequest(
+export function pbRequest(
   url: Parameters<typeof request>[0],
   opts: Parameters<typeof request>[1] = {},
 ): ReturnType<typeof request> {
@@ -120,7 +120,7 @@ function findCookieValue(setCookies: string[], name: string): string | null {
 
 /** Headers PB requires on every authenticated API call (in addition to
  * cookies). Reconstructed from the capture HAR. */
-function pbApiHeaders(session: PbSession): Record<string, string> {
+export function pbApiHeaders(session: PbSession): Record<string, string> {
   return {
     cookie: session.cookies,
     "x-xsrf-token": session.csrfToken,
@@ -229,6 +229,33 @@ export async function findPbPatient(
     dayOfBirth: m.profile.dayOfBirth ?? null,
     emailAddress: m.profile.emailAddress ?? null,
   };
+}
+
+/** Like findPbPatient but returns ALL search candidates (for confidence
+ *  scoring + tie detection by the IV poster). */
+export async function searchPbPatientCandidates(
+  session: PbSession,
+  query: string,
+  limit = 8,
+): Promise<PbPatient[]> {
+  const cleaned = query.replace(/,/g, " ").replace(/\s+/g, " ").trim();
+  if (!cleaned) return [];
+  const q = encodeURIComponent(cleaned).replace(/%20/g, "+");
+  const url = `${PB_BASE}/api/consultant/records/search?countlimit=${limit}&limit=${limit}&query=${q}`;
+  const res = await pbRequest(url, { method: "GET", headers: pbApiHeaders(session) });
+  if (res.statusCode !== 200) {
+    throw new Error(`PB candidate search failed ${res.statusCode}`);
+  }
+  const json = (await res.body.json()) as {
+    items: Array<{ id: string; profile: { firstName: string; lastName: string; dayOfBirth?: string; emailAddress?: string } }>;
+  };
+  return (json.items ?? []).map((it) => ({
+    id: it.id,
+    firstName: it.profile.firstName,
+    lastName: it.profile.lastName,
+    dayOfBirth: it.profile.dayOfBirth ?? null,
+    emailAddress: it.profile.emailAddress ?? null,
+  }));
 }
 
 // ── Upload token (gets a pre-signed S3 PUT URL) ──────────────────────
