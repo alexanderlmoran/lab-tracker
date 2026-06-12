@@ -11,11 +11,25 @@ const STORAGE_KEY = "labTheme";
  * first paint so a reload doesn't flash light.
  */
 export function ThemeToggle() {
-  // SSR renders the light icon; sync from the <html> class (set by the boot
-  // script) after mount so the bulb reflects the real state.
+  // SSR renders the light icon; after mount, re-derive the theme from the
+  // SAVED preference (not the live <html> class). Hydration can reconcile
+  // <html>'s className and strip the `dark` class the boot script added —
+  // suppressHydrationWarning only silences the warning, it doesn't preserve
+  // the class. Reading localStorage here and re-asserting the class makes the
+  // effect self-healing, so the choice holds across reloads / new tabs.
   const [dark, setDark] = useState(false);
   useEffect(() => {
-    setDark(document.documentElement.classList.contains("dark"));
+    let saved: string | null = null;
+    try {
+      saved = window.localStorage.getItem(STORAGE_KEY);
+    } catch {
+      // storage unavailable — fall back to whatever the boot script applied
+    }
+    const isDark = saved
+      ? saved === "dark"
+      : document.documentElement.classList.contains("dark");
+    document.documentElement.classList.toggle("dark", isDark);
+    setDark(isDark);
   }, []);
 
   function toggle() {
