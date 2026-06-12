@@ -41,12 +41,20 @@ export function ManualUploadButton({
         return;
       }
       start(async () => {
-        const r = await uploadResultPdf({ caseId, pdfBase64: base64, filename: file.name });
-        if (!r.ok) {
-          setError(r.error ?? "Upload failed");
-          return;
+        try {
+          const r = await uploadResultPdf({ caseId, pdfBase64: base64, filename: file.name });
+          if (!r.ok) {
+            setError(r.error ?? "Upload failed");
+            return;
+          }
+          onUploaded?.();
+        } catch {
+          // A THROWN action (e.g. the base64 PDF exceeds the server-action body
+          // limit — 8mb locally, ~4.5MB hard on Vercel) would otherwise hit the
+          // error boundary and blow up the whole page ("This page couldn't load").
+          // Degrade to an inline message instead.
+          setError("Upload failed — the PDF may be too large to send. Try a smaller/compressed file.");
         }
-        onUploaded?.();
       });
     };
     reader.onerror = () => setError("Couldn't read the file.");
