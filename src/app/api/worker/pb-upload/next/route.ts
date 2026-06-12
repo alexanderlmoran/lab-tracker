@@ -85,7 +85,7 @@ export async function POST(request: Request) {
   const { data: kase, error: caseErr } = await db
     .from("lab_cases")
     .select(
-      "id, patient_name, patient_dob, lab_name, lab_external_ref, collection_date, zenoti_service_name",
+      "id, patient_name, patient_dob, patient_email, lab_name, lab_external_ref, collection_date, zenoti_service_name",
     )
     .eq("id", claimed.case_id)
     .single();
@@ -126,6 +126,7 @@ export async function POST(request: Request) {
       pdfId: claimed.pdf_id,
       patientName: kase.patient_name,
       patientDob: kase.patient_dob,
+      patientEmail: (kase.patient_email as string | null) ?? null,
       labName: kase.lab_name,
       // Verbatim Zenoti service ("Labs - Access Custom") — worker uses
       // this to build a richer PB title than bare labName.

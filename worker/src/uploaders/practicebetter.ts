@@ -75,6 +75,9 @@ export type UploadInput = {
   /** YYYY-MM-DD used to disambiguate when the patient name search returns
    * multiple matches. Optional but strongly recommended. */
   patientDob?: string;
+  /** Patient email — the EMAIL fallback for findPbPatient when PB's name is
+   * typo'd (PB "Micheal" vs case "Michael"); matched exactly so it's safe. */
+  patientEmail?: string;
   labName: string;
   /** ISO timestamp for dateOrdered. Use the lab's collection date if known. */
   dateOrdered: string;
@@ -188,33 +191,34 @@ export async function findPbPatient(
   session: PbSession,
   patientName: string,
   dob?: string,
+  email?: string,
 ): Promise<PbPatient | null> {
-  // PB's search expects + for spaces (literal +, not %20). We normalize "Last,
-  // First" or "First Last" to a plain space-separated string then re-encode.
-  const cleaned = patientName.replace(/,/g, " ").replace(/\s+/g, " ").trim();
-  const query = encodeURIComponent(cleaned).replace(/%20/g, "+");
-  const url = `${PB_BASE}/api/consultant/records/search?countlimit=8&limit=8&query=${query}`;
-  const res = await pbRequest(url, {
-    method: "GET",
-    headers: pbApiHeaders(session),
-  });
-  if (res.statusCode !== 200) {
-    throw new Error(`PB patient search failed ${res.statusCode}`);
-  }
-  const json = (await res.body.json()) as {
-    items: Array<{
-      id: string;
-      profile: {
-        firstName: string;
-        lastName: string;
-        dayOfBirth?: string;
-        emailAddress?: string;
-      };
-    }>;
+  type PbHit = { id: string; profile: { firstName: string; lastName: string; dayOfBirth?: string; emailAddress?: string } };
+  // PB's search expects + for spaces (literal +, not %20). Normalize "Last,
+  // First" / "First Last" to a plain space-separated string then re-encode.
+  const search = async (q: string): Promise<PbHit[]> => {
+    const query = encodeURIComponent(q.replace(/,/g, " ").replace(/\s+/g, " ").trim()).replace(/%20/g, "+");
+    const res = await pbRequest(`${PB_BASE}/api/consultant/records/search?countlimit=8&limit=8&query=${query}`, {
+      method: "GET",
+      headers: pbApiHeaders(session),
+    });
+    if (res.statusCode !== 200) throw new Error(`PB patient search failed ${res.statusCode}`);
+    return ((await res.body.json()) as { items: PbHit[] }).items;
   };
-  if (json.items.length === 0) return null;
 
-  let candidates = json.items;
+  let items = await search(patientName);
+
+  // Name search missed → fall back to EMAIL, a unique key. PB names carry typos
+  // (e.g. PB "Micheal Holland" vs the case's "Michael Holland") that block the
+  // name search, but the @email matches exactly. Require an EXACT email match so
+  // we never cross to a different patient.
+  if (items.length === 0 && email) {
+    const byEmail = await search(email);
+    items = byEmail.filter((it) => (it.profile.emailAddress ?? "").toLowerCase() === email.toLowerCase());
+  }
+  if (items.length === 0) return null;
+
+  let candidates = items;
   if (dob) {
     const dobMatches = candidates.filter((it) =>
       (it.profile.dayOfBirth ?? "").startsWith(dob),
@@ -399,6 +403,7 @@ export async function uploadPdfToPb(input: UploadInput): Promise<UploadResult> {
     session,
     input.patientName,
     input.patientDob,
+    input.patientEmail,
   );
   if (!patient) {
     throw new Error(`PB patient not found: ${input.patientName}`);

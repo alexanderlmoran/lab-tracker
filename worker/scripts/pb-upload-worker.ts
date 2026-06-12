@@ -57,6 +57,7 @@ type Job = {
   pdfId: string;
   patientName: string;
   patientDob: string | null;
+  patientEmail: string | null;
   labName: string;
   /** Verbatim Zenoti service name (e.g. "Labs - Access Custom"). Optional
    * — older cases pre-dating the migration may not have it. */
@@ -166,6 +167,7 @@ async function processJob(job: Job) {
       consultantId: PB_CONSULTANT_ID!,
       patientName: job.patientName,
       patientDob: job.patientDob ?? undefined,
+      patientEmail: job.patientEmail ?? undefined,
       labName: composePbLabTitle(job.labName, job.zenotiServiceName, job.accession),
       dateOrdered,
       pdfPath,
