@@ -350,7 +350,9 @@ async function createLabRequest(
 ): Promise<string> {
   const body = {
     clientRecordId: opts.patientId,
-    publishStatus: "draft",
+    // "published" (not "draft") so the lab goes live in the client's portal —
+    // a draft is staff-only and never notifies the patient even with notify=true.
+    publishStatus: "published",
     // "resultsavailable" is what staff selected during the capture — it
     // surfaces the lab in PB's "Results Available" filter for review.
     requestStatus: "resultsavailable",

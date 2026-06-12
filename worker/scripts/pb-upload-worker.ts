@@ -170,7 +170,10 @@ async function processJob(job: Job) {
       dateOrdered,
       pdfPath,
       pdfFilename: job.pdfFilename,
-      isClientFacing: false,
+      // Share the lab with the client AND notify them — paired with the
+      // published labrequest (see createLabRequest), this is what makes PB
+      // actually email the patient about their results.
+      isClientFacing: true,
       notify: true,
     });
 
