@@ -88,11 +88,11 @@ export function randomVitals(dob?: string | null): Vitals {
 }
 
 /** A complete default chart for a NEW session: the normal-visit boilerplate +
- *  placeholder vitals + gauge by service. EBOO/EBO2/Luma use a larger bore
- *  (mapped to the 20 column — only 20/22/PICC exist in PB today), else 22. */
+ *  placeholder vitals + gauge by service. EBOO/EBO2/Luma use a larger bore (20),
+ *  everything else 24 (the common case); the PB IV-Start grid carries 20/22/24. */
 export function defaultIvChart(opts: { kind?: string; serviceName?: string; dob?: string | null }): IvChart {
   const s = (opts.serviceName ?? "").toLowerCase();
-  const cath = opts.kind === "ebo" || /\bluma\b/.test(s) ? "20" : "22";
+  const cath = opts.kind === "ebo" || /\bluma\b/.test(s) ? "20" : "24";
   return {
     ...QUICK_FILL_NORMAL,
     ivStart: { cath },

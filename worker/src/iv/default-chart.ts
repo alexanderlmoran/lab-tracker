@@ -4,9 +4,10 @@
 // line with the "auto-fill then manually edit" workflow; they are randomized
 // within normal adult ranges, not measured.
 //
-// Gauge note: the PB "IV Start" grid only has 20 / 22 / PICC columns today, so
-// EBOO/EBO2/Luma map to 20 and everything else to 22. Adding 24 / 18 / Midline
-// needs those columns added to the PB templates first.
+// Gauge note: the PB "IV Start" grid carries 20 / 22 / 24 columns (no PICC / 18 /
+// Midline). EBOO/EBO2/Luma default to 20, everything else to 24. PICC / 18 /
+// Midline (selectable in the form) have no grid column → recorded in the note
+// summary instead (see ivNoteSummary in build-note-content.ts).
 
 import type { IvChartInput } from "./build-note-content.js";
 
@@ -42,12 +43,12 @@ function randomVitals(age: number | null): NonNullable<IvChartInput["preVitals"]
   };
 }
 
-/** EBOO/EBO2/Luma Elite use a larger-bore catheter (mapped to the 20 column);
- *  everything else defaults to 22. */
+/** EBOO/EBO2/Luma Elite use a larger-bore catheter (20); everything else
+ *  defaults to 24 (the common case). */
 function defaultGauge(kind?: string, serviceName?: string): string {
   const s = (serviceName ?? "").toLowerCase();
   if (kind === "ebo" || /\bluma\b/.test(s)) return "20";
-  return "22";
+  return "24";
 }
 
 /** Build a complete default chart. Vitals are freshly randomized each call. */

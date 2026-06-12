@@ -86,15 +86,13 @@ function assessmentAnswer(q: PbQuestion, a: Record<string, boolean | undefined> 
   return gridAnswer(q, rowLabels(q).map((lbl) => (checkedFor(lbl) ? 0 : -1)));
 }
 
-/** IV Start grid: one row, columns are catheter sizes (20 / 22 / PICC Line). */
+/** IV Start grid: one row, columns are catheter sizes (templates vary; most
+ *  have 20 / 22 / 24). Select the column whose label contains the chosen
+ *  gauge/catheter. PICC / 18 / Midline have no column in many grids → no cell
+ *  selected, and the catheter is recorded in the note summary instead. */
 function ivStartAnswer(q: PbQuestion, cath?: string) {
   const want = lc(cath);
-  const colIdx = colIndex(q, (l) => {
-    if (want === "20") return l.includes("20");
-    if (want === "22") return l.includes("22");
-    if (want === "picc") return l.includes("picc");
-    return false;
-  });
+  const colIdx = want ? colIndex(q, (l) => l.includes(want)) : -1;
   return gridAnswer(q, (q.rows ?? []).map(() => (colIdx >= 0 ? colIdx : -1)));
 }
 
@@ -282,11 +280,26 @@ export function ivChartMissing(chart: IvChartInput): string[] {
   return m;
 }
 
+/** Pretty catheter/line label for the summary: "picc"→PICC, "midline"→Midline,
+ *  a gauge number → "24ga". */
+function cathLabel(cath: string): string {
+  const c = cath.toLowerCase();
+  if (c === "picc") return "PICC";
+  if (c === "midline") return "Midline";
+  return `${cath}ga`;
+}
+
 /** PB note summary. We keep the "incomplete" flag OUT of PB (it lives on the
- *  board instead) — the summary just records the performing provider when set. */
+ *  board instead). Records the performing provider and the catheter/line — the
+ *  catheter especially, since PICC / Midline / 18ga have no IV-Start grid column
+ *  in many templates, so the summary is the only place they'd otherwise show. */
 export function ivNoteSummary(chart: IvChartInput): string {
+  const parts: string[] = [];
   const p = (chart.provider ?? "").trim();
-  return p ? `Provider: ${p}` : "";
+  if (p) parts.push(`Provider: ${p}`);
+  const cath = (chart.ivStart?.cath ?? "").trim();
+  if (cath) parts.push(`Catheter: ${cathLabel(cath)}`);
+  return parts.join(" · ");
 }
 
 /** Compose the PB note title for a session (PC infusions get the #N (#vials)). */

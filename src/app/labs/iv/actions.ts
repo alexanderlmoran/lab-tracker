@@ -98,7 +98,7 @@ export type IvChart = {
   };
   preVitals?: Vitals;
   postVitals?: Vitals;
-  ivStart?: { cath?: "20" | "22" | "picc" };
+  ivStart?: { cath?: "24" | "22" | "20" | "18" | "picc" | "midline" };
   attempts?: "1" | "2" | "already";
   location?: "right_antecubital" | "left_antecubital" | "left_arm" | "";
   infusionFlowingWell?: boolean;

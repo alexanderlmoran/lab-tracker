@@ -210,7 +210,7 @@ export function IvChartForm({ session }: { session: IvSessionDetail }) {
         <div className="space-y-3">
           <div>
             <div className={LABEL}>Catheter size</div>
-            <RadioRow options={[["20", "20"], ["22", "22"], ["picc", "PICC Line"]]} value={chart.ivStart?.cath} onChange={(v) => set({ ivStart: { cath: v } })} />
+            <RadioRow options={[["24", "24"], ["22", "22"], ["20", "20"], ["18", "18"], ["picc", "PICC"], ["midline", "Midline"]]} value={chart.ivStart?.cath} onChange={(v) => set({ ivStart: { cath: v } })} />
           </div>
           <div>
             <div className={LABEL}>Attempts</div>
