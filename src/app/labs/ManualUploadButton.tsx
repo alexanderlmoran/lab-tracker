@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
-import { uploadResultPdf } from "./probe-actions";
+import { getManualUploadUrl, recordResultPdf } from "./probe-actions";
 
 // Pick a PDF from disk and post it on a case — the manual fallback for any
 // lab the scraper can't pull (no scraper, EBOO, session-down, etc.). The
@@ -28,37 +28,46 @@ export function ManualUploadButton({
       setError("Pick a PDF file.");
       return;
     }
-    if (file.size > 25 * 1024 * 1024) {
-      setError("PDF too large (max 25 MB).");
+    if (file.size > 50 * 1024 * 1024) {
+      setError("PDF too large (max 50 MB).");
       return;
     }
     setError(null);
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = String(reader.result).split(",")[1] ?? "";
-      if (!base64) {
-        setError("Couldn't read the file.");
-        return;
-      }
-      start(async () => {
-        try {
-          const r = await uploadResultPdf({ caseId, pdfBase64: base64, filename: file.name });
-          if (!r.ok) {
-            setError(r.error ?? "Upload failed");
-            return;
-          }
-          onUploaded?.();
-        } catch {
-          // A THROWN action (e.g. the base64 PDF exceeds the server-action body
-          // limit — 8mb locally, ~4.5MB hard on Vercel) would otherwise hit the
-          // error boundary and blow up the whole page ("This page couldn't load").
-          // Degrade to an inline message instead.
-          setError("Upload failed — the PDF may be too large to send. Try a smaller/compressed file.");
+    start(async () => {
+      try {
+        // Direct-to-storage: mint a signed URL, PUT the file STRAIGHT to Supabase
+        // Storage, then record it by path — the bytes never go through a server
+        // action, so there's no body-size cap (the old base64 path crashed the
+        // page on PDFs over ~4.5 MB on Vercel).
+        const urlRes = await getManualUploadUrl(caseId, file.name);
+        if (!urlRes.ok || !urlRes.data) {
+          setError((!urlRes.ok && urlRes.error) || "Couldn't start the upload");
+          return;
         }
-      });
-    };
-    reader.onerror = () => setError("Couldn't read the file.");
-    reader.readAsDataURL(file);
+        const put = await fetch(urlRes.data.uploadUrl, {
+          method: "PUT",
+          headers: { "content-type": "application/pdf" },
+          body: file,
+        });
+        if (!put.ok) {
+          setError(`Upload failed (${put.status}) — try again.`);
+          return;
+        }
+        const rec = await recordResultPdf({
+          caseId,
+          storagePath: urlRes.data.storagePath,
+          filename: file.name,
+          sizeBytes: file.size,
+        });
+        if (!rec.ok) {
+          setError(rec.error ?? "Upload failed");
+          return;
+        }
+        onUploaded?.();
+      } catch {
+        setError("Upload failed — try again.");
+      }
+    });
   }
 
   return (

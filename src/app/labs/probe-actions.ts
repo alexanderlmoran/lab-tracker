@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { probeKeyForLab } from "@/lib/scrapers/normalize-lab";
+import { mintPdfUploadUrl, storagePathBelongsToCase } from "@/lib/labs/pdf-upload";
 import type { ActionResult } from "@/lib/types";
 
 export type ProbeCandidate = {
@@ -169,14 +170,39 @@ export async function setCaseAccession(input: {
  * confirms. If the auto-approve/enqueue step fails, the card falls back to
  * Pending Upload where the normal Approve button still works.
  */
-export async function uploadResultPdf(input: {
+/** Mint a signed Storage upload URL for a manual result-PDF upload. The browser
+ *  PUTs the file STRAIGHT to Storage with this, then calls recordResultPdf — so
+ *  the bytes never pass through a server action (Vercel caps those at ~4.5 MB and
+ *  crashed the page on large reports). */
+export async function getManualUploadUrl(
+  caseId: string,
+  filename: string,
+): Promise<ActionResult<{ uploadUrl: string; storagePath: string }>> {
+  await requireSignedIn();
+  try {
+    const minted = await mintPdfUploadUrl(caseId, filename);
+    return { ok: true, data: minted };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Couldn't start the upload" };
+  }
+}
+
+/** Record a result PDF that's ALREADY in Storage (uploaded via a signed URL from
+ *  getManualUploadUrl, or by uploadResultPdf below): stage the row, tick the
+ *  steps, auto-approve + enqueue the PB upload (the uploader is the reviewer). No
+ *  PDF bytes pass through here, so any size works. */
+export async function recordResultPdf(input: {
   caseId: string;
-  pdfBase64: string;
+  storagePath: string;
   filename: string;
+  sizeBytes: number;
   isPartial?: boolean;
 }): Promise<ActionResult<{ pdfId: string }>> {
   const user = await requireSignedIn();
   const db = getSupabaseAdmin();
+  if (!storagePathBelongsToCase(input.storagePath, input.caseId)) {
+    return { ok: false, error: "storagePath not under this case" };
+  }
 
   const { data: kase } = await db
     .from("lab_cases")
@@ -185,29 +211,17 @@ export async function uploadResultPdf(input: {
     .maybeSingle();
   if (!kase) return { ok: false, error: "Case not found" };
 
-  const bytes = Buffer.from(input.pdfBase64, "base64");
-  if (bytes.length === 0) return { ok: false, error: "Empty file." };
-  if (bytes.indexOf("%PDF-") < 0) return { ok: false, error: "That file isn't a PDF." };
-
   const filename = (input.filename.replace(/[^\w.\-]+/g, "_").slice(0, 120) || "manual.pdf");
-  const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  const storagePath = `${input.caseId}/${ts}-${filename}`;
-
-  const { error: upErr } = await db.storage
-    .from("lab-pdfs")
-    .upload(storagePath, bytes, { contentType: "application/pdf", upsert: false });
-  if (upErr) return { ok: false, error: `Upload failed: ${upErr.message}` };
-
   const source = `manual:${user.email ?? "staff"}`;
   const { data: pdfRow, error: pdfErr } = await db
     .from("lab_case_pdfs")
     .insert({
       case_id: input.caseId,
-      storage_path: storagePath,
+      storage_path: input.storagePath,
       source,
       external_ref: (kase as { lab_external_ref: string | null }).lab_external_ref ?? "manual",
       filename,
-      size_bytes: bytes.length,
+      size_bytes: input.sizeBytes,
       is_partial: input.isPartial ?? false,
       result_issued_at: null,
       attached_by: source,
@@ -266,12 +280,43 @@ export async function uploadResultPdf(input: {
     kind: "case_edited",
     actor: source,
     note: autoQueued
-      ? `Result PDF uploaded manually (${filename}, ${bytes.length} bytes) — auto-approved, queued for PracticeBetter`
-      : `Result PDF uploaded manually (${filename}, ${bytes.length} bytes) — auto-queue failed, waiting in Pending Upload for Approve`,
+      ? `Result PDF uploaded manually (${filename}, ${input.sizeBytes} bytes) — auto-approved, queued for PracticeBetter`
+      : `Result PDF uploaded manually (${filename}, ${input.sizeBytes} bytes) — auto-queue failed, waiting in Pending Upload for Approve`,
     meta: { pdf_id: pdfRow.id, manual: true, auto_queued: autoQueued },
   });
 
   revalidatePath("/labs");
   revalidatePath(`/labs/${input.caseId}`);
   return { ok: true, data: { pdfId: pdfRow.id } };
+}
+
+/** Legacy/small manual upload: bytes come through the action, we upload + record.
+ *  The manual button now uses the direct-to-storage flow (getManualUploadUrl +
+ *  recordResultPdf) so large PDFs never hit the action body cap; this remains for
+ *  any caller that still sends base64. */
+export async function uploadResultPdf(input: {
+  caseId: string;
+  pdfBase64: string;
+  filename: string;
+  isPartial?: boolean;
+}): Promise<ActionResult<{ pdfId: string }>> {
+  await requireSignedIn();
+  const db = getSupabaseAdmin();
+
+  const { data: kase } = await db.from("lab_cases").select("id").eq("id", input.caseId).maybeSingle();
+  if (!kase) return { ok: false, error: "Case not found" };
+
+  const bytes = Buffer.from(input.pdfBase64, "base64");
+  if (bytes.length === 0) return { ok: false, error: "Empty file." };
+  if (bytes.indexOf("%PDF-") < 0) return { ok: false, error: "That file isn't a PDF." };
+
+  const filename = (input.filename.replace(/[^\w.\-]+/g, "_").slice(0, 120) || "manual.pdf");
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const storagePath = `${input.caseId}/${ts}-${filename}`;
+  const { error: upErr } = await db.storage
+    .from("lab-pdfs")
+    .upload(storagePath, bytes, { contentType: "application/pdf", upsert: false });
+  if (upErr) return { ok: false, error: `Upload failed: ${upErr.message}` };
+
+  return recordResultPdf({ caseId: input.caseId, storagePath, filename, sizeBytes: bytes.length, isPartial: input.isPartial });
 }

@@ -57,14 +57,48 @@ export type ResultReadyPayload = {
   confidence?: number;
 };
 
+/** Ask the app to mint a signed Storage upload URL (the worker never holds
+ *  Storage credentials — the app gates it behind WORKER_SHARED_SECRET). */
+async function getResultUploadUrl(
+  caseId: string,
+  filename: string,
+): Promise<{ uploadUrl: string; storagePath: string }> {
+  const res = await request(`${BASE}/api/worker/result-upload-url`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${SECRET}`, "content-type": "application/json" },
+    body: JSON.stringify({ caseId, filename }),
+  });
+  const body = await res.body.text();
+  if (res.statusCode !== 200) throw new Error(`result-upload-url failed ${res.statusCode}: ${body}`);
+  return JSON.parse(body) as { uploadUrl: string; storagePath: string };
+}
+
 export async function postResultReady(payload: ResultReadyPayload): Promise<void> {
+  // Direct-to-storage: PUT the bytes STRAIGHT to Supabase Storage (no body cap),
+  // then post the metadata by storagePath — never the base64 through the app. A
+  // 4 MB+ report (~5.6 MB base64) used to exceed Vercel's request-body cap on
+  // /api/worker/result-ready, so the worker fetched it but couldn't hand it over
+  // and the result silently never staged. This makes any size post.
+  const pdfBytes = Buffer.from(payload.pdfBase64, "base64");
+  const { uploadUrl, storagePath } = await getResultUploadUrl(payload.caseId, payload.pdfFilename);
+  const put = await request(uploadUrl, {
+    method: "PUT",
+    headers: { "content-type": "application/pdf", "x-upsert": "false" },
+    body: pdfBytes,
+  });
+  if (put.statusCode !== 200) {
+    throw new Error(`storage PUT failed ${put.statusCode}: ${(await put.body.text()).slice(0, 200)}`);
+  }
+
+  const rest: Record<string, unknown> = { ...payload };
+  delete rest.pdfBase64; // sent to Storage above, not through the app
   const res = await request(`${BASE}/api/worker/result-ready`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${SECRET}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...rest, storagePath, sizeBytes: pdfBytes.length }),
   });
   if (res.statusCode !== 200) {
     const body = await res.body.text();

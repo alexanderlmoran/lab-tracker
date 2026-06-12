@@ -15,6 +15,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
+import { storagePathBelongsToCase } from "@/lib/labs/pdf-upload";
 
 export const dynamic = "force-dynamic";
 
@@ -23,8 +24,14 @@ const STORAGE_BUCKET = "lab-pdfs";
 const Body = z.object({
   caseId: z.string().uuid(),
   labExternalRef: z.string().min(1),
-  pdfBase64: z.string().min(1),
   pdfFilename: z.string().min(1),
+  // EITHER the inline bytes (legacy / small reports — decoded + uploaded here)
+  // OR a storagePath the caller already PUT straight to Storage (large reports
+  // — see /api/worker/result-upload-url; avoids the body-size cap that dropped
+  // 4 MB+ PDFs). The refine() below requires one of the two.
+  pdfBase64: z.string().min(1).optional(),
+  storagePath: z.string().min(1).optional(),
+  sizeBytes: z.number().int().positive().optional(),
   resultIssuedAt: z.string().optional(),
   source: z.string().min(1),
   /** When true, this is a partial result (auto-toggles step2 instead of step4). */
@@ -39,6 +46,8 @@ const Body = z.object({
    * present, the stage is REJECTED (409) unless the last name matches the
    * case's patient — the server-side guard against a scraper mismatch. */
   portalPatientName: z.string().optional(),
+}).refine((d) => !!d.pdfBase64 || (!!d.storagePath && !!d.sizeBytes), {
+  message: "pdfBase64, or storagePath + sizeBytes, is required",
 });
 
 // Loose last-name key for the patient-identity gate: "PADGETT, NICOLE" /
@@ -105,9 +114,20 @@ export async function POST(request: Request) {
     }
   }
 
-  const pdfBytes = Buffer.from(parsed.pdfBase64, "base64");
-  if (pdfBytes.length === 0) {
-    return NextResponse.json({ ok: false, error: "empty pdf" }, { status: 400 });
+  // Resolve the PDF's size (for dedup) + decode the bytes when sent inline.
+  let sizeBytes: number;
+  let pdfBytes: Buffer | null = null;
+  if (parsed.storagePath) {
+    if (!storagePathBelongsToCase(parsed.storagePath, parsed.caseId)) {
+      return NextResponse.json({ ok: false, error: "storagePath not under this case" }, { status: 400 });
+    }
+    sizeBytes = parsed.sizeBytes!; // guaranteed present by the schema refine
+  } else {
+    pdfBytes = Buffer.from(parsed.pdfBase64!, "base64");
+    if (pdfBytes.length === 0) {
+      return NextResponse.json({ ok: false, error: "empty pdf" }, { status: 400 });
+    }
+    sizeBytes = pdfBytes.length;
   }
 
   // Idempotency: a retried post (lost response, hourly re-scrape before step5
@@ -121,7 +141,7 @@ export async function POST(request: Request) {
     .select("id")
     .eq("case_id", parsed.caseId)
     .eq("external_ref", parsed.labExternalRef)
-    .eq("size_bytes", pdfBytes.length)
+    .eq("size_bytes", sizeBytes)
     .eq("is_partial", parsed.isPartial ?? false)
     .is("superseded_at", null)
     .limit(1)
@@ -135,20 +155,23 @@ export async function POST(request: Request) {
     });
   }
 
-  const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  const storagePath = `${parsed.caseId}/${ts}-${parsed.pdfFilename}`;
-
-  const { error: uploadErr } = await db.storage
-    .from(STORAGE_BUCKET)
-    .upload(storagePath, pdfBytes, {
-      contentType: "application/pdf",
-      upsert: false,
-    });
-  if (uploadErr) {
-    return NextResponse.json(
-      { ok: false, error: `storage upload: ${uploadErr.message}` },
-      { status: 500 },
-    );
+  // Ensure the file is in Storage: a storagePath caller already PUT it there
+  // (direct-to-storage); an inline base64 caller's bytes get uploaded here.
+  let storagePath: string;
+  if (parsed.storagePath) {
+    storagePath = parsed.storagePath;
+  } else {
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    storagePath = `${parsed.caseId}/${ts}-${parsed.pdfFilename}`;
+    const { error: uploadErr } = await db.storage
+      .from(STORAGE_BUCKET)
+      .upload(storagePath, pdfBytes!, { contentType: "application/pdf", upsert: false });
+    if (uploadErr) {
+      return NextResponse.json(
+        { ok: false, error: `storage upload: ${uploadErr.message}` },
+        { status: 500 },
+      );
+    }
   }
 
   const { data: pdfRow, error: pdfErr } = await db
@@ -159,7 +182,7 @@ export async function POST(request: Request) {
       source: parsed.source,
       external_ref: parsed.labExternalRef,
       filename: parsed.pdfFilename,
-      size_bytes: pdfBytes.length,
+      size_bytes: sizeBytes,
       is_partial: parsed.isPartial ?? false,
       result_issued_at: parsed.resultIssuedAt ?? null,
       attached_by: parsed.source,
@@ -274,7 +297,7 @@ export async function POST(request: Request) {
     case_id: parsed.caseId,
     kind: "case_edited",
     actor: parsed.source,
-    note: `Result PDF attached (${parsed.pdfFilename}, ${pdfBytes.length} bytes)`,
+    note: `Result PDF attached (${parsed.pdfFilename}, ${sizeBytes} bytes)`,
     meta: {
       pdf_id: pdfRow.id,
       external_ref: parsed.labExternalRef,
