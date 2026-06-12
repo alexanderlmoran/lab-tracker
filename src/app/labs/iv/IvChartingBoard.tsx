@@ -19,9 +19,18 @@ const KIND_STYLE: Record<string, { label: string; cls: string }> = {
 const STATUS_STYLE: Record<string, { label: string; cls: string }> = {
   pending: { label: "Not charted", cls: "bg-zinc-100 text-zinc-600" },
   ready: { label: "Charted · awaiting Approve", cls: "bg-blue-100 text-blue-800" },
-  posted: { label: "Posted to PB", cls: "bg-green-100 text-green-800" },
+  posted: { label: "✓ Posted to PB", cls: "bg-green-100 text-green-800" },
   skipped: { label: "Manual / skipped", cls: "bg-zinc-100 text-zinc-500" },
 };
+
+/** Deep-link into PracticeBetter: the exact posted note when we have both ids,
+ *  else the patient's notes list, else PB's home (search by hand). */
+function pbHref(r: IvSessionRow): string {
+  const crid = r.pb_client_record_id;
+  if (crid && r.pb_note_id) return `${PB_URL}/#/p/clients/${crid}/notes/${r.pb_note_id}/edit`;
+  if (crid) return `${PB_URL}/#/p/clients/${crid}/notes/list?view=notes&sort=date_desc`;
+  return PB_URL;
+}
 
 /** Shift a YYYY-MM-DD string by N days, staying in UTC so DST never skews it. */
 function shiftDate(date: string, days: number): string {
@@ -201,13 +210,19 @@ export function IvChartingBoard({
                     <td className="px-3 py-2">
                       <div className="flex items-center justify-end gap-1.5">
                         <a
-                          href={PB_URL}
+                          href={pbHref(r)}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="rounded border border-zinc-300 px-2 py-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100"
-                          title="Open PracticeBetter to search the chart / account notes"
+                          title={
+                            r.pb_client_record_id
+                              ? r.pb_note_id
+                                ? "Open this posted IV note in PracticeBetter"
+                                : "Open this patient's notes in PracticeBetter"
+                              : "Open PracticeBetter to search the chart / account notes"
+                          }
                         >
-                          PB ↗
+                          PB →
                         </a>
                         {r.charting_status !== "posted" && r.charting_status !== "skipped" && (
                           <button

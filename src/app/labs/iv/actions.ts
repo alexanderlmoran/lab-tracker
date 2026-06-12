@@ -24,6 +24,7 @@ export type IvSessionRow = {
   pc_vial_count: string | null;
   charting_status: string;
   pb_note_id: string | null;
+  pb_client_record_id: string | null;
   chart: Record<string, unknown>;
 };
 
@@ -46,6 +47,7 @@ const IV_COLS = [
   "pc_vial_count",
   "charting_status",
   "pb_note_id",
+  "pb_client_record_id",
   "chart",
 ].join(", ");
 
