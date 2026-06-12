@@ -16,6 +16,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
+import { defaultIvChart } from "@/app/labs/iv/chart-util";
 
 export const dynamic = "force-dynamic";
 
@@ -104,6 +105,33 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     }
     upserted = data?.length ?? 0;
+  }
+
+  // Seed a default chart for still-empty sessions so the form shows editable
+  // placeholder values and the posted note is never blank. The chart column is
+  // `not null default '{}'`, so "uncharted" means an EMPTY object (never null) —
+  // we read the current charts and fill only the empty ones, never overwriting a
+  // staff chart (the upsert above deliberately omits chart — see header). EBOO
+  // (charted by hand in PB), add-ons (attach to the base note), and cancelled
+  // appts are left blank. dob is unknown at sync → vitals use age-neutral ranges.
+  const seedable = rows.filter((r) => !r.cancelled && r.kind !== "ebo" && !r.is_add_on);
+  if (seedable.length > 0) {
+    const apptIds = seedable.map((r) => r.zenoti_appointment_id);
+    const { data: existing } = await db
+      .from("iv_sessions")
+      .select("id, zenoti_appointment_id, chart")
+      .in("zenoti_appointment_id", apptIds);
+    const byAppt = new Map((existing ?? []).map((e) => [e.zenoti_appointment_id, e]));
+    for (const r of seedable) {
+      const row = byAppt.get(r.zenoti_appointment_id);
+      if (!row) continue;
+      const chart = row.chart as Record<string, unknown> | null;
+      if (chart && Object.keys(chart).length > 0) continue; // already charted/seeded
+      await db
+        .from("iv_sessions")
+        .update({ chart: defaultIvChart({ kind: r.kind, serviceName: r.service_name }) })
+        .eq("id", row.id);
+    }
   }
 
   // Heartbeat so the Health tab can see the IV sync is alive (same pattern as

@@ -53,12 +53,16 @@ export async function POST(request: Request) {
 
   const { data: sessions, error } = await db
     .from("iv_sessions")
-    .select("id, service_name, session_date, kind, start_at")
+    .select("id, service_name, session_date, kind, start_at, charting_status, pb_note_id")
     .eq("cancelled", false)
     .eq("is_add_on", false)
     .not("kind", "in", "(ebo,addon)")
     .neq("charting_status", "skipped") // "Already done" → don't re-enqueue
-    .is("pb_note_id", null)
+    // New placeholders (no note yet) OR a posted note that's since been (re-)charted
+    // — saveIvChart flips status back to 'ready' but doesn't enqueue, so the charted
+    // data would never reach the note. Re-post pushes it (the re-post branch updates
+    // in place). A successful (re-)post sets status='posted' again, so this converges.
+    .or("pb_note_id.is.null,charting_status.eq.ready")
     .gte("session_date", fromStr);
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
 
@@ -73,11 +77,15 @@ export async function POST(request: Request) {
   const ids = sess.map((s) => s.id);
   const { data: jobs } = await db.from("iv_post_jobs").select("session_id, status").in("session_id", ids);
   const statusBySession = new Map((jobs ?? []).map((j) => [j.session_id, j.status]));
-  // Enqueue only sessions with no job, or a previously FAILED job (retry). Skip
-  // queued/claimed (in flight), held (waiting for human review), succeeded.
+  // Enqueue sessions with no job or a previously FAILED job (retry). A RE-POST
+  // (note already posted, since re-charted to 'ready') re-enqueues even over a
+  // SUCCEEDED job — that success was the placeholder; we're pushing the charted
+  // data now. Never disturb queued/claimed (in flight) or held (human review).
   const toEnqueue = sess.filter((s) => {
     const st = statusBySession.get(s.id);
-    return !st || st === "failed";
+    if (st === "queued" || st === "claimed" || st === "held") return false;
+    const isRepost = !!s.pb_note_id && s.charting_status === "ready";
+    return isRepost || !st || st === "failed";
   });
 
   if (dryRun) {

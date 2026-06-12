@@ -11,6 +11,7 @@ import { request } from "undici";
 import { pbLogin, searchPbPatientCandidates, type PbSession } from "../uploaders/practicebetter.js";
 import { getSessionNote, scaffoldFromNote, createSessionNote, updateSessionNote } from "../uploaders/pb-sessionnotes.js";
 import { buildIvNoteContent, ivNoteSummary, ivNoteTitle, type IvChartInput } from "./build-note-content.js";
+import { defaultIvChart, mergeIvChart } from "./default-chart.js";
 import { pickBestMatch, type PatientIdentity } from "./match-patient.js";
 
 const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`);
@@ -68,16 +69,39 @@ async function handle(claim: Claim, pb: PbSession) {
     return;
   }
 
+  // Fill a default chart (plausible age-based vitals, gauge/attempts/assessment)
+  // UNDER the saved chart so a placeholder posts as a complete, editable note
+  // instead of blank — staff-charted values always win (mergeIvChart).
+  const chart = mergeIvChart(defaultIvChart({ kind: s.kind, serviceName: s.serviceName, dob: identity.dob }), s.chart);
+
+  // Title/summary/date are pure (no PB call) — compute once for every branch.
+  const title = ivNoteTitle({ serviceName: s.serviceName, templateHint: s.templateHint, kind: s.kind, pc: s.pc });
+  const summary = ivNoteSummary(chart); // flags incomplete charting in PB
+  const sessionDate = `${s.sessionDate}T12:00:00.000Z`;
+
+  // Build the note body from the reference scaffold, or HOLD if it's empty.
+  // An empty scaffold (reference note missing/blank in PB) would otherwise post
+  // a title-only note with no charting — and once it has a pb_note_id the sweep
+  // (which only enqueues pb_note_id IS NULL) stops retrying it, so it never
+  // self-corrects. Holding keeps it in review and re-enqueuing until the ref is
+  // re-captured. Built lazily so a low-confidence hold doesn't fetch the ref.
+  const buildContentOrHold = async () => {
+    const ref = await getSessionNote(pb, referenceNoteId);
+    const content = buildIvNoteContent(scaffoldFromNote(ref), chart);
+    if (content.length === 0) {
+      await report({ jobId: job.id, sessionId: s.id, outcome: "held", score: null, reason: `reference scaffold for "${s.templateHint}" is empty — re-capture its reference note (iv_template_refs)` });
+      log(`hold (empty scaffold) session=${s.id} template="${s.templateHint}"`);
+      return null;
+    }
+    return content;
+  };
+
   // Re-post of an already-posted session → UPDATE the same note (never a
   // duplicate), reusing the patient matched on the first post.
   if (s.pbNoteId && s.pbClientRecordId) {
-    const ref = await getSessionNote(pb, referenceNoteId);
-    const content = buildIvNoteContent(scaffoldFromNote(ref), s.chart);
-    const title = ivNoteTitle({ serviceName: s.serviceName, templateHint: s.templateHint, kind: s.kind, pc: s.pc });
-    await updateSessionNote(pb, s.pbNoteId, {
-      clientRecordId: s.pbClientRecordId, name: title, summary: ivNoteSummary(s.chart),
-      sessionDate: `${s.sessionDate}T12:00:00.000Z`, content,
-    });
+    const content = await buildContentOrHold();
+    if (!content) return;
+    await updateSessionNote(pb, s.pbNoteId, { clientRecordId: s.pbClientRecordId, name: title, summary, sessionDate, content });
     await report({ jobId: job.id, sessionId: s.id, outcome: "success", pbNoteId: s.pbNoteId, pbClientRecordId: s.pbClientRecordId, score: null, reason: "updated existing note (re-post)" });
     log(`UPDATED note=${s.pbNoteId} session=${s.id}`);
     return;
@@ -86,13 +110,9 @@ async function handle(claim: Claim, pb: PbSession) {
   // Staff-confirmed match (resolved a hold): pb_client_record_id set, no note yet
   // → post to that record, skipping the auto-match gate (a human vouched for it).
   if (!s.pbNoteId && s.pbClientRecordId) {
-    const ref = await getSessionNote(pb, referenceNoteId);
-    const content = buildIvNoteContent(scaffoldFromNote(ref), s.chart);
-    const title = ivNoteTitle({ serviceName: s.serviceName, templateHint: s.templateHint, kind: s.kind, pc: s.pc });
-    const created = await createSessionNote(pb, {
-      clientRecordId: s.pbClientRecordId, name: title, summary: ivNoteSummary(s.chart),
-      sessionDate: `${s.sessionDate}T12:00:00.000Z`, content,
-    });
+    const content = await buildContentOrHold();
+    if (!content) return;
+    const created = await createSessionNote(pb, { clientRecordId: s.pbClientRecordId, name: title, summary, sessionDate, content });
     await report({ jobId: job.id, sessionId: s.id, outcome: "success", pbNoteId: created.id, pbClientRecordId: s.pbClientRecordId, score: null, reason: "posted to staff-confirmed patient" });
     log(`POSTED (confirmed) note=${created.id} session=${s.id}`);
     return;
@@ -112,14 +132,9 @@ async function handle(claim: Claim, pb: PbSession) {
     return;
   }
 
-  const ref = await getSessionNote(pb, referenceNoteId);
-  const content = buildIvNoteContent(scaffoldFromNote(ref), s.chart);
-  const title = ivNoteTitle({ serviceName: s.serviceName, templateHint: s.templateHint, kind: s.kind, pc: s.pc });
-  const created = await createSessionNote(pb, {
-    clientRecordId: best.candidate.id, name: title,
-    summary: ivNoteSummary(s.chart), // flags incomplete charting in PB
-    sessionDate: `${s.sessionDate}T12:00:00.000Z`, content,
-  });
+  const content = await buildContentOrHold();
+  if (!content) return;
+  const created = await createSessionNote(pb, { clientRecordId: best.candidate.id, name: title, summary, sessionDate, content });
   await report({ jobId: job.id, sessionId: s.id, outcome: "success", pbNoteId: created.id, pbClientRecordId: best.candidate.id, score: best.score, reason: best.reason });
   log(`POSTED note=${created.id} score=${best.score} session=${s.id}`);
 }
