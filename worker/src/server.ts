@@ -1,3 +1,4 @@
+import "./bootstrap-env.js"; // MUST be first — loads .env.local before tracker-client reads env
 import Fastify from "fastify";
 import { chromium } from "playwright";
 import { writeFile, mkdir } from "node:fs/promises";
