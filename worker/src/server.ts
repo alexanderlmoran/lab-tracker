@@ -356,14 +356,16 @@ app.post<{
       }
     }
 
-    // Synthetic case with NO accession → the scraper matches by name (+ dob).
+    // Synthetic case: use the card's accession when it has one (deterministic —
+    // findPatientByAccession needs no DOB, so DOB-less cases like an EBOO/Vibrant
+    // card still resolve), else fall back to matching by name (+ dob).
     const probeCase = {
       caseId: "probe",
       patientName: name,
       patientDob: req.query?.dob || null,
       patientEmail: "",
       labName: scraper.labName,
-      labExternalRef: null,
+      labExternalRef: acc || null,
       sampleSentAt: null,
       trackingDeliveredAt: null,
       expectedResultAtMin: null,
