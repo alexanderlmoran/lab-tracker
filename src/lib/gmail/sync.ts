@@ -81,6 +81,45 @@ export function extractBodyText(payload: gmail_v1.Schema$MessagePart): string {
   return "";
 }
 
+/** One row per PDF part: `text` set when extraction succeeds, `null` when it
+ * fails (e.g. Kennedy Krieger's password-protected reports — the file exists
+ * and must still be recorded so the inbox knows the email has a report).
+ * `error` carries the failure reason for parser_error/diagnostics. Shared by
+ * the sync loop and reprocess so both record attachments identically. */
+async function extractAttachments(
+  gmail: gmail_v1.Gmail,
+  messageId: string,
+  pdfParts: Array<{ filename: string; attachmentId: string; mimeType: string }>,
+): Promise<Array<{ filename: string; text: string | null; error: string | null }>> {
+  const rows: Array<{ filename: string; text: string | null; error: string | null }> = [];
+  for (const part of pdfParts) {
+    try {
+      const att = await gmail.users.messages.attachments.get({
+        userId: "me",
+        messageId,
+        id: part.attachmentId,
+      });
+      if (!att.data.data) {
+        rows.push({ filename: part.filename, text: null, error: "no attachment data" });
+        continue;
+      }
+      const buf = decodeBase64Url(att.data.data);
+      // Copy into a fresh ArrayBuffer to avoid SharedArrayBuffer types.
+      const ab = new ArrayBuffer(buf.byteLength);
+      new Uint8Array(ab).set(buf);
+      rows.push({ filename: part.filename, text: await extractPdfText(ab), error: null });
+    } catch (err) {
+      // NOT silent (a swallowed per-part catch hid the pdf-parse + prod
+      // DOMMatrix bugs while parses "succeeded" off body text): record the
+      // PDF with null text + surface the reason via parser_error.
+      const msg = err instanceof Error ? err.message : "extract failed";
+      rows.push({ filename: part.filename, text: null, error: msg });
+      console.error(`[gmail-sync] attachment extract failed (${part.filename}):`, err);
+    }
+  }
+  return rows;
+}
+
 export async function syncGmailInbox(): Promise<SyncResult> {
   const auth = await getAuthorizedGmailClient();
   if (!auth) {
@@ -159,31 +198,19 @@ export async function syncGmailInbox(): Promise<SyncResult> {
         const bodyText = extractBodyText(payload);
         const pdfParts = collectPdfParts(payload);
 
-        const attachmentTexts: Array<{ filename: string; text: string }> = [];
-        const attachmentErrors: string[] = [];
-        for (const part of pdfParts) {
-          try {
-            const att = await gmail.users.messages.attachments.get({
-              userId: "me",
-              messageId: id,
-              id: part.attachmentId,
-            });
-            if (!att.data.data) continue;
-            const buf = decodeBase64Url(att.data.data);
-            // Copy into a fresh ArrayBuffer to avoid SharedArrayBuffer types.
-            const ab = new ArrayBuffer(buf.byteLength);
-            new Uint8Array(ab).set(buf);
-            const text = await extractPdfText(ab);
-            attachmentTexts.push({ filename: part.filename, text });
-          } catch (err) {
-            // NOT silent (this swallowed the prod DOMMatrix/file-tracing
-            // failure for a full day while parses "succeeded" off body text):
-            // log it and surface it on the row via parser_error below.
-            const msg = err instanceof Error ? err.message : "extract failed";
-            attachmentErrors.push(`${part.filename}: ${msg}`);
-            console.error(`[gmail-sync] attachment extract failed (${part.filename}):`, err);
-          }
-        }
+        // Record EVERY PDF part — text when extraction succeeds, null when it
+        // fails. A PDF that exists but can't be read (Kennedy Krieger's
+        // password-protected reports) must still leave an attachment row, so
+        // the inbox knows the email HAS a report and doesn't hide it as
+        // PDF-less noise. attachmentTexts (the successful subset) is what
+        // Claude parses.
+        const attachmentRows = await extractAttachments(gmail, id, pdfParts);
+        const attachmentTexts = attachmentRows
+          .filter((a) => a.text !== null)
+          .map((a) => ({ filename: a.filename, text: a.text as string }));
+        const attachmentErrors = attachmentRows
+          .filter((a) => a.error)
+          .map((a) => `${a.filename}: ${a.error}`);
 
         const { data: emailRow, error: insertErr } = await db
           .from("inbound_emails")
@@ -205,9 +232,9 @@ export async function syncGmailInbox(): Promise<SyncResult> {
         }
         const inboundId = (emailRow as { id: string }).id;
 
-        if (attachmentTexts.length > 0) {
+        if (attachmentRows.length > 0) {
           const { error: attInsertErr } = await db.from("inbound_attachments").insert(
-            attachmentTexts.map((a) => ({
+            attachmentRows.map((a) => ({
               inbound_email_id: inboundId,
               filename: a.filename,
               content_type: "application/pdf",
@@ -376,34 +403,18 @@ export async function reprocessInboundEmail(
   const bodyText = extractBodyText(payload);
   const pdfParts = collectPdfParts(payload);
 
-  const attachmentTexts: Array<{ filename: string; text: string }> = [];
-  const attachmentErrors: string[] = [];
-  for (const part of pdfParts) {
-    try {
-      const att = await gmail.users.messages.attachments.get({
-        userId: "me",
-        messageId: externalId,
-        id: part.attachmentId,
-      });
-      if (!att.data.data) continue;
-      const buf = decodeBase64Url(att.data.data);
-      const ab = new ArrayBuffer(buf.byteLength);
-      new Uint8Array(ab).set(buf);
-      attachmentTexts.push({ filename: part.filename, text: await extractPdfText(ab) });
-    } catch (err) {
-      // NOT silent (the sync loop's per-part catch hid the pdf-parse bug for
-      // weeks): failures surface in parser_error below.
-      attachmentErrors.push(
-        `${part.filename}: ${err instanceof Error ? err.message : "extract failed"}`,
-      );
-      console.error(`[gmail-sync] reprocess attachment extract failed (${part.filename}):`, err);
-    }
-  }
+  const attachmentRows = await extractAttachments(gmail, externalId, pdfParts);
+  const attachmentTexts = attachmentRows
+    .filter((a) => a.text !== null)
+    .map((a) => ({ filename: a.filename, text: a.text as string }));
+  const attachmentErrors = attachmentRows
+    .filter((a) => a.error)
+    .map((a) => `${a.filename}: ${a.error}`);
 
   await db.from("inbound_attachments").delete().eq("inbound_email_id", inboundId);
-  if (attachmentTexts.length > 0) {
+  if (attachmentRows.length > 0) {
     await db.from("inbound_attachments").insert(
-      attachmentTexts.map((a) => ({
+      attachmentRows.map((a) => ({
         inbound_email_id: inboundId,
         filename: a.filename,
         content_type: "application/pdf",

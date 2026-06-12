@@ -102,6 +102,22 @@ function isKkEmail(e: EmailRow): boolean {
   });
 }
 
+/** Does this row carry (or need a human to act on) an actual lab report?
+ * Anything that doesn't is treated as inbox noise and hidden by default.
+ *   - has a PDF attachment recorded (incl. ones whose text failed to extract)
+ *   - a failed parse — a human must open the error / Re-parse
+ *   - a portal notification ("pull from portal") — actionable, no PDF by design
+ *   - a Kennedy Krieger email — password-protected PDF, often no stored text
+ * Receipts, invoices, and supply-order pings match none of these. */
+function isLikelyReport(e: EmailRow): boolean {
+  return (
+    e.attachments.length > 0 ||
+    e.parser_status === "failed" ||
+    e.parser_status === "needs_manual_pull" ||
+    isKkEmail(e)
+  );
+}
+
 /** Status badge, with the Kennedy Krieger special case: applied via the
  * auto-forward reads "forwarded", not "posted" (nothing went to PB). */
 function statusFor(e: EmailRow): { label: string; cls: string; title: string } {
@@ -130,13 +146,15 @@ export function InboxList({
 }) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [active, setActive] = useState<EmailRow | null>(null);
-  // PDF-less rows (portal notifications, stray text mail) crowd out the rows
-  // that carry an actual result, so they're hidden by default — the toggle
-  // brings them back when someone needs the "pull from portal" reminders.
-  const [showNoPdf, setShowNoPdf] = useState(false);
+  // Non-report mail (receipts, invoices, supply-order pings) crowds out the
+  // actual results, so it's hidden by default — the toggle brings it back.
+  // "Report" deliberately keys on more than a stored attachment: a KK email's
+  // PDF is password-protected (can't extract → no text) and a failed parse
+  // still needs a human, so neither must be mistaken for noise and hidden.
+  const [showOther, setShowOther] = useState(false);
   const caseById = new Map(activeCases.map((c) => [c.id, c]));
-  const noPdfCount = emails.filter((e) => e.attachments.length === 0).length;
-  const visible = showNoPdf ? emails : emails.filter((e) => e.attachments.length > 0);
+  const otherCount = emails.filter((e) => !isLikelyReport(e)).length;
+  const visible = showOther ? emails : emails.filter(isLikelyReport);
 
   // Keep the open dialog rendering the FRESH row after a server action
   // revalidates (post/dismiss/re-parse) — same trick as the kanban dialog.
@@ -160,15 +178,15 @@ export function InboxList({
 
   return (
     <>
-      {noPdfCount > 0 ? (
+      {otherCount > 0 ? (
         <div className="mb-2 flex justify-end">
           <button
             type="button"
-            onClick={() => setShowNoPdf((v) => !v)}
+            onClick={() => setShowOther((v) => !v)}
             className="text-[11px] text-zinc-500 hover:text-zinc-800 hover:underline"
+            title="Receipts, invoices, and supply-order pings — not lab reports"
           >
-            {showNoPdf ? "Hide" : "Show"} {noPdfCount} email{noPdfCount === 1 ? "" : "s"} without a
-            PDF
+            {showOther ? "Hide" : "Show"} {otherCount} non-report email{otherCount === 1 ? "" : "s"}
           </button>
         </div>
       ) : null}
@@ -232,7 +250,7 @@ export function InboxList({
           <li className="p-10 text-center text-sm text-zinc-500">
             {emails.length === 0
               ? "No reports yet — Gmail polling surfaces lab emails here as they arrive."
-              : "Every current email is PDF-less — use the toggle above to show them."}
+              : "No lab reports right now — use the toggle above to show non-report email."}
           </li>
         ) : null}
       </ul>
