@@ -23,6 +23,7 @@ import {
   type PbContentItem,
   type PbQuestion,
 } from "../uploaders/pb-sessionnotes.js";
+import { standardDoseFor } from "./component-doses.js";
 
 // Mirrors the app's IvChart (src/app/labs/iv/actions.ts) — kept local because
 // the worker and app are separate build units; the DB column is jsonb so the
@@ -186,6 +187,25 @@ function buildComponents(q: PbQuestion, comps: NonNullable<IvChartInput["compone
   return { question, answer: matrixAnswer(question, valuesByRow) };
 }
 
+/** Fill the Standard Dose column of a dose-bearing matrix (IV fluids / IV push /
+ *  IM) from the protocol catalog, by product row label — other cells stay blank.
+ *  Used when the staff didn't enter components/IM, so the template's products show
+ *  their standard dose instead of a blank column. Unknown products → blank (same
+ *  as before), so this never regresses a template we have no doses for. */
+function catalogComponentsAnswer(q: PbQuestion) {
+  const n = colCount(q);
+  const stdIdx = colIndex(q, (l) => /standard dose/.test(l) || /^dose$/.test(l));
+  return matrixAnswer(
+    q,
+    (q.rows ?? []).map((row) => {
+      const cells: Array<string | null> = Array(n).fill(null);
+      const dose = standardDoseFor(row.label);
+      if (stdIdx >= 0 && dose) cells[stdIdx] = dose;
+      return cells;
+    }),
+  );
+}
+
 /** Is this the "IM Medication" matrix (Dose/Lot/Location), not "IM Shot Given"? */
 function isImMedicationMatrix(q: PbQuestion | undefined): boolean {
   if (!q || q.object !== "matrix") return false;
@@ -251,10 +271,15 @@ export function buildIvNoteContent(
       const built = buildComponents(item.question!, comps); // isComponentsMatrix guarantees defined
       question = built.question;
       answer = built.answer;
+    } else if (isComponentsMatrix(item.question)) {
+      // No staff components → fill Standard Dose from the protocol catalog.
+      answer = catalogComponentsAnswer(item.question!);
     } else if (im && (im.name ?? "").trim() && isImMedicationMatrix(item.question)) {
       const built = buildImMedication(item.question!, im);
       question = built.question;
       answer = built.answer;
+    } else if (isImMedicationMatrix(item.question)) {
+      answer = catalogComponentsAnswer(item.question!);
     }
     const filled: PbContentItem = {
       id: item.id,
