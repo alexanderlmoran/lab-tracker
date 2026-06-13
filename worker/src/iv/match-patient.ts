@@ -2,7 +2,8 @@
 //
 // Mirrors the reconcile engine's philosophy (multi-signal, threshold-gated)
 // but for PATIENT IDENTITY rather than lab matching: grade a Zenoti IV session
-// against PB patient candidates on name + DOB + email → 0..100. Auto-post only
+// against PB patient candidates on name + email + phone + DOB → 0..100, where
+// email/phone are UNIQUE identifiers and DOB only corroborates. Auto-post only
 // at >= AUTO_POST_THRESHOLD (95) while the engine is unproven; everything else
 // holds for human review. Conservative by design — a wrong chart is the risk.
 //
@@ -34,14 +35,20 @@ export type PbCandidate = {
 
 export const AUTO_POST_THRESHOLD = 95;
 
-// Signal weights — tuned so ANY THREE independent identifiers clear 95 (the safe
-// bar): name+dob+email, OR name+email+phone (the no-DOB IV case — DOB is only
-// collected for labs), etc. Two signals (e.g. name+email = 75) still hold.
+// Signal weights. A matching EMAIL or PHONE is a UNIQUE identifier (one person
+// per address/number), so name=full + EITHER clears 95 on its own — and that's
+// precisely the twins-safe distinguisher (identical twins share name + DOB but
+// never the same email/phone). A matching DOB is NOT unique (twins / same-name
+// people collide on it), so name+DOB alone stays BELOW the bar and holds for
+// review. Zenoti's guest profile rarely carries DOB (optional, collected for
+// labs), so anchoring auto-post on email/phone rather than DOB is what unblocks
+// IV posting WITHOUT lowering the safety bar. A second unique signal (or DOB)
+// only reinforces. Name-only (no unique id) always holds.
 const W_NAME_FULL = 45;
 const W_NAME_LAST_ONLY = 18;
-const W_DOB = 35;
-const W_EMAIL = 30;
-const W_PHONE = 25;
+const W_DOB = 35; // corroborating only — shared by twins, so never auto-posts alone
+const W_EMAIL = 50; // unique → name+email = 95, auto-posts (the twins-safe key)
+const W_PHONE = 50; // unique → name+phone = 95, auto-posts
 
 const norm = (s?: string | null) => (s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 const dobKey = (s?: string | null) => norm(s).slice(0, 10);
@@ -53,67 +60,81 @@ function fullName(p: { fullName?: string | null; firstName?: string | null; last
   return norm(`${p.firstName ?? ""} ${p.lastName ?? ""}`);
 }
 
-export type MatchSignals = { name: "full" | "last" | "none"; dob: boolean; email: boolean; phone: boolean };
+/** Per-field cross-reference result: present in both AND equal (match), present
+ *  in both but DIFFERENT (conflict), or absent on a side (none). */
+export type FieldState = "match" | "conflict" | "none";
+export type MatchSignals = { name: "full" | "last" | "none"; dob: FieldState; email: FieldState; phone: FieldState };
 
-/** Score one candidate 0..100 against the session identity, with the signals
- *  that fired (for audit/explainability — same as the engine logs reasons). */
+const cmp = (a: string, b: string): FieldState => (!a || !b ? "none" : a === b ? "match" : "conflict");
+
+// A DIFFERENT email is the most reliable "wrong person" signal (emails are unique
+// and rarely change for the same patient here), so an email conflict DROPS the
+// score and blocks auto-post. DOB/phone conflicts are softer (seed typos, number
+// changes) so they don't drop the score; a DOB conflict only blocks when NO
+// unique id (email/phone) matched — a unique match proves identity and makes a
+// stale DOB just a data error, not a different person.
+const P_EMAIL_CONFLICT = 30;
+
+/** Score one candidate 0..100 against the session identity, with the per-field
+ *  cross-reference (match/conflict/none) and whether a conflict disqualifies it
+ *  from auto-post (audit/explainability — same as the engine logs reasons). */
 export function scorePatientMatch(
   session: PatientIdentity,
   cand: PbCandidate,
-): { score: number; signals: MatchSignals } {
-  const signals: MatchSignals = { name: "none", dob: false, email: false, phone: false };
+): { score: number; signals: MatchSignals; hardConflict: boolean } {
   let score = 0;
+  let name: MatchSignals["name"] = "none";
 
   const sName = fullName(session);
   const cName = fullName(cand);
   if (sName && cName && sName === cName) {
     score += W_NAME_FULL;
-    signals.name = "full";
+    name = "full";
   } else {
     const sLast = norm(session.lastName) || sName.split(" ").slice(-1)[0];
     const cLast = norm(cand.lastName) || cName.split(" ").slice(-1)[0];
     if (sLast && cLast && sLast === cLast) {
       score += W_NAME_LAST_ONLY;
-      signals.name = "last";
+      name = "last";
     }
   }
 
-  const sDob = dobKey(session.dob);
-  const cDob = dobKey(cand.dayOfBirth);
-  if (sDob && cDob && sDob === cDob) {
-    score += W_DOB;
-    signals.dob = true;
-  }
+  const email = cmp(norm(session.email), norm(cand.emailAddress));
+  if (email === "match") score += W_EMAIL;
+  else if (email === "conflict") score -= P_EMAIL_CONFLICT;
 
-  const sEmail = norm(session.email);
-  const cEmail = norm(cand.emailAddress);
-  if (sEmail && cEmail && sEmail === cEmail) {
-    score += W_EMAIL;
-    signals.email = true;
-  }
+  const dob = cmp(dobKey(session.dob), dobKey(cand.dayOfBirth));
+  if (dob === "match") score += W_DOB;
 
   const sPhone = phoneKey(session.phone);
   const cPhone = phoneKey(cand.phone);
-  if (sPhone.length === 10 && sPhone === cPhone) {
-    score += W_PHONE;
-    signals.phone = true;
-  }
+  const phone: FieldState =
+    sPhone.length < 10 || cPhone.length < 10 ? "none" : sPhone === cPhone ? "match" : "conflict";
+  if (phone === "match") score += W_PHONE;
 
-  return { score: Math.min(100, score), signals };
+  // An email conflict always disqualifies (verify the patient). A DOB conflict
+  // disqualifies ONLY when no unique id matched — an email/phone match means it's
+  // them and the DOB is just a stale/typo'd value.
+  const hardConflict = email === "conflict" || (dob === "conflict" && email !== "match" && phone !== "match");
+
+  return { score: Math.max(0, Math.min(100, score)), signals: { name, dob, email, phone }, hardConflict };
 }
 
 export type BestMatch = {
   candidate: PbCandidate;
   score: number;
   signals: MatchSignals;
-  /** True when score >= threshold AND the runner-up is clearly behind (no tie). */
+  /** A conflicting unique id (email, or a no-unique-match DOB) — never auto-post. */
+  hardConflict: boolean;
+  /** True when score >= threshold, the runner-up is clearly behind, AND no conflict. */
   autoPostable: boolean;
   reason: string;
 };
 
 /** Pick the best PB candidate and decide if it clears the auto-post bar.
- *  Auto-post requires score >= 95 AND a clear lead over the 2nd-best (≥15) so
- *  two same-name/DOB people never silently collide. */
+ *  Auto-post requires score >= 95 AND a clear lead over the 2nd-best (≥15) AND
+ *  no conflicting unique id — so two same-name people never silently collide and
+ *  a same-name STRANGER (different email/DOB) is held for a human to verify. */
 export function pickBestMatch(
   session: PatientIdentity,
   candidates: PbCandidate[],
@@ -126,10 +147,15 @@ export function pickBestMatch(
   const best = scored[0];
   const runnerUp = scored[1]?.score ?? 0;
   const clearLead = best.score - runnerUp >= 15;
-  const autoPostable = best.score >= threshold && clearLead;
+  const autoPostable = best.score >= threshold && clearLead && !best.hardConflict;
   const sig = `name=${best.signals.name},dob=${best.signals.dob},email=${best.signals.email},phone=${best.signals.phone}`;
+  const why = best.hardConflict
+    ? ", conflicting id — verify patient"
+    : best.score >= threshold && !clearLead
+      ? `, but runner-up too close (+${best.score - runnerUp})`
+      : "";
   const reason = autoPostable
     ? `auto-post: score ${best.score} (${sig}), lead +${best.score - runnerUp}`
-    : `hold for review: score ${best.score} (${sig})${best.score >= threshold ? `, but runner-up too close (+${best.score - runnerUp})` : ""}`;
-  return { candidate: best.candidate, score: best.score, signals: best.signals, autoPostable, reason };
+    : `hold for review: score ${best.score} (${sig})${why}`;
+  return { candidate: best.candidate, score: best.score, signals: best.signals, hardConflict: best.hardConflict, autoPostable, reason };
 }
