@@ -46,6 +46,11 @@ const Body = z.object({
   /** Fallback session date for appts whose startAt was unparseable. The worker
    *  syncs per-day, so it always knows the date. */
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  /** Every appointment id Zenoti currently returns for `date`. When present, any
+   *  iv_sessions row on this date whose id is absent is reconciled away (stale:
+   *  rescheduled → new id, cancelled, or deleted upstream). Omit to skip the
+   *  reconcile pass (old zenoti-iv-sync.ts does). Mirrors the lab /cases census. */
+  census: z.array(z.string()).optional(),
 });
 
 export async function POST(request: Request) {
@@ -134,6 +139,36 @@ export async function POST(request: Request) {
     }
   }
 
+  // Reconcile away stale sessions: any iv_sessions row on this date whose
+  // appointment id Zenoti no longer returns (rescheduled → new id, cancelled, or
+  // hard-deleted upstream) is obsolete and was the source of the IV-board dupes
+  // (an upsert-only sync never removed the superseded rows). Same census pass the
+  // lab /cases route uses. NEVER delete a POSTED session (pb_note_id set) — that
+  // would orphan its PB note; a posted note outlives the appointment.
+  let reconciledDeleted = 0;
+  if (parsed.census) {
+    const censusSet = new Set(parsed.census);
+    const { data: onDate } = await db
+      .from("iv_sessions")
+      .select("id, zenoti_appointment_id, pb_note_id")
+      .eq("session_date", parsed.date);
+    const staleIds = (onDate ?? [])
+      .filter(
+        (r) => !censusSet.has(r.zenoti_appointment_id as string) && r.pb_note_id == null,
+      )
+      .map((r) => r.id as string);
+    if (staleIds.length > 0) {
+      // iv_post_jobs FKs session_id with no ON DELETE CASCADE — clear children first.
+      await db.from("iv_post_jobs").delete().in("session_id", staleIds);
+      const { data: del } = await db
+        .from("iv_sessions")
+        .delete()
+        .in("id", staleIds)
+        .select("id");
+      reconciledDeleted = del?.length ?? 0;
+    }
+  }
+
   // Heartbeat so the Health tab can see the IV sync is alive (same pattern as
   // the zenoti-sync heartbeat in /api/worker/cases).
   await db
@@ -156,6 +191,7 @@ export async function POST(request: Request) {
     ok: true,
     received: parsed.appointments.length,
     upserted,
+    reconciledDeleted,
     date: parsed.date,
   });
 }

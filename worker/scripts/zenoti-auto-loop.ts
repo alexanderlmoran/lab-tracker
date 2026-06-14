@@ -99,16 +99,20 @@ async function pushToTracker(
 /** Push a day's IV appointments to iv_sessions (powers the /labs/iv board).
  *  Reuses this loop's Zenoti session — no separate capture needed. */
 async function pushIvToTracker(appts: IvAppointment[], date: string): Promise<void> {
-  if (appts.length === 0) return;
+  // census = every appointment id Zenoti returns for this day; the route uses it
+  // to delete stale rows (rescheduled/cancelled/deleted appts). Always POST —
+  // even with zero appts — so a day whose IVs all vanished still gets reconciled
+  // (matches the lab sync, which posts an empty census to clean up).
+  const census = appts.map((a) => a.zenotiAppointmentId);
   const res = await request(`${BASE}/api/worker/iv-sessions`, {
     method: "POST",
     headers: { authorization: `Bearer ${SECRET}`, "content-type": "application/json" },
-    body: JSON.stringify({ appointments: appts, date }),
+    body: JSON.stringify({ appointments: appts, date, census }),
   });
   const text = await res.body.text();
   if (res.statusCode !== 200) throw new Error(`iv-sessions rejected ${res.statusCode}: ${text.slice(0, 200)}`);
-  const json = JSON.parse(text) as { received: number; upserted: number };
-  log(`iv: received=${json.received} upserted=${json.upserted} (${date})`);
+  const json = JSON.parse(text) as { received: number; upserted: number; reconciledDeleted?: number };
+  log(`iv: received=${json.received} upserted=${json.upserted} reconciled=${json.reconciledDeleted ?? 0} (${date})`);
 }
 
 /** Enrich the day's unique guests into patients_seed (DOB / sex / address — the
