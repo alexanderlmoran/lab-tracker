@@ -11,14 +11,24 @@
 
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
 
+// FALLBACK ONLY. The PRIMARY source of a product's standard dose is the reference
+// template's own "Standard Dose" cell (Brain Boost, Vit C 25g/50g, etc. carry it
+// baked in — see catalogComponentsAnswer in build-note-content.ts, which prefers
+// that cell). This catalog only fills templates whose dose cell is EMPTY — chiefly
+// the base IV note, which puts the dose RANGE in the row LABEL ("Glutathione 200
+// mg/mL (2.5-10ml…)") and leaves the cell blank.
+//
 // Mined 2026-06-13 by scripts/iv-mine-doses.ts (modal Standard-Dose answer per
 // product across 55 historical IV notes). Keys are FULL template row labels
-// (normalized) so standardDoseFor(row.label) matches at fill time. Only clean,
-// reasonably-confident modes are included here; ambiguous/low-sample/free-text
-// results were left OUT pending Alex's clinical confirmation (see the script
-// output + the session notes — e.g. PC base 2500mg-vs-5g tie, Vit C 10g-vs-50g,
-// Taurine/Alpha-Lipoic-Acid/Amino-Acid-Blend had no reliable history). Re-run the
-// miner to refresh; add confirmed values below.
+// (normalized) so standardDoseFor(row.label) matches at fill time.
+//
+// The old "gaps/conflicts" (Taurine/ALA/Amino-Acid-Blend, PC base 2500-vs-5g, Vit
+// C 10g-vs-50g) are NOT resolved here: they were artifacts of mining one row label
+// across different templates. Each template carries its own correct dose cell, so
+// the template-cell-first path resolves them. PC base ("Phosphatidylcholine 50mg/ml
+// (50-75 ml)…") is intentionally left blank — it's clinically directed per visit
+// (5-22 amps), so staff enter it. Re-run the miner to refresh; add confirmed
+// base-IV-only values below.
 const RAW: Record<string, string> = {
   // High confidence (strong modal, multiple samples)
   "Glutathione 200 mg/mL (2.5 - 10 ml + 10 ml D5W)": "2 grams", // 8/15

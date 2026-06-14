@@ -54,6 +54,8 @@ const rowLabels = (q: PbQuestion) => (q.rows ?? []).map((r) => lc(r.label));
 const cols = (q: PbQuestion) => q.columns ?? [];
 const colCount = (q: PbQuestion) => cols(q).length || 1;
 const cellLabel = (c: unknown): string => lc((c as Cell as { label?: string })?.label);
+/** Original-case cell label (for values we echo verbatim, e.g. a standard dose). */
+const rawCellLabel = (c: unknown): string => ((c as Cell as { label?: string })?.label ?? "").trim();
 
 /** Index of the first column whose label/type matches the predicate, or -1. */
 function colIndex(q: PbQuestion, pred: (label: string, type: string) => boolean): number {
@@ -199,7 +201,13 @@ function catalogComponentsAnswer(q: PbQuestion) {
     q,
     (q.rows ?? []).map((row) => {
       const cells: Array<string | null> = Array(n).fill(null);
-      const dose = standardDoseFor(row.label);
+      // Prefer the template's own Standard Dose cell — the protocol constant baked
+      // into the reference note, authoritative and PER-TEMPLATE (Vit C 25g vs 50g
+      // share the row label "Vitamin C 500mg/ml" but carry different doses here).
+      // Fall back to the mined catalog for templates whose dose cell is empty (the
+      // base IV note leaves it blank and puts the range in the row LABEL instead).
+      const templateDose = stdIdx >= 0 ? rawCellLabel(row.cells?.[stdIdx]) : "";
+      const dose = templateDose || standardDoseFor(row.label);
       if (stdIdx >= 0 && dose) cells[stdIdx] = dose;
       return cells;
     }),

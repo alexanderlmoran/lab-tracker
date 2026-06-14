@@ -155,12 +155,17 @@ export function scaffoldFromNote(note: PbSessionNote): PbContentItem[] {
 export function sanitizeQuestion(question: PbQuestion | undefined): PbQuestion | undefined {
   if (!question) return question;
   const q = structuredClone(question);
-  const shorttext = (q.columns ?? []).map((col) => col.columnType === "shorttext");
+  // shorttext cells are free-text data slots, so blank them — EXCEPT a "Standard
+  // Dose" column. That column carries the template's protocol-standard dose (e.g.
+  // Brain Boost "300mg (12ml)", Vit C 25g "25,000mg (50ml)"), which is the same
+  // for every patient (the per-visit amount goes in "Add-On Dose"), so it is
+  // template text, not leaked data. Lot #, Expiration and Add-On Dose stay blanked.
+  const blankCol = (q.columns ?? []).map(
+    (col) => col.columnType === "shorttext" && !/standard dose/i.test(col.label ?? ""),
+  );
   for (const row of q.rows ?? []) {
     if (!Array.isArray(row.cells)) continue;
-    row.cells = row.cells.map((cell, j) =>
-      shorttext[j] ? {} : cell,
-    );
+    row.cells = row.cells.map((cell, j) => (blankCol[j] ? {} : cell));
   }
   return q;
 }
