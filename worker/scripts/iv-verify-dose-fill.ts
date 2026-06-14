@@ -25,6 +25,7 @@ const COMMIT = process.env.IV_VERIFY_COMMIT === "1";
 
 const REFS = [
   { hint: "Brain Boost & Cognitive Support", ref: "6a285d04855663b0b8278a8c", expectFilled: true },
+  { hint: "Myers' Cocktail", ref: "6a19c806491ce448ab88b8a8", expectFilled: true },
   { hint: "High-Dose Vitamin C (25g)", ref: "69f8d06455266771c397472e", expectFilled: true },
   { hint: "High-Dose Vitamin C (50g)", ref: "6a1de3c36b61f836f2453d79", expectFilled: true },
   { hint: "Base IV (catalog fallback)", ref: "6a272b54271793958adbbdc2", expectFilled: true },
@@ -106,9 +107,11 @@ async function main() {
     : await findPbPatient(pb, "Alex Moran", undefined, ALEX_EMAIL);
   if (!found?.id) throw new Error("could not resolve Alex Moran's PB client record (set PB_ALEX_MORAN_ID)");
   const displayName = `${found.firstName} ${found.lastName}`.trim();
-  const bb = REFS[0];
+  // Which protocol to post (default Brain Boost). e.g. IV_VERIFY_POST_HINT=Myers
+  const wantHint = (process.env.IV_VERIFY_POST_HINT || "Brain Boost").toLowerCase();
+  const bb = REFS.find((r) => r.hint.toLowerCase().includes(wantHint)) || REFS[0];
   const content = buildIvNoteContent(scaffoldFromNote(await getSessionNote(pb, bb.ref)), EMPTY_CHART);
-  const title = ivNoteTitle({ serviceName: "IV - Brain Boost & Cognitive Support", templateHint: bb.hint, kind: "standard" });
+  const title = ivNoteTitle({ serviceName: `IV - ${bb.hint}`, templateHint: bb.hint, kind: "standard" });
   const created = await createSessionNote(pb, {
     clientRecordId: found.id,
     name: `TEST – ${title} (Phase-1 dose-fill verify, safe to delete)`,
