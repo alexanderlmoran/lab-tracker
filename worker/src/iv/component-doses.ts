@@ -11,14 +11,33 @@
 
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
 
+// Mined 2026-06-13 by scripts/iv-mine-doses.ts (modal Standard-Dose answer per
+// product across 55 historical IV notes). Keys are FULL template row labels
+// (normalized) so standardDoseFor(row.label) matches at fill time. Only clean,
+// reasonably-confident modes are included here; ambiguous/low-sample/free-text
+// results were left OUT pending Alex's clinical confirmation (see the script
+// output + the session notes — e.g. PC base 2500mg-vs-5g tie, Vit C 10g-vs-50g,
+// Taurine/Alpha-Lipoic-Acid/Amino-Acid-Blend had no reliable history). Re-run the
+// miner to refresh; add confirmed values below.
 const RAW: Record<string, string> = {
-  // Immune Boost (verified across recent notes; IV NS 0.9% 500ml + IV push + IM)
-  "Vitamin C 500mg/ml": "20mL",
+  // High confidence (strong modal, multiple samples)
+  "Glutathione 200 mg/mL (2.5 - 10 ml + 10 ml D5W)": "2 grams", // 8/15
+  "Potassium Bicarbonate 99mg/capsule (2 - 3 capsules)": "99mg", // 6/9
+  "Leucovorin 10mg/ml (mixed with bacteriostatic water)": "30mg", // 5/7
+  "Phosphatidylcholine Push 50mg/ml (10 - 15 ml + 20 ml D5W)": "500mg", // 5/7
+  "Methylcobalamin {B12} 10mg/ml (5mg-10mg)": "10mg", // 4/6
+  // Single-protocol products (clean dose, smaller sample)
+  "Carnitine 500mg/ml": "10mL",
+  "Ascorbic Acid 500mg/ml": "10mL",
+  "Magnesium 200mg/ml": "4mL",
+  "Trace Minerals": "5mL",
+  "Nicotinamide Riboside": "500mg",
+  "NR": "500mg",
+  "Curcumin 20mg/ml": "200mg",
+  "EGCG": "50mg",
+  "Quercetin 20mg/ml": "200mg",
   "B-Complex": "2mL",
-  "Magnesium Chloride 200mg/1ml": "2mL",
-  "Zinc Chloride 10mg/ml": "1mL",
-  "Glutathione 200mg/ml": "2.5mL",
-  "Vitamin D 50,000 IU (1ml)": "1mL",
+  "Vitamin D 50,000 IU (1ml)": "50,000 IU",
 };
 
 export const COMPONENT_DOSES: Record<string, string> = Object.fromEntries(
