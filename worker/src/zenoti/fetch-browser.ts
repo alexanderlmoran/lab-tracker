@@ -17,7 +17,11 @@ import { request } from "undici";
 
 import { resolveLabName } from "./lab-mapping.js";
 import { classifyIvService } from "./iv-mapping.js";
-import type { IvAppointment, LabAppointment } from "./types.js";
+import type {
+  IvAppointment,
+  LabAppointment,
+  ZenotiGuestProfile,
+} from "./types.js";
 
 const ZENOTI_BASE = "https://centnerwellness.zenoti.com";
 // Pulled from the capture HAR — Centner-specific identifiers.
@@ -229,4 +233,236 @@ export async function fetchZenotiIvAppointments(
     });
   }
   return out;
+}
+
+// --- Guest profile (DOB + address + gender) --------------------------------
+//
+// The setDate appointment payload above only carries name/email/phone. The
+// remaining identity points (DOB, gender, address) live on the guest profile,
+// served by Zenoti's modern V1 REST API at apiamrs14.zenoti.com — a DIFFERENT
+// host that authenticates with a Bearer token rather than the ASP.NET cookies.
+//
+// That token (`globalWebApiToken`) and its base URL (`globalWebApiUrl`) are
+// minted into the ApptExtV2.aspx page HTML, which we already load with our
+// stored cookies. So the headless flow is: scrape the page for the token, then
+// call /v1/guests/{id}?expand=address_info with it. Captured & verified from
+// the 20260521 HAR (see worker/captures/zenoti).
+
+type WebApiCreds = { token: string; apiUrl: string };
+
+// Cache the scraped creds per cookie source for the process lifetime — the
+// token is valid as long as the session cookies are. A 401 from the V1 call
+// clears this and re-scrapes once (handles a mid-process token rotation).
+const credsCache = new Map<string, WebApiCreds>();
+
+async function getWebApiCreds(
+  storagePath: string,
+  forceRefresh = false,
+): Promise<WebApiCreds> {
+  if (!forceRefresh) {
+    const hit = credsCache.get(storagePath);
+    if (hit) return hit;
+  }
+  const cookieHeader = await loadCookieHeader(storagePath);
+  const res = await request(`${ZENOTI_BASE}/Appointment/ApptExtV2.aspx`, {
+    method: "GET",
+    headers: { cookie: cookieHeader, accept: "text/html" },
+  });
+  // undici doesn't follow redirects by default, so a stale session surfaces
+  // here as a 302 to SSO login rather than a 200 without the token.
+  if (res.statusCode !== 200) {
+    await res.body.dump();
+    throw new Error(
+      `Zenoti ApptExtV2 page ${res.statusCode} (session expired? ` +
+        `refresh storage.json / ZENOTI_SESSION_B64 via lab-portal-capture)`,
+    );
+  }
+  const html = await res.body.text();
+  const tokenMatch = html.match(/globalWebApiToken\s*=\s*'([^']+)'/);
+  const urlMatch = html.match(/globalWebApiUrl\s*=\s*'([^']+)'/);
+  if (!tokenMatch || !urlMatch) {
+    throw new Error(
+      "Zenoti ApptExtV2 page loaded but globalWebApiToken/Url not found " +
+        "(login wall or page layout changed)",
+    );
+  }
+  const creds: WebApiCreds = {
+    token: tokenMatch[1],
+    apiUrl: urlMatch[1].replace(/\/+$/, ""),
+  };
+  credsCache.set(storagePath, creds);
+  return creds;
+}
+
+// Shapes returned by /v1/guests/{id} — only the fields we map. Everything is
+// optional/defensive: Zenoti omits whole blocks for sparse guests.
+type V1GuestResponse = {
+  id?: string;
+  personal_info?: {
+    first_name?: string;
+    last_name?: string;
+    middle_name?: string;
+    preferred_name?: string;
+    email?: string;
+    gender_name?: string;
+    date_of_birth?: string;
+    mobile_phone?: { number?: string } | null;
+    home_phone?: { number?: string } | null;
+    work_phone?: { number?: string } | null;
+  };
+  address_info?: {
+    address_1?: string;
+    address_2?: string;
+    city?: string;
+    state_name?: string | null;
+    state_other?: string;
+    zip_code?: string;
+    country_id?: number;
+  };
+};
+
+function phoneDigits(p: { number?: string } | null | undefined): string | null {
+  const n = nonEmpty(p?.number);
+  return n ? n.replace(/[^\d]/g, "") || null : null;
+}
+
+export type GuestProfileOpts = {
+  storagePath: string;
+  guestId: string;
+};
+
+/** Pull one Zenoti guest's full profile (DOB, gender, address + name/email/
+ *  phone) via the V1 REST API. Headless: reuses the stored session cookies to
+ *  scrape the page-embedded Bearer token, then calls the API. This is Step 1 of
+ *  the "1 feeds the rest" enrichment — the returned record fills the tracker and
+ *  then PB's sparse fields. */
+export async function fetchZenotiGuestProfile(
+  opts: GuestProfileOpts,
+): Promise<ZenotiGuestProfile> {
+  // Replicate the exact expand set from the proven 20260521 capture rather than
+  // a trimmed one — personal_info (DOB/gender) comes back by default, but
+  // matching the working request byte-for-byte removes any "is this expand
+  // required?" guesswork. We only read personal_info + address_info.
+  const EXPANDS =
+    "expand=tags&expand=preferences&expand=address_info&expand=referral" +
+    "&expand=primary_employee&expand=additional_details&expand=email_details" +
+    "&expand=blocked_therapists";
+  const fetchOnce = async (creds: WebApiCreds) =>
+    request(
+      `${creds.apiUrl}/v1/guests/${opts.guestId}?${EXPANDS}`,
+      {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${creds.token}`,
+          accept: "application/json",
+          "content-type": "application/json",
+          "x-languagecode": "en-US",
+          origin: "https://gpcloud.zenoti.com",
+          referer: "https://gpcloud.zenoti.com/",
+        },
+      },
+    );
+
+  let creds = await getWebApiCreds(opts.storagePath);
+  let res = await fetchOnce(creds);
+  // Token rotated mid-process → re-scrape once and retry.
+  if (res.statusCode === 401) {
+    await res.body.dump();
+    creds = await getWebApiCreds(opts.storagePath, true);
+    res = await fetchOnce(creds);
+  }
+  if (res.statusCode !== 200) {
+    const text = await res.body.text();
+    throw new Error(
+      `Zenoti v1/guests/${opts.guestId} ${res.statusCode}: ${text.slice(0, 200)}`,
+    );
+  }
+
+  const g = (await res.body.json()) as V1GuestResponse;
+  const pi = g.personal_info ?? {};
+  const ai = g.address_info ?? {};
+
+  const firstName = (pi.first_name ?? "").trim();
+  const lastName = (pi.last_name ?? "").trim();
+  const gender = nonEmpty(pi.gender_name);
+
+  return {
+    guestId: g.id ?? opts.guestId,
+    firstName,
+    lastName,
+    middleName: nonEmpty(pi.middle_name),
+    preferredName: nonEmpty(pi.preferred_name),
+    fullName: [firstName, lastName].filter(Boolean).join(" "),
+    email: nonEmpty(pi.email),
+    mobilePhone:
+      phoneDigits(pi.mobile_phone) ??
+      phoneDigits(pi.home_phone) ??
+      phoneDigits(pi.work_phone),
+    homePhone: phoneDigits(pi.home_phone),
+    workPhone: phoneDigits(pi.work_phone),
+    // Zenoti returns "Unspecified" for unset gender — treat as null.
+    gender: gender && gender.toLowerCase() !== "unspecified" ? gender : null,
+    // date_of_birth is an ISO datetime ("1976-12-28T00:00:00"); keep the date.
+    dateOfBirth: nonEmpty(pi.date_of_birth)?.slice(0, 10) ?? null,
+    address: {
+      line1: nonEmpty(ai.address_1),
+      line2: nonEmpty(ai.address_2),
+      city: nonEmpty(ai.city),
+      state: nonEmpty(ai.state_name) ?? nonEmpty(ai.state_other),
+      zip: nonEmpty(ai.zip_code),
+      countryId: typeof ai.country_id === "number" ? ai.country_id : null,
+    },
+  };
+}
+
+/** Best-effort batch enrichment: pull the full profile for each unique guest ID.
+ *  A failure on one guest (404, transient) is logged and skipped so one bad
+ *  guest can't abort the day's enrichment. Returns guestId -> profile for the
+ *  ones that resolved. Sequential by design — shares the cached page token and
+ *  doesn't hammer the V1 API (clinic volume is a handful of appts/day). */
+export async function enrichGuestProfiles(
+  storagePath: string,
+  guestIds: string[],
+): Promise<Map<string, ZenotiGuestProfile>> {
+  const out = new Map<string, ZenotiGuestProfile>();
+  for (const guestId of [...new Set(guestIds.filter(Boolean))]) {
+    try {
+      out.set(guestId, await fetchZenotiGuestProfile({ storagePath, guestId }));
+    } catch (err) {
+      console.warn(
+        `[zenoti] guest-profile enrich failed for ${guestId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+  return out;
+}
+
+/** Compose Zenoti's structured gender into the "M"/"F" convention used by
+ *  lab_cases.patient_sex and the req-form sex checkbox. Null for anything else. */
+export function zenotiGenderToSex(gender: string | null): string | null {
+  if (!gender) return null;
+  const g = gender.trim().toLowerCase();
+  if (g === "male") return "M";
+  if (g === "female") return "F";
+  return null;
+}
+
+/** Flatten a guest's address into the single "street, city, ST zip" line that
+ *  lab_cases.patient_address uses (so parseAddress() reuses it downstream).
+ *  Null when there's no street on file. */
+export function formatGuestAddress(addr: ZenotiGuestProfile["address"]): string | null {
+  if (!addr.line1) return null;
+  // Zenoti free-text address fields can contain embedded newlines (staff paste
+  // multi-line addresses) — collapse all whitespace so the stored value is a
+  // single clean line that parseAddress() can read.
+  const clean = (s: string) => s.replace(/\s+/g, " ").trim();
+  const present = (x: string | null): x is string => Boolean(x);
+  const street = clean([addr.line1, addr.line2].filter(present).join(" "));
+  const cityState = [addr.city, [addr.state, addr.zip].filter(present).join(" ").trim()]
+    .filter(present)
+    .map(clean)
+    .join(", ");
+  return clean([street, cityState].filter(Boolean).join(", ")) || null;
 }

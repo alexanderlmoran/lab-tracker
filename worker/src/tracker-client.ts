@@ -132,6 +132,38 @@ export async function postEngineRun(payload: EngineRunPayload): Promise<void> {
   }
 }
 
+/** One patient's identity points pulled from the Zenoti guest profile, on their
+ *  way into the tracker's patients_seed cache ("1 feeds the rest"). email is the
+ *  upsert key — rows without it are skipped (patients_seed.email is NOT NULL). */
+export type PatientEnrichRecord = {
+  name: string;
+  email: string;
+  phone: string | null;
+  /** YYYY-MM-DD. */
+  dob: string | null;
+  /** "M" / "F". */
+  sex: string | null;
+  /** "street, city, ST zip". */
+  address: string | null;
+};
+
+/** Upsert Zenoti-sourced patient profiles into patients_seed. Returns the
+ *  server's upserted/skipped tally. Throws on non-200 (unlike the best-effort
+ *  metrics posts) so the enrich script surfaces a real failure. */
+export async function postPatientEnrich(
+  patients: PatientEnrichRecord[],
+): Promise<{ upserted: number; skipped: number }> {
+  const res = await request(`${BASE}/api/worker/patient-enrich`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${SECRET}`, "content-type": "application/json" },
+    body: JSON.stringify({ patients }),
+  });
+  if (res.statusCode !== 200) {
+    throw new Error(`patient-enrich failed ${res.statusCode}: ${(await res.body.text()).slice(0, 200)}`);
+  }
+  return (await res.body.json()) as { upserted: number; skipped: number };
+}
+
 export type RosterLabRequest = {
   name: string;
   dateOrdered: string | null;

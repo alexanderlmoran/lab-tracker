@@ -12,7 +12,13 @@ import { request } from "undici";
 
 import { loadEnvLocal } from "../src/lib/load-env.js";
 import { zenotiLogin } from "../src/zenoti/login.js";
-import { fetchZenotiLabAppointments, fetchZenotiIvAppointments } from "../src/zenoti/fetch-browser.js";
+import {
+  fetchZenotiLabAppointments,
+  fetchZenotiIvAppointments,
+  enrichGuestProfiles,
+  zenotiGenderToSex,
+  formatGuestAddress,
+} from "../src/zenoti/fetch-browser.js";
 import type { IvAppointment, LabAppointment } from "../src/zenoti/types.js";
 
 loadEnvLocal();
@@ -23,6 +29,10 @@ const STORAGE = process.env.ZENOTI_STORAGE_PATH ?? "/tmp/zenoti-session.json";
 const INTERVAL_MS = Number(process.env.ZENOTI_LOOP_INTERVAL_MS ?? "180000"); // 3 min
 const DAYS_AHEAD = Number(process.env.ZENOTI_DAYS_AHEAD ?? "1"); // today + tomorrow
 const RELOGIN_MS = Number(process.env.ZENOTI_RELOGIN_MS ?? String(20 * 60 * 60 * 1000)); // 20h
+// Patient-profile enrichment is far slower-changing than appointments (DOB /
+// address rarely move), so it rides the loop's always-fresh session but only
+// every ENRICH_INTERVAL_MS (default 1h) instead of every 3-min pass.
+const ENRICH_INTERVAL_MS = Number(process.env.ZENOTI_ENRICH_INTERVAL_MS ?? String(60 * 60 * 1000)); // 1h
 
 if (!BASE) throw new Error("TRACKER_BASE_URL is required");
 if (!SECRET) throw new Error("WORKER_SHARED_SECRET is required");
@@ -31,6 +41,7 @@ const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let lastLoginAt = 0;
+let lastEnrichAt = 0;
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -100,6 +111,50 @@ async function pushIvToTracker(appts: IvAppointment[], date: string): Promise<vo
   log(`iv: received=${json.received} upserted=${json.upserted} (${date})`);
 }
 
+/** Enrich the day's unique guests into patients_seed (DOB / sex / address — the
+ *  fields the appointment payload lacks). Rides this loop's already-fresh
+ *  session, so there's nothing extra to keep alive ("1 feeds the rest"). Best-
+ *  effort + throttled by the caller. */
+async function pushEnrichToTracker(
+  guests: Map<string, { fullName: string; email: string | null }>,
+): Promise<void> {
+  if (guests.size === 0) return;
+  const profiles = await enrichGuestProfiles(STORAGE, [...guests.keys()]);
+  const patients: Array<{
+    name: string;
+    email: string;
+    phone: string | null;
+    dob: string | null;
+    sex: string | null;
+    address: string | null;
+  }> = [];
+  for (const [guestId, fallback] of guests) {
+    const p = profiles.get(guestId);
+    if (!p) continue;
+    const email = p.email ?? fallback.email;
+    if (!email) continue; // patients_seed is keyed on email — can't store without one
+    patients.push({
+      name: p.fullName || fallback.fullName,
+      email,
+      phone: p.mobilePhone,
+      dob: p.dateOfBirth,
+      sex: zenotiGenderToSex(p.gender),
+      address: formatGuestAddress(p.address),
+    });
+  }
+  if (patients.length === 0) return;
+  const res = await request(`${BASE}/api/worker/patient-enrich`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${SECRET}`, "content-type": "application/json" },
+    body: JSON.stringify({ patients }),
+  });
+  const text = await res.body.text();
+  if (res.statusCode !== 200) throw new Error(`patient-enrich rejected ${res.statusCode}: ${text.slice(0, 200)}`);
+  const json = JSON.parse(text) as { upserted: number; skipped: number };
+  log(`enrich: upserted=${json.upserted} skipped=${json.skipped} (${patients.length} profiles)`);
+  lastEnrichAt = Date.now();
+}
+
 async function syncOnce(): Promise<void> {
   const all: LabAppointment[] = [];
   const syncedDates: SyncedDateCensus[] = [];
@@ -129,6 +184,28 @@ async function syncOnce(): Promise<void> {
     for (const { date, appts } of ivByDate) await pushIvToTracker(appts, date);
   } catch (e) {
     log(`iv sync error (lab sync OK): ${e instanceof Error ? e.message : String(e)}`);
+  }
+  // Patient enrichment: also best-effort, and only every ENRICH_INTERVAL_MS so
+  // we don't re-pull every guest's profile on each 3-min pass.
+  if (Date.now() - lastEnrichAt > ENRICH_INTERVAL_MS) {
+    try {
+      const guests = new Map<string, { fullName: string; email: string | null }>();
+      for (const a of all) {
+        if (a.zenotiGuestId && !guests.has(a.zenotiGuestId)) {
+          guests.set(a.zenotiGuestId, { fullName: a.patientFullName, email: a.patientEmail });
+        }
+      }
+      for (const { appts } of ivByDate) {
+        for (const a of appts) {
+          if (a.zenotiGuestId && !guests.has(a.zenotiGuestId)) {
+            guests.set(a.zenotiGuestId, { fullName: a.patientFullName, email: a.patientEmail });
+          }
+        }
+      }
+      await pushEnrichToTracker(guests);
+    } catch (e) {
+      log(`enrich error (lab+iv sync OK): ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 }
 

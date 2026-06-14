@@ -39,6 +39,45 @@ export type LabAppointment = {
   cancelled: boolean;
 };
 
+/** The five identity points pulled from a Zenoti guest profile
+ * (`GET apiamrs14.zenoti.com/v1/guests/{id}?expand=address_info`). The daily
+ * setDate appointment payload only carries name/email/phone — DOB, gender, and
+ * address live on the guest profile, which this fills in. This is the "source of
+ * truth" record in the Zenoti → tracker → PB enrichment ("1 feeds the rest"):
+ * a well-made Zenoti guest has all five, PB is usually sparse. */
+export type ZenotiGuestProfile = {
+  /** Zenoti guest UUID (matches LabAppointment.zenotiGuestId). */
+  guestId: string;
+
+  firstName: string;
+  lastName: string;
+  middleName: string | null;
+  preferredName: string | null;
+  /** "First Last" composed from the parts above. */
+  fullName: string;
+
+  email: string | null;
+  /** Digits only, mobile preferred (then home, then work). */
+  mobilePhone: string | null;
+  homePhone: string | null;
+  workPhone: string | null;
+
+  /** Zenoti gender_name ("Male"/"Female"/...); null when unset/"Unspecified". */
+  gender: string | null;
+  /** YYYY-MM-DD; null when Zenoti has no DOB on file. */
+  dateOfBirth: string | null;
+
+  address: {
+    line1: string | null;
+    line2: string | null;
+    city: string | null;
+    /** state_name, falling back to state_other free-text. */
+    state: string | null;
+    zip: string | null;
+    countryId: number | null;
+  };
+};
+
 /** A Zenoti "IV -" appointment, classified for charting. Shares the patient +
  * scheduling fields of LabAppointment but carries the IV classification
  * (see classifyIvService in iv-mapping.ts) instead of a labName. Consumed by
