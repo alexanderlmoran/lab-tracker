@@ -235,6 +235,71 @@ export async function fetchZenotiIvAppointments(
   return out;
 }
 
+// --- Appointment consumed products (the "Add consumed products" dialog) -------
+//
+// Zenoti's logged consumables for an appointment — the ACTUAL products + amounts
+// administered (this is where the per-visit dosages live, e.g. PC 22 vials). Same
+// cookie transport as setDate; the legacy AppServices.aspx method returns
+// { d: "<JSON>" } → { ManuallyTrackedProducts:[...], AutomaticallyTrackedProducts:[...] }.
+// Captured from the live dialog's network call (strAppointmentId + strCenterId).
+
+export type AppointmentProduct = {
+  name: string; // ProductNameWithUnit, e.g. "Glutathione 200MG/ML (1ml)"
+  unitsUsed: string; // "10"
+  volumeType: string; // "ml" / "unts"
+  volumePerItem: number;
+  tracking: "manual" | "auto";
+};
+
+export async function fetchZenotiAppointmentProducts(opts: {
+  storagePath: string;
+  appointmentId: string;
+}): Promise<AppointmentProduct[]> {
+  const cookieHeader = await loadCookieHeader(opts.storagePath);
+  const res = await request(`${ZENOTI_BASE}/Appointment/AppServices.aspx/GetAppointmentProducts`, {
+    method: "POST",
+    headers: {
+      cookie: cookieHeader,
+      "content-type": "application/json; charset=utf-8",
+      "x-requested-with": "XMLHttpRequest",
+      accept: "application/json, text/javascript, */*; q=0.01",
+    },
+    body: JSON.stringify({ strAppointmentId: opts.appointmentId, strCenterId: CENTER_ID }),
+  });
+  if (res.statusCode !== 200) {
+    throw new Error(`Zenoti GetAppointmentProducts ${res.statusCode}: ${(await res.body.text()).slice(0, 150)}`);
+  }
+  const outer = (await res.body.json()) as { d?: string | object };
+  const data = (typeof outer.d === "string" ? JSON.parse(outer.d) : (outer.d ?? {})) as {
+    ManuallyTrackedProducts?: Array<Record<string, unknown>>;
+    AutomaticallyTrackedProducts?: Array<Record<string, unknown>>;
+  };
+  const map = (arr: Array<Record<string, unknown>> | undefined, tracking: "manual" | "auto"): AppointmentProduct[] =>
+    (arr ?? []).map((p) => ({
+      name: String(p.ProductNameWithUnit ?? "").trim(),
+      unitsUsed: String(p.UnitsUsed ?? "").trim(),
+      volumeType: String(p.VolumeTypeName ?? "").trim(),
+      volumePerItem: Number(p.VolumePerItem ?? 1),
+      tracking,
+    }));
+  return [...map(data.ManuallyTrackedProducts, "manual"), ...map(data.AutomaticallyTrackedProducts, "auto")].filter((p) => p.name);
+}
+
+/** Map Zenoti consumed-products → IV chart component rows (name + dose-from-units),
+ *  so a charted note carries what was ACTUALLY given. "Essentiale PC - Standard
+ *  (1unts)" ×22 → { name: "Essentiale PC - Standard", standardDose: "22 units" };
+ *  "Glutathione 200MG/ML (1ml)" ×10 → { …, standardDose: "10 ml" }. */
+export function consumablesToComponents(
+  products: AppointmentProduct[],
+): Array<{ name: string; standardDose: string }> {
+  const cleanName = (n: string) => n.replace(/\s*\(\s*\d+(?:\.\d+)?\s*(?:ml|unts|units|cap|caps|mg)?\s*\)\s*$/i, "").trim();
+  const unitLabel = (v: string) => (/^unt/i.test(v) ? "units" : v);
+  return products.map((p) => ({
+    name: cleanName(p.name),
+    standardDose: p.unitsUsed ? `${p.unitsUsed}${p.volumeType ? ` ${unitLabel(p.volumeType)}` : ""}`.trim() : "",
+  }));
+}
+
 // --- Guest profile (DOB + address + gender) --------------------------------
 //
 // The setDate appointment payload above only carries name/email/phone. The
