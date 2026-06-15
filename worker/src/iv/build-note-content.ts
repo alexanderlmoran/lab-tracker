@@ -316,18 +316,31 @@ export function buildIvNoteContent(
       answer = built.answer;
       formCompsUsed = true;
     } else if (isComponentsMatrix(item.question)) {
-      // No staff components → fill Standard Dose from the protocol catalog — UNLESS
-      // this is the generic base-IV fallback (no specific template matched). A
-      // catalog fill there dumps the base note's whole cocktail onto an unrelated
-      // IV (Curcumin/Custom posting the Immune Boost protocol), so leave it blank
-      // and let the staff-entered components (now prefilled in the form) drive it.
-      answer = opts.baseFallback ? emptyMatrix(item.question!) : catalogComponentsAnswer(item.question!);
+      if (opts.baseFallback) {
+        // base-IV fallback (no specific template matched): DROP the base note's
+        // rows entirely — emptyMatrix would only blank the answer cells and still
+        // LIST the base cocktail products (the Curcumin/Custom-shows-Immune-Boost
+        // bug). Rebuilding from [] removes the rows; staff-entered components
+        // (form-driven, above) are the only source for an un-templated IV.
+        const built = buildComponents(item.question!, []);
+        question = built.question;
+        answer = built.answer;
+      } else {
+        // Matched template, no staff components → fill Standard Dose from the catalog.
+        answer = catalogComponentsAnswer(item.question!);
+      }
     } else if (im && (im.name ?? "").trim() && isImMedicationMatrix(item.question)) {
       const built = buildImMedication(item.question!, im);
       question = built.question;
       answer = built.answer;
     } else if (isImMedicationMatrix(item.question)) {
-      answer = opts.baseFallback ? emptyMatrix(item.question!) : catalogComponentsAnswer(item.question!);
+      if (opts.baseFallback) {
+        const built = buildComponents(item.question!, []);
+        question = built.question;
+        answer = built.answer;
+      } else {
+        answer = catalogComponentsAnswer(item.question!);
+      }
     }
     const filled: PbContentItem = {
       id: item.id,
