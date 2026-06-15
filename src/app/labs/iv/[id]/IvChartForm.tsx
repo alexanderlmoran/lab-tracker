@@ -95,7 +95,11 @@ export function IvChartForm({
       infusionReaction: c.infusionReaction ?? { occurred: false },
       ivRemoval: c.ivRemoval,
       provider: c.provider ?? session.therapist_name ?? "",
-      pc: c.pc ?? {},
+      // Prefill Infusion #/Vials from the session (set by iv-enrich-pc-history from
+      // the patient's last PC note) unless the chart already has them.
+      pc: c.pc && (c.pc.infusionNumber != null || c.pc.vialCount)
+        ? c.pc
+        : { infusionNumber: session.pc_infusion_number ?? null, vialCount: session.pc_vial_count ?? undefined },
       notes: c.notes ?? "",
     };
   });

@@ -403,3 +403,13 @@ export function ivNoteTitle(opts: {
   }
   return opts.templateHint || opts.serviceName;
 }
+
+/** Inverse of ivNoteTitle's PC prefix: parse "Infusion #29 (#20+2 Vials) - …"
+ *  → { number: 29, vials: "20+2" }, so we can continue a patient's infusion
+ *  series (prefill the NEXT #). Returns null if the title has no "Infusion #N". */
+export function parseInfusionTitle(title: string | null | undefined): { number: number; vials: string | null } | null {
+  const n = (title ?? "").match(/infusion\s*#\s*(\d+)/i);
+  if (!n) return null;
+  const v = (title ?? "").match(/#?\s*(\d+(?:\s*\+\s*\d+)*)\s*vials?\)/i);
+  return { number: Number(n[1]), vials: v ? v[1].replace(/\s+/g, "") : null };
+}
