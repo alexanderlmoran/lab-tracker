@@ -105,9 +105,26 @@ async function handle(claim: Claim, pb: PbSession) {
   const chart = mergeIvChart(defaultIvChart({ kind: s.kind, serviceName: s.serviceName, dob: identity.dob }), s.chart);
 
   // Title/summary/date are pure (no PB call) — compute once for every branch.
-  const title = ivNoteTitle({ serviceName: s.serviceName, templateHint: s.templateHint, kind: s.kind, pc: s.pc });
+  // Prefer the form-entered infusion#/vials (chart.pc) over the synced columns so
+  // the "# Vials" / "Infusion #" charting fields actually reach the PC note title.
+  const title = ivNoteTitle({
+    serviceName: s.serviceName, templateHint: s.templateHint, kind: s.kind,
+    pc: { infusionNumber: chart.pc?.infusionNumber ?? s.pc?.infusionNumber, vialCount: chart.pc?.vialCount ?? s.pc?.vialCount },
+  });
   const summary = ivNoteSummary(chart); // flags incomplete charting in PB
   const sessionDate = `${s.sessionDate}T12:00:00.000Z`;
+
+  // Un-templated IV (base-IV fallback) with NO charted components would auto-post
+  // a BLANK note via the sweep's "never miss a note" path. A missing-components
+  // note is worse than a held one — hold for staff to chart it first. (Matched
+  // templates still post; re-posts of an existing note still update.)
+  const hasComponents = (chart.components ?? []).some((c) => (c.name ?? "").trim());
+  const isRepost = !!(s.pbNoteId && s.pbClientRecordId);
+  if (templateMatched === false && !hasComponents && !isRepost) {
+    await report({ jobId: job.id, sessionId: s.id, outcome: "held", score: null, reason: "un-templated IV with no charted components — chart its components before posting (would post blank)" });
+    log(`hold (un-templated, no components) session=${s.id} service="${s.serviceName}"`);
+    return;
+  }
 
   // Build the note body from the reference scaffold, or HOLD if it's empty.
   // An empty scaffold (reference note missing/blank in PB) would otherwise post
