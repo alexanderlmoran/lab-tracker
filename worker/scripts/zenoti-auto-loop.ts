@@ -45,6 +45,10 @@ if (!SECRET) throw new Error("WORKER_SHARED_SECRET is required");
 
 const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Cap a promise so a slow/hung call can never freeze the loop (the consumables
+ *  lesson — the underlying call may still settle in the background). */
+const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
+  Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`timeout after ${ms}ms`)), ms))]);
 
 let lastLoginAt = 0;
 let lastEnrichAt = 0;
@@ -210,18 +214,16 @@ async function syncOnce(): Promise<void> {
   }
   await pushToTracker(all, syncedDates);
   // Consumed-products → chart components (throttled, best-effort). Done BEFORE the
-  // IV push so the components ride the same upsert.
-  // DISABLED: GetAppointmentProducts HANGS from the worker's headless Zenoti
-  // session (works from a full browser session, not server-to-server) — it froze
-  // this always-on loop. Re-enable once the headless auth is verified (see
-  // ZENOTI_CONSUMABLES_ENABLED). The fetch now has a 12s AbortSignal cap as a
-  // belt-and-suspenders, but keep it off the critical path until proven.
-  if (process.env.ZENOTI_CONSUMABLES_ENABLED === "1" && Date.now() - lastConsumablesAt > CONSUMABLES_INTERVAL_MS) {
+  // IV push so the components ride the same upsert. The call is ~200ms/appt in
+  // isolation; the earlier freeze was an UNCAPPED call. Now double-capped: each
+  // fetch has a 12s AbortSignal, and the whole pass is bounded by withTimeout so a
+  // bad session can never stall the sync. Disable with ZENOTI_CONSUMABLES_ENABLED=0.
+  if (process.env.ZENOTI_CONSUMABLES_ENABLED !== "0" && Date.now() - lastConsumablesAt > CONSUMABLES_INTERVAL_MS) {
     try {
-      await enrichConsumables(ivByDate);
+      await withTimeout(enrichConsumables(ivByDate), 90_000);
       lastConsumablesAt = Date.now();
     } catch (e) {
-      log(`consumables enrich error (sync OK): ${e instanceof Error ? e.message : String(e)}`);
+      log(`consumables enrich error/timeout (sync OK): ${e instanceof Error ? e.message : String(e)}`);
     }
   }
   // IV push is best-effort: a failure here must not break the (idempotent) lab sync.
