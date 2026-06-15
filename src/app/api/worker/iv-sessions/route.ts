@@ -39,6 +39,10 @@ const IvAppointmentInput = z.object({
   note: z.string().nullable().optional(),
   therapistName: z.string().nullable().optional(),
   cancelled: z.boolean().optional().default(false),
+  /** Zenoti consumed-products → chart component rows (actual products + amounts).
+   *  Attached only on the throttled consumables pass; fills chart.components when
+   *  the chart has none yet. */
+  consumables: z.array(z.object({ name: z.string(), standardDose: z.string() })).optional(),
 });
 
 const Body = z.object({
@@ -121,6 +125,11 @@ export async function POST(request: Request) {
   // appts are left blank. dob is unknown at sync → vitals use age-neutral ranges.
   const seedable = rows.filter((r) => !r.cancelled && r.kind !== "ebo" && !r.is_add_on);
   if (seedable.length > 0) {
+    // Consumed-products (actual products + amounts) by appt, from the payload.
+    const consumablesByAppt = new Map<string, Array<{ name: string; standardDose: string }>>();
+    for (const a of parsed.appointments) {
+      if (a.consumables?.length) consumablesByAppt.set(a.zenotiAppointmentId, a.consumables);
+    }
     const apptIds = seedable.map((r) => r.zenoti_appointment_id);
     const { data: existing } = await db
       .from("iv_sessions")
@@ -130,12 +139,24 @@ export async function POST(request: Request) {
     for (const r of seedable) {
       const row = byAppt.get(r.zenoti_appointment_id);
       if (!row) continue;
-      const chart = row.chart as Record<string, unknown> | null;
-      if (chart && Object.keys(chart).length > 0) continue; // already charted/seeded
-      await db
-        .from("iv_sessions")
-        .update({ chart: defaultIvChart({ kind: r.kind, serviceName: r.service_name }) })
-        .eq("id", row.id);
+      const chart = (row.chart ?? {}) as Record<string, unknown>;
+      const comps = consumablesByAppt.get(r.zenoti_appointment_id);
+      const existingComps = (chart.components ?? []) as Array<{ name?: string }>;
+      const hasComponents = Array.isArray(existingComps) && existingComps.some((c) => (c?.name ?? "").trim());
+      let next = chart;
+      let changed = false;
+      // Seed the placeholder chart on a brand-new (empty) session.
+      if (Object.keys(chart).length === 0) {
+        next = defaultIvChart({ kind: r.kind, serviceName: r.service_name }) as unknown as Record<string, unknown>;
+        changed = true;
+      }
+      // Fill components from Zenoti consumables (the actual products + amounts) when
+      // the chart has none yet — never clobber a staff-charted component table.
+      if (!hasComponents && comps?.length) {
+        next = { ...next, components: comps };
+        changed = true;
+      }
+      if (changed) await db.from("iv_sessions").update({ chart: next }).eq("id", row.id);
     }
   }
 

@@ -15,6 +15,8 @@ import { zenotiLogin } from "../src/zenoti/login.js";
 import {
   fetchZenotiLabAppointments,
   fetchZenotiIvAppointments,
+  fetchZenotiAppointmentProducts,
+  consumablesToComponents,
   enrichGuestProfiles,
   zenotiGenderToSex,
   formatGuestAddress,
@@ -33,6 +35,10 @@ const RELOGIN_MS = Number(process.env.ZENOTI_RELOGIN_MS ?? String(20 * 60 * 60 *
 // address rarely move), so it rides the loop's always-fresh session but only
 // every ENRICH_INTERVAL_MS (default 1h) instead of every 3-min pass.
 const ENRICH_INTERVAL_MS = Number(process.env.ZENOTI_ENRICH_INTERVAL_MS ?? String(60 * 60 * 1000)); // 1h
+// Consumed-products ("Add consumed products") → chart components. Per-appt Zenoti
+// call, so throttled (not every 3-min pass). Default 15 min: fresh enough that the
+// chart shows what was logged shortly after the IV, without hammering Zenoti.
+const CONSUMABLES_INTERVAL_MS = Number(process.env.ZENOTI_CONSUMABLES_INTERVAL_MS ?? String(15 * 60 * 1000));
 
 if (!BASE) throw new Error("TRACKER_BASE_URL is required");
 if (!SECRET) throw new Error("WORKER_SHARED_SECRET is required");
@@ -42,6 +48,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let lastLoginAt = 0;
 let lastEnrichAt = 0;
+let lastConsumablesAt = 0;
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -159,6 +166,25 @@ async function pushEnrichToTracker(
   lastEnrichAt = Date.now();
 }
 
+/** Attach Zenoti consumed-products to each IV appt (best-effort, per-appt call) so
+ *  the iv-sessions upsert can fill chart components with what was ACTUALLY given.
+ *  Skips cancelled / EBOO / add-ons. */
+async function enrichConsumables(ivByDate: Array<{ date: string; appts: IvAppointment[] }>): Promise<void> {
+  let n = 0;
+  for (const { appts } of ivByDate) {
+    for (const a of appts) {
+      if (a.cancelled || a.kind === "ebo" || a.isAddOn) continue;
+      try {
+        const prods = await fetchZenotiAppointmentProducts({ storagePath: STORAGE, appointmentId: a.zenotiAppointmentId });
+        if (prods.length) { a.consumables = consumablesToComponents(prods); n++; }
+      } catch (e) {
+        log(`consumables fetch failed ${a.zenotiAppointmentId}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+  }
+  if (n) log(`consumables: attached for ${n} appt(s)`);
+}
+
 async function syncOnce(): Promise<void> {
   const all: LabAppointment[] = [];
   const syncedDates: SyncedDateCensus[] = [];
@@ -183,6 +209,16 @@ async function syncOnce(): Promise<void> {
     ivByDate.push({ date, appts: await fetchZenotiIvAppointments({ storagePath: STORAGE, date }) });
   }
   await pushToTracker(all, syncedDates);
+  // Consumed-products → chart components (throttled, best-effort). Done BEFORE the
+  // IV push so the components ride the same upsert.
+  if (Date.now() - lastConsumablesAt > CONSUMABLES_INTERVAL_MS) {
+    try {
+      await enrichConsumables(ivByDate);
+      lastConsumablesAt = Date.now();
+    } catch (e) {
+      log(`consumables enrich error (sync OK): ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
   // IV push is best-effort: a failure here must not break the (idempotent) lab sync.
   try {
     for (const { date, appts } of ivByDate) await pushIvToTracker(appts, date);

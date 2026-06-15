@@ -112,4 +112,9 @@ export type IvAppointment = {
   therapistName: string | null;
 
   cancelled: boolean;
+
+  /** Consumed products logged on this appointment in Zenoti (the ACTUAL products
+   *  + amounts given), mapped to chart component rows. Populated only on the
+   *  throttled consumables pass — undefined on plain 3-min syncs. */
+  consumables?: Array<{ name: string; standardDose: string }>;
 };
