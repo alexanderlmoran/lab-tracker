@@ -87,6 +87,9 @@ export type ComponentRow = {
   addOnDose?: string;
   lot?: string;
   exp?: string;
+  /** Which PB component matrix (section index) this row belongs to — set at prefill
+   *  for multi-section templates so the post routes it back to the right section. */
+  section?: number;
 };
 export type IvChart = {
   assessment?: {

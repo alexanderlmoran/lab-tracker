@@ -81,7 +81,7 @@ export function IvChartForm({
     // one blank row. Template rows match what posts (cached from the PB note), so
     // an unedited chart posts the same note the auto-fill path would.
     const prefill: ComponentRow[] = templateComponents.length
-      ? templateComponents.map((t) => ({ name: t.name ?? "", standardDose: t.standardDose ?? "", addOnDose: "", lot: "", exp: "" }))
+      ? templateComponents.map((t) => ({ name: t.name ?? "", standardDose: t.standardDose ?? "", addOnDose: "", lot: "", exp: "", section: t.section }))
       : [{ name: "", standardDose: "", addOnDose: "", lot: "", exp: "" }];
     return {
       assessment: c.assessment ?? {},

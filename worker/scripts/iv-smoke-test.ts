@@ -36,12 +36,18 @@ async function main() {
   ok('"IV - Curcumin 100mg" → kind=standard (un-templated)', classifyIvService("IV - Curcumin 100mg")?.kind === "standard");
   ok('"IV - PCA" does NOT misclassify as PC', classifyIvService("IV - PCA")?.kind !== "pc");
 
-  // 2 ─ extractTemplateComponents single vs multi
-  console.log("\n══ 2. Template-component extraction (prefill source) ══");
-  const single = [compMatrix("Intravenous (IV) NS 0.9% - 500ml", [row("Vitamin C 500mg/ml", "10,000mg")])];
+  // 2 ─ extraction + section routing (multi-section prefill)
+  console.log("\n══ 2. Template-component extraction + section routing ══");
+  const single = [compMatrix("IV 500ml", [row("Vitamin C 500mg/ml", "10,000mg")])];
   const multi = [compMatrix("IV 500ml", [row("Vitamin C 500mg/ml", "10,000mg")]), compMatrix("IV Push", [row("Glutathione 200mg/ml", "500mg")])];
-  ok("single-matrix template → extracts its rows", extractTemplateComponents(single as any).length === 1);
-  ok("multi-matrix template → extracts [] (no unsafe prefill)", extractTemplateComponents(multi as any).length === 0);
+  const exSingle = extractTemplateComponents(single as any);
+  const exMulti = extractTemplateComponents(multi as any);
+  ok("single-matrix → 1 row, no section tag", exSingle.length === 1 && exSingle[0].section === undefined);
+  ok("multi-matrix → 2 rows tagged sections 0,1", exMulti.length === 2 && exMulti[0].section === 0 && exMulti[1].section === 1);
+  const built = buildIvNoteContent(multi as any, { components: exMulti } as any, { baseFallback: false });
+  const rowsOf = (i: number) => ((built[i] as any).question?.rows ?? []).map((r: any) => r.label);
+  ok("section 0 routes Vitamin C only (no smear)", JSON.stringify(rowsOf(0)) === JSON.stringify(["Vitamin C 500mg/ml"]));
+  ok("section 1 routes Glutathione only (no smear)", JSON.stringify(rowsOf(1)) === JSON.stringify(["Glutathione 200mg/ml"]));
 
   // 3 ─ base-IV fallback suppression (the cocktail bug)
   console.log("\n══ 3. base-IV fallback: no cocktail dump ══");
@@ -56,8 +62,8 @@ async function main() {
   const refs = (await rest("iv_template_refs?select=template_hint,components")) as any[];
   const byHint = (h: string) => refs.find((r) => r.template_hint === h)?.components ?? [];
   ok("PC cached with 7 components", byHint("Phosphatidylcholine Infusion").length === 7, `${byHint("Phosphatidylcholine Infusion").length}`);
-  ok("__base_iv__ cached EMPTY (multi-section, no prefill)", byHint("__base_iv__").length === 0);
-  ok("Immune Boost cached EMPTY (multi-section)", byHint("Immune Boost").length === 0);
+  ok("Immune Boost cached (multi-section now prefills)", byHint("Immune Boost").length >= 4, `${byHint("Immune Boost").length}`);
+  ok("Myers' Cocktail cached (multi-section)", byHint("Myers' Cocktail").length >= 5, `${byHint("Myers' Cocktail").length}`);
 
   // 5 ─ patient matcher
   console.log("\n══ 5. Patient matcher (auto-post gate) ══");

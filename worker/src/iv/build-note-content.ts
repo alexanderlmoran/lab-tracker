@@ -36,7 +36,7 @@ export type IvChartInput = {
   attempts?: string;
   location?: string;
   infusionFlowingWell?: boolean;
-  components?: Array<{ name?: string; standardDose?: string; addOnDose?: string; lot?: string; exp?: string }>;
+  components?: Array<{ name?: string; standardDose?: string; addOnDose?: string; lot?: string; exp?: string; section?: number }>;
   imMedication?: { name?: string; dose?: string; location?: string };
   imShotGiven?: boolean;
   /** Provider who performed the IV (defaults to the Zenoti therapist; staff can
@@ -223,25 +223,28 @@ function catalogComponentsAnswer(q: PbQuestion) {
  *  iv_template_refs.components for the charting form's prefill. */
 export function extractTemplateComponents(
   scaffold: PbContentItem[],
-): Array<{ name: string; standardDose?: string }> {
-  // PREFILL ONLY SINGLE-MATRIX TEMPLATES. The charting form's component table is
-  // flat and maps to ONE PB matrix (buildComponents). Multi-section templates
-  // (base IV: "IV 500ml" + "IV Push"; Brain Boost: two NS bags) can't be
-  // round-tripped through a flat list without smearing every row into every
-  // section, so we DON'T prefill them — they post correctly via the per-matrix
-  // catalog path instead. Returns [] for 0 or >1 component matrices.
+): Array<{ name: string; standardDose?: string; section?: number }> {
+  // Aggregate ALL component matrices, tagging each row with its SECTION (matrix
+  // index). buildIvNoteContent routes the flat form table back to the right
+  // section by this tag — so multi-section templates (base IV: "IV 500ml" + "IV
+  // Push"; Brain Boost: two bags) prefill correctly and a product that appears in
+  // two sections (e.g. Glutathione) stays in both. Single-section → no tag needed.
   const matrices = scaffold.filter((it) => isComponentsMatrix(it.question));
-  if (matrices.length !== 1) return [];
-  const q = matrices[0].question!;
-  const stdIdx = colIndex(q, (l) => /standard dose/.test(l) || /^dose$/.test(l));
-  const out: Array<{ name: string; standardDose?: string }> = [];
-  for (const row of q.rows ?? []) {
-    const name = (row.label ?? "").trim();
-    if (!name || /^\[enter/i.test(name)) continue;
-    const templateDose = stdIdx >= 0 ? rawCellLabel(row.cells?.[stdIdx]) : "";
-    const dose = templateDose || standardDoseFor(name) || "";
-    out.push(dose ? { name, standardDose: dose } : { name });
-  }
+  const multi = matrices.length > 1;
+  const out: Array<{ name: string; standardDose?: string; section?: number }> = [];
+  matrices.forEach((item, idx) => {
+    const q = item.question!;
+    const stdIdx = colIndex(q, (l) => /standard dose/.test(l) || /^dose$/.test(l));
+    for (const row of q.rows ?? []) {
+      const name = (row.label ?? "").trim();
+      if (!name || /^\[enter/i.test(name)) continue;
+      const templateDose = stdIdx >= 0 ? rawCellLabel(row.cells?.[stdIdx]) : "";
+      const dose = templateDose || standardDoseFor(name) || "";
+      const e: { name: string; standardDose?: string; section?: number } = dose ? { name, standardDose: dose } : { name };
+      if (multi) e.section = idx;
+      out.push(e);
+    }
+  });
   return out;
 }
 
@@ -303,25 +306,30 @@ export function buildIvNoteContent(
 ): PbContentItem[] {
   const comps = (chart.components ?? []).filter((c) => (c.name ?? "").trim());
   const im = chart.imMedication;
-  let formCompsUsed = false; // the form's flat table fills only the FIRST components matrix
+  // Route the flat form table back to each section by its `section` tag (set at
+  // prefill from the matrix index). Untagged/out-of-range rows (staff-added) → the
+  // first section. extract + build both walk components matrices in scaffold order,
+  // so the indexes align.
+  const compMatrixItems = scaffold.filter((it) => isComponentsMatrix(it.question));
+  const compMatrixIdx = new Map(compMatrixItems.map((it, i) => [it, i] as const));
+  const compsBySection = new Map<number, typeof comps>();
+  for (const c of comps) {
+    let idx = c.section ?? 0;
+    if (idx < 0 || idx >= compMatrixItems.length) idx = 0;
+    (compsBySection.get(idx) ?? compsBySection.set(idx, []).get(idx)!).push(c);
+  }
   return scaffold.map((item) => {
     let question = item.question;
     let answer = answerFor(item, chart);
-    // Form-driven components: replace the template rows with the staff's table —
-    // but ONLY the first components matrix. The form table is flat (one section);
-    // writing it into every matrix of a multi-section template duplicates rows.
-    if (comps.length && !formCompsUsed && isComponentsMatrix(item.question)) {
-      const built = buildComponents(item.question!, comps); // isComponentsMatrix guarantees defined
-      question = built.question;
-      answer = built.answer;
-      formCompsUsed = true;
-    } else if (isComponentsMatrix(item.question)) {
-      if (opts.baseFallback) {
-        // base-IV fallback (no specific template matched): DROP the base note's
-        // rows entirely — emptyMatrix would only blank the answer cells and still
-        // LIST the base cocktail products (the Curcumin/Custom-shows-Immune-Boost
-        // bug). Rebuilding from [] removes the rows; staff-entered components
-        // (form-driven, above) are the only source for an un-templated IV.
+    if (isComponentsMatrix(item.question)) {
+      if (comps.length) {
+        // Form-driven: this section gets only ITS tagged rows (empty if cleared).
+        const built = buildComponents(item.question!, compsBySection.get(compMatrixIdx.get(item)!) ?? []);
+        question = built.question;
+        answer = built.answer;
+      } else if (opts.baseFallback) {
+        // base-IV fallback, no components: DROP the base note's rows (else the
+        // un-templated IV would list the base cocktail). buildComponents([]) → no rows.
         const built = buildComponents(item.question!, []);
         question = built.question;
         answer = built.answer;
