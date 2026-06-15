@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
-import { markIvAlreadyDone, type IvChart, type IvSessionRow } from "./actions";
+import { enqueueIvPost, markIvAlreadyDone, type IvChart, type IvSessionRow } from "./actions";
 import { isIvChartIncomplete } from "./chart-util";
 
 const PB_URL = "https://my.practicebetter.io";
@@ -77,11 +77,26 @@ export function IvChartingBoard({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [queued, setQueued] = useState<Set<string>>(new Set());
   const markDone = (id: string) => {
     setBusyId(id);
     startTransition(async () => {
       try {
         await markIvAlreadyDone(id);
+        router.refresh();
+      } finally {
+        setBusyId(null);
+      }
+    });
+  };
+  // Enqueue for PB posting now (don't wait for the hourly/5pm sweep). The worker
+  // grades the match and auto-posts (≥95) or holds for review within ~5 min.
+  const approve = (id: string) => {
+    setBusyId(id);
+    startTransition(async () => {
+      try {
+        await enqueueIvPost(id);
+        setQueued((q) => new Set(q).add(id));
         router.refresh();
       } finally {
         setBusyId(null);
@@ -235,6 +250,25 @@ export function IvChartingBoard({
                             {pending && busyId === r.id ? "…" : "Already done"}
                           </button>
                         )}
+                        {r.charting_status !== "posted" &&
+                          r.charting_status !== "skipped" &&
+                          r.kind !== "ebo" &&
+                          !r.is_add_on &&
+                          (queued.has(r.id) ? (
+                            <span className="rounded bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                              Queued · posting…
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={pending && busyId === r.id}
+                              onClick={() => approve(r.id)}
+                              className="rounded border border-zinc-900 bg-zinc-900 px-2 py-0.5 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+                              title="Post to PB now — the worker grades the patient match and auto-posts (≥95) or holds for review within ~5 min (don't wait for the sweep)"
+                            >
+                              {pending && busyId === r.id ? "…" : "Approve & post"}
+                            </button>
+                          ))}
                         <Link
                           href={`/labs/iv/${r.id}`}
                           className="rounded border border-zinc-300 px-2 py-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100"

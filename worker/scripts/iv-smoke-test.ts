@@ -70,7 +70,13 @@ async function main() {
   const idA = { fullName: "Test Person", email: "a@b.com" } as any;
   ok("name+email → auto-postable (95)", (() => { const b = pickBestMatch(idA, [{ id: "1", fullName: "Test Person", emailAddress: "a@b.com" }] as any); return !!b?.autoPostable && b.score >= 95; })());
   ok("name only → HOLDS (no unique id)", (() => { const b = pickBestMatch({ fullName: "Test Person" } as any, [{ id: "1", fullName: "Test Person" }] as any); return b ? !b.autoPostable : true; })());
-  ok("email conflict → hard conflict, HOLDS", (() => { const b = pickBestMatch(idA, [{ id: "1", fullName: "Test Person", emailAddress: "x@y.com" }] as any); return !!b && b.hardConflict && !b.autoPostable; })());
+  ok("email conflict (no corroboration) → hard conflict, HOLDS", (() => { const b = pickBestMatch(idA, [{ id: "1", fullName: "Test Person", emailAddress: "x@y.com" }] as any); return !!b && b.hardConflict && !b.autoPostable; })());
+  ok("email conflict + DOB & phone match → AUTO-POSTS (Leila case)", (() => {
+    const id = { fullName: "Leila Test", email: "old@x.com", dob: "1990-01-01", phone: "3055551234" } as any;
+    const cand = { id: "1", fullName: "Leila Test", emailAddress: "new@y.com", dayOfBirth: "1990-01-01", phone: "3055551234" } as any;
+    const b = pickBestMatch(id, [cand]);
+    return !!b && !b.hardConflict && b.autoPostable && b.score >= 95;
+  })());
 
   // 6 ─ duplicate guard (live PB)
   console.log("\n══ 6. Duplicate guard (live PB) ══");

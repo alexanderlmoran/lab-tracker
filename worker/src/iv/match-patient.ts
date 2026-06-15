@@ -112,10 +112,14 @@ export function scorePatientMatch(
     sPhone.length < 10 || cPhone.length < 10 ? "none" : sPhone === cPhone ? "match" : "conflict";
   if (phone === "match") score += W_PHONE;
 
-  // An email conflict always disqualifies (verify the patient). A DOB conflict
-  // disqualifies ONLY when no unique id matched — an email/phone match means it's
-  // them and the DOB is just a stale/typo'd value.
-  const hardConflict = email === "conflict" || (dob === "conflict" && email !== "match" && phone !== "match");
+  // An email conflict normally disqualifies (likely the wrong person) — BUT not
+  // when a corroborating id (DOB or phone) ALSO matches: name+DOB+phone matching
+  // proves identity, so a differing email is a stale/typo'd value, not a different
+  // person (e.g. Leila: name+DOB+phone match, only the email differs). The -30
+  // email penalty still applies, so a weakly-corroborated conflict stays under 95.
+  // A DOB conflict disqualifies ONLY when no unique id (email/phone) matched.
+  const emailHardConflict = email === "conflict" && !(dob === "match" || phone === "match");
+  const hardConflict = emailHardConflict || (dob === "conflict" && email !== "match" && phone !== "match");
 
   return { score: Math.max(0, Math.min(100, score)), signals: { name, dob, email, phone }, hardConflict };
 }
