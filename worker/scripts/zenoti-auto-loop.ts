@@ -211,7 +211,12 @@ async function syncOnce(): Promise<void> {
   await pushToTracker(all, syncedDates);
   // Consumed-products → chart components (throttled, best-effort). Done BEFORE the
   // IV push so the components ride the same upsert.
-  if (Date.now() - lastConsumablesAt > CONSUMABLES_INTERVAL_MS) {
+  // DISABLED: GetAppointmentProducts HANGS from the worker's headless Zenoti
+  // session (works from a full browser session, not server-to-server) — it froze
+  // this always-on loop. Re-enable once the headless auth is verified (see
+  // ZENOTI_CONSUMABLES_ENABLED). The fetch now has a 12s AbortSignal cap as a
+  // belt-and-suspenders, but keep it off the critical path until proven.
+  if (process.env.ZENOTI_CONSUMABLES_ENABLED === "1" && Date.now() - lastConsumablesAt > CONSUMABLES_INTERVAL_MS) {
     try {
       await enrichConsumables(ivByDate);
       lastConsumablesAt = Date.now();

@@ -265,6 +265,8 @@ export async function fetchZenotiAppointmentProducts(opts: {
       accept: "application/json, text/javascript, */*; q=0.01",
     },
     body: JSON.stringify({ strAppointmentId: opts.appointmentId, strCenterId: CENTER_ID }),
+    // Hard cap so a headless-session hang can never freeze a caller's loop.
+    signal: AbortSignal.timeout(12000),
   });
   if (res.statusCode !== 200) {
     throw new Error(`Zenoti GetAppointmentProducts ${res.statusCode}: ${(await res.body.text()).slice(0, 150)}`);
