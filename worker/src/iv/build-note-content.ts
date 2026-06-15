@@ -214,6 +214,37 @@ function catalogComponentsAnswer(q: PbQuestion) {
   );
 }
 
+/** Extract a template's component rows (product label + resolved standard dose)
+ *  from a reference-note scaffold — using the SAME rows + dose resolution as the
+ *  auto-post path (catalogComponentsAnswer: template's own Standard-Dose cell
+ *  first, then the mined catalog). So the cached prefill matches exactly what
+ *  posts. Skips "[enter …]" placeholder rows. Returns [] when the scaffold has no
+ *  components matrix. Used by scripts/iv-cache-template-components.ts to seed
+ *  iv_template_refs.components for the charting form's prefill. */
+export function extractTemplateComponents(
+  scaffold: PbContentItem[],
+): Array<{ name: string; standardDose?: string }> {
+  // PREFILL ONLY SINGLE-MATRIX TEMPLATES. The charting form's component table is
+  // flat and maps to ONE PB matrix (buildComponents). Multi-section templates
+  // (base IV: "IV 500ml" + "IV Push"; Brain Boost: two NS bags) can't be
+  // round-tripped through a flat list without smearing every row into every
+  // section, so we DON'T prefill them — they post correctly via the per-matrix
+  // catalog path instead. Returns [] for 0 or >1 component matrices.
+  const matrices = scaffold.filter((it) => isComponentsMatrix(it.question));
+  if (matrices.length !== 1) return [];
+  const q = matrices[0].question!;
+  const stdIdx = colIndex(q, (l) => /standard dose/.test(l) || /^dose$/.test(l));
+  const out: Array<{ name: string; standardDose?: string }> = [];
+  for (const row of q.rows ?? []) {
+    const name = (row.label ?? "").trim();
+    if (!name || /^\[enter/i.test(name)) continue;
+    const templateDose = stdIdx >= 0 ? rawCellLabel(row.cells?.[stdIdx]) : "";
+    const dose = templateDose || standardDoseFor(name) || "";
+    out.push(dose ? { name, standardDose: dose } : { name });
+  }
+  return out;
+}
+
 /** Is this the "IM Medication" matrix (Dose/Lot/Location), not "IM Shot Given"? */
 function isImMedicationMatrix(q: PbQuestion | undefined): boolean {
   if (!q || q.object !== "matrix") return false;
@@ -268,26 +299,35 @@ function answerFor(item: PbContentItem, chart: IvChartInput): unknown {
 export function buildIvNoteContent(
   scaffold: PbContentItem[],
   chart: IvChartInput,
+  opts: { baseFallback?: boolean } = {},
 ): PbContentItem[] {
   const comps = (chart.components ?? []).filter((c) => (c.name ?? "").trim());
   const im = chart.imMedication;
+  let formCompsUsed = false; // the form's flat table fills only the FIRST components matrix
   return scaffold.map((item) => {
     let question = item.question;
     let answer = answerFor(item, chart);
-    // Form-driven components: replace the template rows with the staff's table.
-    if (comps.length && isComponentsMatrix(item.question)) {
+    // Form-driven components: replace the template rows with the staff's table —
+    // but ONLY the first components matrix. The form table is flat (one section);
+    // writing it into every matrix of a multi-section template duplicates rows.
+    if (comps.length && !formCompsUsed && isComponentsMatrix(item.question)) {
       const built = buildComponents(item.question!, comps); // isComponentsMatrix guarantees defined
       question = built.question;
       answer = built.answer;
+      formCompsUsed = true;
     } else if (isComponentsMatrix(item.question)) {
-      // No staff components → fill Standard Dose from the protocol catalog.
-      answer = catalogComponentsAnswer(item.question!);
+      // No staff components → fill Standard Dose from the protocol catalog — UNLESS
+      // this is the generic base-IV fallback (no specific template matched). A
+      // catalog fill there dumps the base note's whole cocktail onto an unrelated
+      // IV (Curcumin/Custom posting the Immune Boost protocol), so leave it blank
+      // and let the staff-entered components (now prefilled in the form) drive it.
+      answer = opts.baseFallback ? emptyMatrix(item.question!) : catalogComponentsAnswer(item.question!);
     } else if (im && (im.name ?? "").trim() && isImMedicationMatrix(item.question)) {
       const built = buildImMedication(item.question!, im);
       question = built.question;
       answer = built.answer;
     } else if (isImMedicationMatrix(item.question)) {
-      answer = catalogComponentsAnswer(item.question!);
+      answer = opts.baseFallback ? emptyMatrix(item.question!) : catalogComponentsAnswer(item.question!);
     }
     const filled: PbContentItem = {
       id: item.id,

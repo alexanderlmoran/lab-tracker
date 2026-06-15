@@ -133,6 +133,37 @@ export async function getIvSession(id: string): Promise<IvSessionDetail | null> 
   return (data as unknown as IvSessionDetail) ?? null;
 }
 
+/** The cached component rows for a template (product label + standard dose),
+ *  used to PREFILL a new chart's Components table. Source:
+ *  iv_template_refs.components, populated from the PB reference note by
+ *  worker/scripts/iv-cache-template-components.ts. Matched on a NORMALIZED
+ *  template_hint (mirrors /api/worker/iv-post/next so "Myers’ Cocktail" ==
+ *  "Myers' Cocktail"). No __base_iv__ fallback — prefill only on a specific
+ *  template match; an unmatched IV keeps the single blank row (staff add via the
+ *  picker) rather than dumping the generic base catalog. */
+export async function getTemplateComponents(templateHint: string | null): Promise<ComponentRow[]> {
+  await requireSignedIn();
+  const want = normalizeTemplateHint(templateHint);
+  if (!want) return [];
+  const db = getSupabaseAdmin();
+  const { data, error } = await db.from("iv_template_refs").select("template_hint, components");
+  if (error) throw new Error(error.message);
+  const hit = (data ?? []).find((r) => normalizeTemplateHint(r.template_hint as string) === want);
+  const comps = (hit?.components ?? []) as unknown;
+  return Array.isArray(comps) ? (comps as ComponentRow[]) : [];
+}
+
+/** Normalize a template_hint for matching: straighten curly quotes, collapse
+ *  whitespace, lowercase. Mirror of the same fn in /api/worker/iv-post/next. */
+function normalizeTemplateHint(s: string | null | undefined): string {
+  return (s ?? "")
+    .replace(/[‘’ʼ]/g, "'")
+    .replace(/[“”]/g, '"')
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** Save the charting form. markReady flips status pending→ready (charted,
  *  awaiting the Approve/post step). Never touches Zenoti-synced columns. */
 export async function saveIvChart(

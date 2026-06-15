@@ -9,7 +9,7 @@
 import { request } from "undici";
 
 import { pbLogin, searchPbPatientCandidates, type PbSession } from "../uploaders/practicebetter.js";
-import { getSessionNote, scaffoldFromNote, createSessionNote, updateSessionNote } from "../uploaders/pb-sessionnotes.js";
+import { getSessionNote, scaffoldFromNote, createSessionNote, updateSessionNote, listSessionNotes } from "../uploaders/pb-sessionnotes.js";
 import { buildIvNoteContent, ivNoteSummary, ivNoteTitle, type IvChartInput } from "./build-note-content.js";
 import { defaultIvChart, mergeIvChart } from "./default-chart.js";
 import { pickBestMatch, type PatientIdentity } from "./match-patient.js";
@@ -28,6 +28,9 @@ type Claim = {
   session: { id: string; serviceName: string; kind: string; templateHint: string | null; sessionDate: string; chart: IvChartInput; pc: { infusionNumber?: number | null; vialCount?: string }; pbNoteId?: string | null; pbClientRecordId?: string | null };
   identity: PatientIdentity;
   referenceNoteId: string | null;
+  /** true = matched the service's own template; false = generic base-IV fallback
+   *  (→ don't catalog-fill components, or we'd post the base cocktail). */
+  templateMatched?: boolean;
 };
 
 async function claimNext(): Promise<Claim | null> {
@@ -49,8 +52,35 @@ async function report(body: Record<string, unknown>) {
   if (res.statusCode !== 200) log(`!! result rejected ${res.statusCode}: ${txt.slice(0, 150)}`);
 }
 
+/** A same-patient, same-DATE PB note whose title overlaps our intended note /
+ *  template — i.e. a likely duplicate (staff already charted it by hand, or a
+ *  prior untracked post). Returns the existing note's name, or null. Defensive:
+ *  a list failure resolves to null so a transient read error never blocks a post.
+ *  This is the guard for the "didn't recognize an existing same-day note" bug. */
+async function findSameDayDuplicate(
+  pb: PbSession,
+  clientRecordId: string,
+  sessionDate: string,
+  title: string,
+  templateHint: string | null,
+): Promise<string | null> {
+  const dateKey = (sessionDate ?? "").slice(0, 10);
+  if (!dateKey) return null;
+  const notes = await listSessionNotes(pb, clientRecordId).catch(() => [] as Awaited<ReturnType<typeof listSessionNotes>>);
+  const norm = (x?: string | null) => (x ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const keys = [norm(templateHint), norm(title)].filter((k) => k.length >= 4);
+  for (const n of notes) {
+    const meta = n as Record<string, unknown>;
+    const nDate = String(meta.sessionDate ?? meta.date ?? "").slice(0, 10);
+    if (nDate !== dateKey) continue;
+    const nName = norm(n.name);
+    if (nName && keys.some((k) => nName.includes(k) || k.includes(nName))) return n.name ?? "(untitled)";
+  }
+  return null;
+}
+
 async function handle(claim: Claim, pb: PbSession) {
-  const { job, session: s, identity, referenceNoteId } = claim;
+  const { job, session: s, identity, referenceNoteId, templateMatched } = claim;
   // EBOO/EBO2 are charted by hand in PB (no standardized template) — never auto-post.
   if (s.kind === "ebo") {
     await report({ jobId: job.id, sessionId: s.id, outcome: "held", score: null, reason: "EBOO/EBO2 charted manually in PB (auto-post disabled)" });
@@ -87,7 +117,9 @@ async function handle(claim: Claim, pb: PbSession) {
   // re-captured. Built lazily so a low-confidence hold doesn't fetch the ref.
   const buildContentOrHold = async () => {
     const ref = await getSessionNote(pb, referenceNoteId);
-    const content = buildIvNoteContent(scaffoldFromNote(ref), chart);
+    // Only an EXPLICIT false (new endpoint, base-IV fallback) suppresses the
+    // catalog fill. undefined (old endpoint, mid-deploy) keeps prior behavior.
+    const content = buildIvNoteContent(scaffoldFromNote(ref), chart, { baseFallback: templateMatched === false });
     if (content.length === 0) {
       await report({ jobId: job.id, sessionId: s.id, outcome: "held", score: null, reason: `reference scaffold for "${s.templateHint}" is empty — re-capture its reference note (iv_template_refs)` });
       log(`hold (empty scaffold) session=${s.id} template="${s.templateHint}"`);
@@ -129,6 +161,15 @@ async function handle(claim: Claim, pb: PbSession) {
   if (!best.autoPostable) {
     await report({ jobId: job.id, sessionId: s.id, outcome: "held", score: best.score, reason: best.reason, pbClientRecordId: best.candidate.id });
     log(`hold (low confidence) session=${s.id}: ${best.reason}`);
+    return;
+  }
+
+  // Duplicate guard: never auto-create a 2nd note when this patient already has a
+  // matching note for this date (staff hand-charted it, or a prior untracked post).
+  const dupeName = await findSameDayDuplicate(pb, best.candidate.id, s.sessionDate, title, s.templateHint);
+  if (dupeName) {
+    await report({ jobId: job.id, sessionId: s.id, outcome: "held", score: best.score, reason: `existing note for ${s.sessionDate} ("${dupeName}") — verify before creating a duplicate`, pbClientRecordId: best.candidate.id });
+    log(`hold (possible duplicate) session=${s.id}: existing "${dupeName}"`);
     return;
   }
 

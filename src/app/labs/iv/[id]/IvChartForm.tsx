@@ -11,6 +11,7 @@ import {
   type Vitals,
 } from "../actions";
 import { ivChartMissing, IV_PROVIDERS, QUICK_FILL_NORMAL } from "../chart-util";
+import { IV_COMPONENTS, componentForLabel } from "../component-catalog";
 
 const INPUT =
   "w-full rounded border border-zinc-300 px-2 py-1 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none";
@@ -67,9 +68,21 @@ function RadioRow<T extends string>({ options, value, onChange }: { options: Arr
   );
 }
 
-export function IvChartForm({ session }: { session: IvSessionDetail }) {
+export function IvChartForm({
+  session,
+  templateComponents = [],
+}: {
+  session: IvSessionDetail;
+  templateComponents?: ComponentRow[];
+}) {
   const [chart, setChart] = useState<IvChart>(() => {
     const c = (session.chart ?? {}) as IvChart;
+    // Prefill priority: staff-saved components → template's cached components →
+    // one blank row. Template rows match what posts (cached from the PB note), so
+    // an unedited chart posts the same note the auto-fill path would.
+    const prefill: ComponentRow[] = templateComponents.length
+      ? templateComponents.map((t) => ({ name: t.name ?? "", standardDose: t.standardDose ?? "", addOnDose: "", lot: "", exp: "" }))
+      : [{ name: "", standardDose: "", addOnDose: "", lot: "", exp: "" }];
     return {
       assessment: c.assessment ?? {},
       preVitals: c.preVitals ?? {},
@@ -78,7 +91,7 @@ export function IvChartForm({ session }: { session: IvSessionDetail }) {
       attempts: c.attempts,
       location: c.location,
       infusionFlowingWell: c.infusionFlowingWell,
-      components: c.components?.length ? c.components : [{ name: "", standardDose: "", addOnDose: "", lot: "", exp: "" }],
+      components: c.components?.length ? c.components : prefill,
       infusionReaction: c.infusionReaction ?? { occurred: false },
       ivRemoval: c.ivRemoval,
       provider: c.provider ?? session.therapist_name ?? "",
@@ -98,6 +111,19 @@ export function IvChartForm({ session }: { session: IvSessionDetail }) {
   const set = (patch: Partial<IvChart>) => setChart((c) => ({ ...c, ...patch }));
   const setComp = (i: number, patch: Partial<ComponentRow>) =>
     setChart((c) => ({ ...c, components: (c.components ?? []).map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
+  // Picking a catalog product (exact datalist match) also stamps its standard
+  // dose — but only into an empty cell, so a hand-entered dose is never clobbered.
+  const setCompName = (i: number, name: string) =>
+    setChart((c) => ({
+      ...c,
+      components: (c.components ?? []).map((r, j) => {
+        if (j !== i) return r;
+        const hit = componentForLabel(name);
+        const next: ComponentRow = { ...r, name };
+        if (hit?.standardDose && !(r.standardDose ?? "").trim()) next.standardDose = hit.standardDose;
+        return next;
+      }),
+    }));
   // Quick fill: stamp the "normal visit" boilerplate (assessment, cath, attempts,
   // location, flowing, no reaction, removed) without touching vitals/components.
   const quickFill = () => setChart((c) => ({ ...c, ...QUICK_FILL_NORMAL, assessment: { ...c.assessment, ...QUICK_FILL_NORMAL.assessment } }));
@@ -226,12 +252,17 @@ export function IvChartForm({ session }: { session: IvSessionDetail }) {
 
       <Section title="Components">
         <div className="space-y-2">
+          <datalist id="iv-components">
+            {IV_COMPONENTS.map((c) => (
+              <option key={c.label} value={c.label} />
+            ))}
+          </datalist>
           <div className="hidden grid-cols-[1fr_110px_110px_24px] gap-2 text-[11px] font-medium text-zinc-500 sm:grid">
             <span>Product</span><span>Std dose</span><span>Add-on</span><span />
           </div>
           {(chart.components ?? []).map((r, i) => (
             <div key={i} className="grid grid-cols-2 gap-2 sm:grid-cols-[1fr_110px_110px_24px]">
-              <input className={INPUT} placeholder="Product" value={r.name ?? ""} onChange={(e) => setComp(i, { name: e.target.value })} />
+              <input className={INPUT} list="iv-components" placeholder="Search product…" value={r.name ?? ""} onChange={(e) => setCompName(i, e.target.value)} />
               <input className={INPUT} placeholder="Std dose" value={r.standardDose ?? ""} onChange={(e) => setComp(i, { standardDose: e.target.value })} />
               <input className={INPUT} placeholder="Add-on" value={r.addOnDose ?? ""} onChange={(e) => setComp(i, { addOnDose: e.target.value })} />
               <button type="button" aria-label="Remove row" className="text-zinc-400 hover:text-red-600" onClick={() => set({ components: (chart.components ?? []).filter((_, j) => j !== i) })}>×</button>
@@ -240,7 +271,7 @@ export function IvChartForm({ session }: { session: IvSessionDetail }) {
           <button type="button" className="text-xs font-medium text-zinc-600 hover:text-zinc-900" onClick={() => set({ components: [...(chart.components ?? []), { name: "", standardDose: "", addOnDose: "" }] })}>
             + Add component
           </button>
-          <p className="text-[11px] text-zinc-400">This table is exactly what posts to the PB note — enter each component given, with its dose. (Lot # / stock tracking is coming separately.)</p>
+          <p className="text-[11px] text-zinc-400">{templateComponents.length ? "Prefilled from this template — edit, remove, or add (type to search) as needed. " : ""}This table is exactly what posts to the PB note — enter each component given, with its dose. (Lot # / stock tracking is coming separately.)</p>
         </div>
       </Section>
 

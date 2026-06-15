@@ -93,11 +93,13 @@ export async function POST(request: Request) {
   // straight '), so match on a NORMALIZED form rather than exact eq — otherwise
   // e.g. "Myers’ Cocktail" never finds "Myers' Cocktail" and the post holds.
   let referenceNoteId: string | null = null;
+  let templateMatched = false; // true = matched this service's own template; false = base-IV fallback
   const { data: refs } = await db.from("iv_template_refs").select("template_hint, reference_note_id");
   const allRefs = refs ?? [];
   const normHint = normalizeTemplateHint(s.template_hint);
   if (normHint) {
     referenceNoteId = allRefs.find((r) => normalizeTemplateHint(r.template_hint) === normHint)?.reference_note_id ?? null;
+    if (referenceNoteId) templateMatched = true;
   }
   if (!referenceNoteId) {
     // Fallback: the base IV template for ad-hoc / custom / chelation / unmatched
@@ -130,5 +132,6 @@ export async function POST(request: Request) {
       phone: (s.patient_phone ?? "").trim() || seedPhone,
     },
     referenceNoteId: ref?.reference_note_id ?? null,
+    templateMatched,
   });
 }

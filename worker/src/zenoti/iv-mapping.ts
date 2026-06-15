@@ -59,9 +59,13 @@ function ivRemainder(serviceName: string): string {
 const ADDON_RE = /\badd[\s-]?on\b/i;
 const WEBER_RE = /\bweber\b/i;
 const EBO_RE = /\bebo(o|2)?\b|oxygenation|ozone/i;
-// "PC", "PC SP", "PC15 SP" — phosphatidylcholine. Anchored so it can't match a
-// stray "pc" inside another word.
-const PC_RE = /^pc(15)?(\s+sp)?$/i;
+// "PC", "PC SP" — phosphatidylcholine. A TRAILING NUMBER ("PC20") is the per-visit
+// vial/amp count: it rides on the same visit's base "IV - PC" as the dose detail,
+// so PC<n> is treated as an ADD-ON that folds into the one PC note (never its own
+// note — confirmed booking model: PC<n> always co-occurs with a base "IV - PC").
+// Anchored so a stray "pc" inside another word can't match.
+const PC_RE = /^pc\s?\d*(\s+sp)?$/i; // any PC: base ("PC") or vial variant ("PC20")
+const PC_VIAL_RE = /^pc\s?\d+(\s+sp)?$/i; // PC<n> specifically — the vial detail (add-on)
 const CUSTOM_RE = /^custom\b/i;
 
 /**
@@ -87,7 +91,8 @@ export function classifyIvService(
   const name = serviceName as string;
   const remainder = ivRemainder(name);
 
-  const isAddOn = ADDON_RE.test(name);
+  // PC<n> ("PC20") folds onto the visit's base PC note as the vial detail → add-on.
+  const isAddOn = ADDON_RE.test(name) || PC_VIAL_RE.test(remainder);
   const weber = WEBER_RE.test(remainder);
 
   let kind: IvKind;
