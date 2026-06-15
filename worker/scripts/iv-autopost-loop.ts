@@ -16,7 +16,10 @@
 
 import { request } from "undici";
 import { loadEnvLocal } from "../src/lib/load-env.js";
-import { pbLogin, type PbSession } from "../src/uploaders/practicebetter.js";
+import { pbLogin, searchPbPatientCandidates, type PbSession } from "../src/uploaders/practicebetter.js";
+import { listSessionNotes } from "../src/uploaders/pb-sessionnotes.js";
+import { parseInfusionTitle } from "../src/iv/build-note-content.js";
+import { pickBestMatch } from "../src/iv/match-patient.js";
 import { drainIvPosts } from "../src/iv/post-drain.js";
 
 loadEnvLocal();
@@ -33,9 +36,15 @@ const SWEEP_MINAGE_MIN = Number(process.env.IV_SWEEP_MINAGE_MIN ?? 60);
 const SWEEP_DAYS = process.env.IV_SWEEP_DAYS ?? "2";
 const DRAIN_MS = Number(process.env.IV_DRAIN_INTERVAL_MS ?? 5 * 60 * 1000);
 const RELOGIN_MS = Number(process.env.IV_RELOGIN_MS ?? 3 * 60 * 60 * 1000); // re-login every ~3h (PB sessions expire)
+const PC_ENRICH_EVERY_MIN = Number(process.env.IV_PC_ENRICH_EVERY_MIN ?? 10); // PC infusion-# enrich cadence
 
 const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Cap a promise so a hung external call can NEVER freeze the loop (the lesson
+ *  from the consumables incident). The underlying call may still settle in the
+ *  background; we just stop awaiting it. */
+const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
+  Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`timeout after ${ms}ms`)), ms))]);
 
 /** Current "HH:MM" + date (YYYY-MM-DD) in clinic time (America/New_York). */
 function nowEastern(): { hm: string; date: string } {
@@ -52,11 +61,42 @@ async function runSweep(minAgeMin: number, label: string) {
   log(`sweep(${label}) → ${txt}`);
 }
 
+/** Best-effort PC infusion-series enrich: pull pending PC sessions from the API,
+ *  look up each patient's last PC note in PB, and set the NEXT infusion # + vials.
+ *  Caller wraps this in withTimeout so it can never hang the drain loop. */
+async function enrichPcHistory(pb: PbSession): Promise<void> {
+  const res = await request(`${BASE}/api/worker/iv-pc-history`, { headers: { authorization: `Bearer ${SECRET}` } });
+  if (res.statusCode !== 200) { await res.body.text(); return; }
+  const { sessions } = (await res.body.json()) as {
+    sessions: Array<{ id: string; patient_full_name: string | null; patient_first_name: string | null; patient_last_name: string | null; patient_email: string | null; patient_phone: string | null }>;
+  };
+  const updates: Array<{ sessionId: string; infusionNumber: number; vialCount: string | null }> = [];
+  for (const s of sessions) {
+    const identity = { fullName: s.patient_full_name, firstName: s.patient_first_name, lastName: s.patient_last_name, email: s.patient_email, phone: s.patient_phone };
+    const cands = await searchPbPatientCandidates(pb, (identity.fullName || identity.email || "").trim());
+    const best = pickBestMatch(identity, cands);
+    if (!best || best.signals.name !== "full") continue; // name-confident only (read-only history)
+    const notes = await listSessionNotes(pb, best.candidate.id, 50);
+    const pcs = notes
+      .map((n) => ({ name: (n.name as string) ?? "", date: String((n as Record<string, unknown>).sessionDate ?? ""), p: parseInfusionTitle((n.name as string) ?? "") }))
+      .filter((x) => x.p && /phosphatidylcholine/i.test(x.name))
+      .sort((a, b) => b.date.localeCompare(a.date));
+    if (!pcs.length) continue;
+    updates.push({ sessionId: s.id, infusionNumber: pcs[0].p!.number + 1, vialCount: pcs[0].p!.vials });
+  }
+  if (updates.length) {
+    const r = await request(`${BASE}/api/worker/iv-pc-history`, { method: "POST", headers: { authorization: `Bearer ${SECRET}`, "content-type": "application/json" }, body: JSON.stringify({ updates }) });
+    log(`pc-history: set ${updates.length} infusion #(s) → ${r.statusCode}`);
+    await r.body.text();
+  }
+}
+
 async function main() {
   log(`IV auto-post loop up — drain every ${Math.round(DRAIN_MS / 1000)}s, periodic sweep every ${SWEEP_EVERY_MIN}m (≥${SWEEP_MINAGE_MIN}m old), full sweeps at ${SWEEP_TIMES.join(", ")} ET`);
   let pb: PbSession | null = null;
   let pbLoginMs = 0;
   let lastPeriodicMs = 0;
+  let lastPcEnrichMs = 0;
   const doneToday = new Set<string>(); // "<date> <HH:MM>" full-sweeps already run
 
   for (;;) {
@@ -86,6 +126,16 @@ async function main() {
       // A 401 means the PB session expired mid-run — drop it so we re-login next
       // cycle; the failed jobs self-heal when the next sweep re-enqueues them.
       if (authError) { log("PB 401 — re-login next cycle"); pb = null; }
+      // PC infusion-# enrich — best-effort + HARD timeout cap so it can never hang
+      // the loop (the consumables lesson). Throttled; uses the established PB session.
+      if (pb && Date.now() - lastPcEnrichMs > PC_ENRICH_EVERY_MIN * 60_000) {
+        try {
+          await withTimeout(enrichPcHistory(pb), 45_000);
+          lastPcEnrichMs = Date.now();
+        } catch (e) {
+          log(`pc-history enrich skipped: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
     } catch (e) {
       log(`!! cycle error: ${e instanceof Error ? e.message : e}`);
       pb = null; // re-login next cycle (covers expired PB session)
