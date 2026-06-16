@@ -19,9 +19,10 @@
     } catch {}
     return o;
   };
+  const abs = (u) => { try { return new URL(u, location.href).href; } catch { return u; } };
   const of = window.fetch;
   window.fetch = async function (input, init) {
-    const url = typeof input === "string" ? input : (input && input.url) || "";
+    const url = abs(typeof input === "string" ? input : (input && input.url) || "");
     const method = (init && init.method) || (typeof input === "object" && input && input.method) || "GET";
     const reqHeaders = hObj(init && init.headers);
     const reqBody = init && typeof init.body === "string" ? clip(init.body) : null;
@@ -38,7 +39,7 @@
   function WX() {
     const x = new OX();
     let _m = "GET", _u = "", _h = {};
-    const oo = x.open; x.open = function (m, u) { _m = m; _u = u; return oo.apply(x, arguments); };
+    const oo = x.open; x.open = function (m, u) { _m = m; _u = abs(u); return oo.apply(x, arguments); };
     const os = x.setRequestHeader; x.setRequestHeader = function (k, v) { _h[k] = v; return os.apply(x, arguments); };
     const osend = x.send; x.send = function (body) {
       x.addEventListener("loadend", () => {

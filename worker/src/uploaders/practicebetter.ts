@@ -237,6 +237,79 @@ export async function findPbPatient(
   };
 }
 
+/** Create a new PB client record from a patient's identity — for when a result
+ *  has no matching PB account (the "Maverick" case: the post otherwise fails
+ *  silently). Reverse-engineered live from PB's "Add a client" flow
+ *  (POST /api/consultant/records); uses the SAME write headers as labrequests/
+ *  sessionnotes. Returns the new PbPatient (its `id` is the clientRecordId to
+ *  post to). See the live-capture corpus / docs/PLAYBOOK.md "PB create client".
+ *
+ *  `sendInvitation` defaults to FALSE: a back-filled record exists only to carry
+ *  a result — we don't email a portal invitation to every patient we create. Set
+ *  true to invite them to the client portal.
+ *
+ *  DOB formats mirror PB exactly (captured): dayOfBirth "YYYY-MM-DD", dateOfBirth
+ *  ISO "YYYY-MM-DDT00:00:00.000Z". Both omitted when no DOB is known. The journal/
+ *  lifestyle flags replicate PB's UI new-client defaults so the record looks
+ *  UI-created. */
+export async function createPbPatient(
+  session: PbSession,
+  input: { firstName: string; lastName: string; email: string; dob?: string | null },
+  opts: { sendInvitation?: boolean } = {},
+): Promise<PbPatient> {
+  const firstName = (input.firstName ?? "").trim();
+  const lastName = (input.lastName ?? "").trim();
+  const email = (input.email ?? "").trim();
+  if (!firstName || !lastName || !email) {
+    throw new Error("createPbPatient requires firstName, lastName, and email");
+  }
+  const dob = (input.dob ?? "").trim().slice(0, 10); // YYYY-MM-DD
+  const profile: Record<string, unknown> = { firstName, lastName, emailAddress: email };
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dob)) {
+    profile.dayOfBirth = dob;
+    profile.dateOfBirth = `${dob}T00:00:00.000Z`;
+  }
+  const body = {
+    profile,
+    isActive: true,
+    sendInvitation: opts.sendInvitation ?? false,
+    documentsFolder: true,
+    enableJournal: false,
+    foodMoodJournal: false,
+    lifestyleJournal: false,
+    foodJournalOptions: { enableFood: true, enableWater: true },
+    lifestyleJournalOptions: {
+      enableActivity: true,
+      enableBowel: true,
+      enableMeasurements: true,
+      enableMood: true,
+      enableSleep: true,
+      importSettings: { importMeasurements: true },
+    },
+    additionalDetails: [],
+  };
+  const res = await pbRequest(`${PB_BASE}/api/consultant/records`, {
+    method: "POST",
+    headers: { ...pbApiHeaders(session), "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.statusCode !== 200 && res.statusCode !== 201) {
+    const text = await res.body.text();
+    throw new Error(`PB create patient failed ${res.statusCode}: ${text.slice(0, 300)}`);
+  }
+  const rec = (await res.body.json()) as {
+    id: string;
+    profile?: { firstName?: string; lastName?: string; dayOfBirth?: string; emailAddress?: string };
+  };
+  return {
+    id: rec.id,
+    firstName: rec.profile?.firstName ?? firstName,
+    lastName: rec.profile?.lastName ?? lastName,
+    dayOfBirth: rec.profile?.dayOfBirth ?? (profile.dayOfBirth as string | undefined) ?? null,
+    emailAddress: rec.profile?.emailAddress ?? email,
+  };
+}
+
 /** Like findPbPatient but returns ALL search candidates (for confidence
  *  scoring + tie detection by the IV poster). */
 export async function searchPbPatientCandidates(
