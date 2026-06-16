@@ -42,17 +42,19 @@ login — you ride the session the user is already in (MFA/CAPTCHA already passe
    (URLs/methods/status) as a cross-check — but it may omit bodies, which is why the
    interceptor exists.
 
-4. **Harvest.** Read the buffer and write it to a temp file, then distill:
+4. **Distill IN the browser, then merge.** Do NOT read raw `window.__ccCap` — it
+   carries cookies/tokens and the MCP layer **blocks** that blob from crossing
+   (verified 2026-06-16). Instead run `scripts/distill.js` via `javascript_tool`: it
+   reduces every call to a PHI/auth-free shape (header NAMES with secrets flagged,
+   body SCHEMAS — no values, no query strings) and returns `{hosts, endpointCounts,
+   map}`. Only that clean map crosses. Save the returned JSON to
+   `$TMPDIR/distilled.json` (Write tool), then from the repo root:
    ```
-   # in javascript_tool: JSON.stringify(window.__ccCap)
+   node .claude/skills/live-capture/scripts/harvest.mjs "$TMPDIR/distilled.json" worker/captures/live-api-map
    ```
-   Save that JSON to `$TMPDIR/cc-capture.json`, then run from the repo root:
-   ```
-   node .claude/skills/live-capture/scripts/harvest.mjs "$TMPDIR/cc-capture.json" worker/captures/live-api-map
-   ```
-   It merges into `worker/captures/live-api-map/<host>.json` — per-endpoint header
-   names (secrets masked), request/response schemas, statuses, query keys, counts.
-   Clear the buffer between flows with `window.__ccCap.length = 0` (javascript_tool).
+   It UNIONS the map into `worker/captures/live-api-map/<host>.json` across capture
+   sessions (header names, schemas, statuses, counts). Clear the buffer between flows
+   with `window.__ccCap.length = 0` (javascript_tool).
 
 5. **Use the corpus.** To build a scraper for an endpoint, read the host file and you
    have the method, path, required headers, and payload/response shape. Real auth
