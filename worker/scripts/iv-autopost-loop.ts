@@ -18,6 +18,7 @@ import { request } from "undici";
 import { loadEnvLocal } from "../src/lib/load-env.js";
 import { pbLogin, type PbSession } from "../src/uploaders/practicebetter.js";
 import { readPbInfusionSeed } from "../src/iv/pc-series.js";
+import { reportHeartbeat } from "../src/lib/heartbeat.js";
 import { drainIvPosts } from "../src/iv/post-drain.js";
 
 loadEnvLocal();
@@ -134,9 +135,12 @@ async function main() {
       // A 401 means the PB session expired mid-run — drop it so we re-login next
       // cycle; the failed jobs self-heal when the next sweep re-enqueues them.
       if (authError) { log("PB 401 — re-login next cycle"); pb = null; }
+      await reportHeartbeat("ivpost"); // cycle completed → liveness
     } catch (e) {
-      log(`!! cycle error: ${e instanceof Error ? e.message : e}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      log(`!! cycle error: ${msg}`);
       pb = null; // re-login next cycle (covers expired PB session)
+      await reportHeartbeat("ivpost", { status: "error", error: msg });
     }
     await sleep(DRAIN_MS);
   }

@@ -31,6 +31,10 @@ primary_region = "iad"
 #              The "full-proof" net for aged/forgotten cards.
 # Fly supervises these as real processes (reliable logs, restart on crash), unlike
 # ad-hoc `fly machine run` machines which exited immediately.
+# ⚠ FOOTGUN: a `fly deploy` can leave these always-on machines STOPPED (a stop is
+# not a crash, so nothing auto-restarts them) — the silent "Synced 8d ago" outage.
+# ALWAYS run `bash scripts/start-all-machines.sh` after a deploy. The heartbeat
+# watchdog (/api/cron/heartbeat-watch) emails if any loop still goes quiet.
 [processes]
   app = "node dist/server.js"
   zenoti = "npx tsx scripts/zenoti-auto-loop.ts"

@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/cron/heartbeat-watch",
+      "schedule": "0 13 * * *"
+    },
+    {
       "path": "/api/cron/stale-digest",
       "schedule": "0 14 * * *"
     },

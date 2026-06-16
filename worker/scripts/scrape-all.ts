@@ -16,6 +16,7 @@ import { materializePortalSessions } from "../src/lib/portal-sessions.js";
 import { loadRecipes } from "../src/recipes/load.js";
 import { makeRecipeScraper } from "../src/recipes/runner.js";
 import { fetchOpenCases, postResultReady } from "../src/tracker-client.js";
+import { reportHeartbeat } from "../src/lib/heartbeat.js";
 import { vibrantScraper } from "../src/scrapers/vibrant.js";
 import type { LabScraper } from "../src/scrapers/base.js";
 
@@ -94,10 +95,15 @@ async function runOnce() {
   for (const lab of LABS) {
     try {
       await scrapeLab(lab);
+      await reportHeartbeat(`scrape:${lab}`);
     } catch (err) {
-      log(`${lab}: FATAL ${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`${lab}: FATAL ${msg}`);
+      await reportHeartbeat(`scrape:${lab}`, { status: "error", error: msg });
     }
   }
+  // Whole-cycle liveness — the watchdog alerts if this stops landing.
+  await reportHeartbeat("scrape-loop");
 }
 
 async function main() {

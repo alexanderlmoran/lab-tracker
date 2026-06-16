@@ -5,6 +5,7 @@
 
 import { NextResponse } from "next/server";
 import { refreshTrackingForActiveCasesCore } from "@/lib/tracking/refresh-core";
+import { getSupabaseAdmin } from "@/utils/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +42,21 @@ export async function GET(request: Request) {
   if (!result.ok) {
     return NextResponse.json(result, { status: 500 });
   }
+  // Heartbeat: this loop (worker every ~2h) is what feeds the "tracking" health
+  // signal. Recording it here means the watchdog notices if FedEx refresh stops
+  // (the "Synced 8d ago" symptom) instead of it dying silently.
+  try {
+    const now = new Date().toISOString();
+    await getSupabaseAdmin()
+      .from("lab_scraper_status")
+      .upsert(
+        { portal_key: "tracking", last_check_at: now, last_success_at: now, consecutive_failures: 0, last_error: null },
+        { onConflict: "portal_key" },
+      );
+  } catch {
+    // best-effort heartbeat — never fail the refresh on it
+  }
+
   return NextResponse.json({
     ok: true,
     polled: result.polled,

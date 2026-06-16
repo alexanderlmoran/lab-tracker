@@ -292,6 +292,93 @@ export async function runStaleDigest(opts: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Reliability watchdog — alert when a worker loop goes quiet (the backbone)
+// ─────────────────────────────────────────────────────────────────────────
+
+export type HeartbeatWatchSummary = {
+  ok: boolean;
+  staleCount: number;
+  stale: Array<{ key: string; label: string; reason: string }>;
+  missing: string[];
+  recipient?: string;
+  emailMessageId?: string;
+  emailError?: string;
+};
+
+/** Loops we expect alive, and how long WITHOUT A SUCCESS is too long. Keys match
+ *  the heartbeats written by the worker loops + /api/worker/cases (zenoti-sync). */
+const WATCHED_LOOPS: Array<{ key: string; label: string; maxAgeH: number }> = [
+  { key: "zenoti-sync", label: "Zenoti sync", maxAgeH: 2 },
+  { key: "scrape-loop", label: "Portal scrape loop", maxAgeH: 6 },
+  { key: "tracking", label: "FedEx tracking refresh", maxAgeH: 8 },
+  { key: "ivpost", label: "IV auto-post loop", maxAgeH: 3 },
+];
+
+/**
+ * Push half of the reliability backbone: reads the worker heartbeats
+ * (lab_scraper_status) and emails an alert if any watched loop has gone stale (no
+ * success within its window) or is failing repeatedly. So an 8-day silent outage
+ * pages a human on day 1 instead of being discovered by a missing result. A
+ * "missing" key (no row yet) is noted but never fires an email by itself, so a
+ * fresh deploy (before a loop's first cycle) doesn't false-alarm.
+ */
+export async function runHeartbeatWatch(): Promise<HeartbeatWatchSummary> {
+  const db = getSupabaseAdmin();
+  const { data } = await db
+    .from("lab_scraper_status")
+    .select("portal_key, last_success_at, consecutive_failures, last_error")
+    .in("portal_key", WATCHED_LOOPS.map((w) => w.key));
+  const byKey = new Map((data ?? []).map((r) => [r.portal_key as string, r]));
+  const now = Date.now();
+  const stale: Array<{ key: string; label: string; reason: string }> = [];
+  const missing: string[] = [];
+  for (const w of WATCHED_LOOPS) {
+    const row = byKey.get(w.key);
+    if (!row) { missing.push(w.label); continue; }
+    const failures = (row.consecutive_failures as number | null) ?? 0;
+    const last = row.last_success_at ? new Date(row.last_success_at as string).getTime() : 0;
+    const ageH = last ? (now - last) / 3_600_000 : Infinity;
+    if (failures >= 3) {
+      stale.push({ key: w.key, label: w.label, reason: `${failures} consecutive failures${row.last_error ? ` — ${String(row.last_error).slice(0, 120)}` : ""}` });
+    } else if (ageH > w.maxAgeH) {
+      stale.push({ key: w.key, label: w.label, reason: last ? `no success in ${Math.round(ageH)}h (expected ≤ ${w.maxAgeH}h)` : "no successful run on record" });
+    }
+  }
+  if (stale.length === 0) return { ok: true, staleCount: 0, stale: [], missing };
+
+  const recipient = await digestRecipient();
+  const url = `${appBaseUrl()}/labs/analytics`;
+  const rowsHtml = stale
+    .map((s) => `<tr><td style="padding:4px 12px 4px 0;font-weight:600;">${escapeHtml(s.label)}</td><td style="padding:4px 0;color:#b91c1c;">${escapeHtml(s.reason)}</td></tr>`)
+    .join("");
+  const missingNote = missing.length
+    ? `<p style="margin:8px 0 0;color:#a16207;font-size:12px;">No heartbeat yet (normal right after a deploy): ${missing.map(escapeHtml).join(", ")}.</p>`
+    : "";
+  const html = `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#18181b;">
+<h2 style="margin:0 0 6px;font-size:16px;color:#b91c1c;">⚠ Automation health alert</h2>
+<p style="margin:0 0 10px;color:#52525b;font-size:13px;">${stale.length} worker loop(s) have gone quiet or are failing — results may not be syncing/posting until restarted.</p>
+<table style="font-size:13px;border-collapse:collapse;">${rowsHtml}</table>${missingNote}
+<p style="margin:14px 0 0;font-size:12px;color:#71717a;">Most common cause: a deploy left the Fly machine stopped — <code>fly machine start &lt;id&gt;</code>. Health view → <a href="${url}" style="color:#4338ca;">${escapeHtml(url)}</a></p>
+</body></html>`;
+  const text =
+    `Automation health alert\n\n${stale.length} worker loop(s) quiet/failing:\n` +
+    stale.map((s) => `- ${s.label}: ${s.reason}`).join("\n") +
+    (missing.length ? `\n\nNo heartbeat yet: ${missing.join(", ")}` : "") +
+    `\n\nMost common cause: a deploy left the Fly machine stopped — fly machine start <id>.\nHealth: ${url}\n`;
+
+  const send = await dispatchInternal({ to: recipient, subject: "⚠ Lab automation health alert", html, text });
+  return {
+    ok: send.ok,
+    staleCount: stale.length,
+    stale,
+    missing,
+    recipient,
+    emailMessageId: send.ok ? send.messageId : undefined,
+    emailError: send.ok ? undefined : send.error,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // #9 — RoF scheduling reminder
 // ─────────────────────────────────────────────────────────────────────────
 

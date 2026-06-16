@@ -159,10 +159,10 @@ export async function HudPulse({ user, cases }: HudPulseProps) {
               {lastSyncLabel ? (
                 <span
                   className="chip sync"
-                  title="Most recent tracking refresh in the visible queue"
+                  title="Most recent FedEx tracking refresh in the visible queue. Full pipeline health (Zenoti/scrape/post) lives on the Analytics → Health tab; the watchdog emails if any loop goes quiet."
                 >
                   <span className="dot" />
-                  Synced {lastSyncLabel}
+                  Tracking {lastSyncLabel}
                 </span>
               ) : null}
             </span>
