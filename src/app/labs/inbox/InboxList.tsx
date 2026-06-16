@@ -121,6 +121,20 @@ function isLikelyReport(e: EmailRow): boolean {
 /** Status badge, with the Kennedy Krieger special case: applied via the
  * auto-forward reads "forwarded", not "posted" (nothing went to PB). */
 function statusFor(e: EmailRow): { label: string; cls: string; title: string } {
+  if (e.applied_action === "pb_failed") {
+    return {
+      label: "post failed",
+      cls: "bg-red-100 text-red-700",
+      title: "The PracticeBetter upload failed (often: no matching PB patient). Open for the error; fix the match / create the patient in PB, then re-post.",
+    };
+  }
+  if (e.parser_status === "applied" && e.applied_action === "queued_to_pb") {
+    return {
+      label: "posting…",
+      cls: "bg-amber-100 text-amber-800",
+      title: "Queued to PracticeBetter — waiting for the worker. Becomes 'posted' on a verified write, or 'post failed' if no PB patient matches.",
+    };
+  }
   if (e.parser_status === "applied" && e.applied_action === "forwarded_bodybio") {
     return {
       label: "forwarded",
@@ -339,6 +353,12 @@ function InboxDetail({
           </p>
         ) : null}
 
+        {email.applied_action === "pb_failed" && email.parser_error ? (
+          <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">
+            PracticeBetter post failed: {email.parser_error}. Fix the patient match (or create the patient in PB), then re-post.
+          </p>
+        ) : null}
+
         {isManualPull ? (
           <div className="flex flex-wrap items-center gap-2 rounded-md bg-purple-50 px-3 py-2 text-xs text-purple-800">
             <span>Notification email — no PDF attached. Pull this result from the lab portal.</span>
@@ -433,9 +453,11 @@ function InboxDetail({
 
       <div className="border-t border-zinc-200 px-5 py-3">
         {email.parser_status === "applied" ? (
-          <span className="text-xs text-emerald-700">
+          <span className={`text-xs ${email.applied_action === "queued_to_pb" ? "text-amber-700" : "text-emerald-700"}`}>
             {email.applied_action === "forwarded_bodybio"
               ? `Forwarded to BodyBio${email.reviewed_by === "auto:kk-forward" ? " automatically" : ""} — nothing left to do.`
+              : email.applied_action === "queued_to_pb"
+              ? `Posting to PracticeBetter… — the inbox will show "posted" once the worker confirms a verified write (or "post failed" if no patient matches).`
               : `Posted${email.reviewed_by ? ` by ${email.reviewed_by}` : ""} — nothing left to do.`}
           </span>
         ) : email.parser_status === "dismissed" ? (

@@ -297,10 +297,15 @@ export async function postInboundToPb(input: {
 
   const { data: row } = await db
     .from("inbound_emails")
-    .select("id, external_id, source, subject")
+    .select("id, external_id, source, subject, parser_extracted")
     .eq("id", inboundId)
     .maybeSingle();
   if (!row) return { ok: false, error: "Email not found" };
+  // The parsed panel ("Comprehensive Stool Analysis") is the descriptor the PB
+  // title composer wants — without it an inbox case titles as just the vendor
+  // ("Access"). composePbLabTitle reads it from the case's zenoti_service_name.
+  const parsedPanel =
+    ((row as { parser_extracted: { test_panel?: string | null } | null }).parser_extracted?.test_panel ?? "").trim() || null;
   const externalId = (row as { external_id: string | null }).external_id;
   if ((row as { source: string }).source !== "gmail_poll" || !externalId) {
     return { ok: false, error: "Only Gmail-ingested emails can be posted (no stored PDF bytes)." };
@@ -356,6 +361,9 @@ export async function postInboundToPb(input: {
         patient_dob:
           createCase.patientDob ?? (kin as { patient_dob: string | null } | null)?.patient_dob ?? null,
         lab_name: createCase.labName,
+        // Carry the parsed panel as the title descriptor so the PB note reads
+        // "Access — Comprehensive Stool Analysis", not bare "Access".
+        zenoti_service_name: parsedPanel,
         collection_date: createCase.collectionDate ?? null,
       })
       .select("id")
@@ -381,11 +389,16 @@ export async function postInboundToPb(input: {
   });
   if (!up.ok) return { ok: false, error: up.error };
 
+  // We've QUEUED the PB upload — we have NOT posted yet. Marking "posted_to_pb"
+  // here was the bug: if the worker's PB patient lookup fails (e.g. the patient
+  // has no PB account), the result silently never lands but the inbox still read
+  // "posted". Mark it "queued_to_pb" (shows "posting…"); the worker's result
+  // route flips it to posted on a verified write, or to "post failed" on failure.
   await db
     .from("inbound_emails")
     .update({
       parser_status: "applied",
-      applied_action: "posted_to_pb",
+      applied_action: "queued_to_pb",
       matched_case_id: caseId,
       reviewed_by: user.email ?? "admin",
       reviewed_at: new Date().toISOString(),

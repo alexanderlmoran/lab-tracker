@@ -147,6 +147,19 @@ export async function POST(request: Request) {
       console.error("[pb-upload/result] complete-upload notify failed", err);
     }
 
+    // If this case was posted from the inbox, flip its inbound row from the
+    // "queued_to_pb" (posting…) interim state to a VERIFIED posted state. No-op
+    // for non-inbox cases (no matching inbound row). Best-effort.
+    try {
+      await db
+        .from("inbound_emails")
+        .update({ applied_action: "posted_to_pb", parser_error: null })
+        .eq("matched_case_id", job.case_id)
+        .eq("applied_action", "queued_to_pb");
+    } catch (err) {
+      console.error("[pb-upload/result] inbound posted-flip failed", err);
+    }
+
     return NextResponse.json({ ok: true });
   }
 
@@ -168,6 +181,20 @@ export async function POST(request: Request) {
     notes: parsed.error.slice(0, 500),
     meta: { job_id: job.id },
   });
+
+  // If this came from the inbox, surface the failure on the inbound row instead
+  // of leaving it reading "posting…" forever (or, pre-fix, a false "posted").
+  // Back to actionable ("to review") + a "post failed" marker + the error, so
+  // staff can fix the patient match / create the PB account and re-post.
+  try {
+    await db
+      .from("inbound_emails")
+      .update({ parser_status: "parsed", applied_action: "pb_failed", parser_error: parsed.error.slice(0, 500) })
+      .eq("matched_case_id", job.case_id)
+      .eq("applied_action", "queued_to_pb");
+  } catch (err) {
+    console.error("[pb-upload/result] inbound failed-flip failed", err);
+  }
 
   return NextResponse.json({ ok: true });
 }
