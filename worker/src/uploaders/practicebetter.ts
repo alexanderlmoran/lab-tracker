@@ -244,9 +244,9 @@ export async function findPbPatient(
  *  sessionnotes. Returns the new PbPatient (its `id` is the clientRecordId to
  *  post to). See the live-capture corpus / docs/PLAYBOOK.md "PB create client".
  *
- *  `sendInvitation` defaults to FALSE: a back-filled record exists only to carry
- *  a result — we don't email a portal invitation to every patient we create. Set
- *  true to invite them to the client portal.
+ *  `sendInvitation` defaults to TRUE (Alex 2026-06-16): PB's invitation email IS
+ *  the patient's first portal login, so every created patient gets invited — same
+ *  rationale as the labrequest notify flag. Pass false to suppress.
  *
  *  DOB formats mirror PB exactly (captured): dayOfBirth "YYYY-MM-DD", dateOfBirth
  *  ISO "YYYY-MM-DDT00:00:00.000Z". Both omitted when no DOB is known. The journal/
@@ -272,7 +272,7 @@ export async function createPbPatient(
   const body = {
     profile,
     isActive: true,
-    sendInvitation: opts.sendInvitation ?? false,
+    sendInvitation: opts.sendInvitation ?? true,
     documentsFolder: true,
     enableJournal: false,
     foodMoodJournal: false,
