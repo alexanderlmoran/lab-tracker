@@ -3,6 +3,34 @@
 Active + deferred work for the IV charting feature. See also
 [project memory] and `docs/TRACKER_BACKLOG.md`.
 
+## 2026-06-16 — PC infusion # ledger (built, NOT yet applied/deployed)
+
+Fixed the PC numbering mismatch (Leila's note posted without "#30"). Root cause:
+the number was re-derived from PB note titles by a separate enrich pass that the
+auto-post drain raced (drain posted first → bare "Phosphatidylcholine Infusion").
+
+Built a **local ledger** (`iv_infusion_series`) we own: seeded ONCE per patient
+from PB, then the number is assigned atomically at post time and never re-read
+from PB. See the PLAYBOOK row "PC infusion #".
+
+**To go live (in order):**
+1. Apply `supabase/migrations/20260616_iv_infusion_series.sql` (Supabase SQL editor).
+2. Bootstrap: `cd worker && IV_SEED_COMMIT=1 npx tsx scripts/iv-enrich-pc-history.ts`
+   (dry-run first without the flag). Run from a clean IP (PB egress).
+3. Deploy app (Vercel) + worker (`cd worker && fly deploy`; then `fly machine start`
+   the stopped machines). Health check: `npx tsx scripts/iv-verify-ledger.ts`.
+
+**Hardened after code review** (6 findings fixed): staff # overrides now sync the
+ledger; ambiguous PB matches HOLD instead of auto-posting "#1"; the form peek is a
+placeholder, not a saved value (no duplicate #s across two pending sessions); the
+mint rolls back the ledger if the session write fails (no burned #s); the staff-
+confirmed path also holds when unnumbered; the seed GET only scans unposted PC
+sessions (no starvation at scale); PB-read seed logic centralized in
+`worker/src/iv/pc-series.ts`.
+
+**Remaining note:** `iv-verify-ledger.ts` lists already-posted PC notes with no #
+(pre-fix mismatches, incl. Leila's) — those are a manual PB re-title.
+
 ## Deferred (by decision)
 
 - **Lot # / stock / order logging** — _deferred 2026-06-11 (Alex)._

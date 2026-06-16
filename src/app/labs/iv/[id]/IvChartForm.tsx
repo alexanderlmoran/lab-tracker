@@ -95,8 +95,12 @@ export function IvChartForm({
       infusionReaction: c.infusionReaction ?? { occurred: false },
       ivRemoval: c.ivRemoval,
       provider: c.provider ?? session.therapist_name ?? "",
-      // Prefill Infusion #/Vials from the session (set by iv-enrich-pc-history from
-      // the patient's last PC note) unless the chart already has them.
+      // Prefill # only with the ASSIGNED number (pc_infusion_number); the
+      // next-in-series peek (pc_next_number) is shown as a placeholder, NOT baked
+      // into the value — so an untouched field stays empty and the ledger mints
+      // the number at post time. Typing here is an explicit override (it then
+      // becomes authoritative and syncs the ledger). Avoids two pending sessions
+      // both saving the same peeked # → duplicate titles.
       pc: c.pc && (c.pc.infusionNumber != null || c.pc.vialCount)
         ? c.pc
         : { infusionNumber: session.pc_infusion_number ?? null, vialCount: session.pc_vial_count ?? undefined },
@@ -212,7 +216,10 @@ export function IvChartForm({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <div className={LABEL}>Infusion #</div>
-              <input className={INPUT} type="number" value={chart.pc?.infusionNumber ?? ""} placeholder="e.g. 30" onChange={(e) => set({ pc: { ...chart.pc, infusionNumber: e.target.value ? Number(e.target.value) : null } })} />
+              <input className={INPUT} type="number" value={chart.pc?.infusionNumber ?? ""} placeholder={session.pc_next_number ? `auto: #${session.pc_next_number}` : "e.g. 30"} onChange={(e) => set({ pc: { ...chart.pc, infusionNumber: e.target.value ? Number(e.target.value) : null } })} />
+              {session.pc_next_number != null && chart.pc?.infusionNumber == null && (
+                <div className="mt-1 text-[11px] text-neutral-500">Leave blank to auto-number #{session.pc_next_number}; type only to override.</div>
+              )}
             </div>
             <div>
               <div className={LABEL}># Vials</div>

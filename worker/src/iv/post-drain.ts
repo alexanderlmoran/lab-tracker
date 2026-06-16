@@ -107,9 +107,12 @@ async function handle(claim: Claim, pb: PbSession) {
   // Title/summary/date are pure (no PB call) — compute once for every branch.
   // Prefer the form-entered infusion#/vials (chart.pc) over the synced columns so
   // the "# Vials" / "Infusion #" charting fields actually reach the PC note title.
+  // The number assigned by the claim endpoint (s.pc.infusionNumber, written from
+  // the local ledger) is authoritative; the chart value is only a fallback. Vials
+  // are per-visit, so the chart's value wins for those.
   const title = ivNoteTitle({
     serviceName: s.serviceName, templateHint: s.templateHint, kind: s.kind,
-    pc: { infusionNumber: chart.pc?.infusionNumber ?? s.pc?.infusionNumber, vialCount: chart.pc?.vialCount ?? s.pc?.vialCount },
+    pc: { infusionNumber: s.pc?.infusionNumber ?? chart.pc?.infusionNumber, vialCount: chart.pc?.vialCount ?? s.pc?.vialCount },
   });
   const summary = ivNoteSummary(chart); // flags incomplete charting in PB
   const sessionDate = `${s.sessionDate}T12:00:00.000Z`;
@@ -123,6 +126,20 @@ async function handle(claim: Claim, pb: PbSession) {
   if (templateMatched === false && !hasComponents && !isRepost) {
     await report({ jobId: job.id, sessionId: s.id, outcome: "held", score: null, reason: "un-templated IV with no charted components — chart its components before posting (would post blank)" });
     log(`hold (un-templated, no components) session=${s.id} service="${s.serviceName}"`);
+    return;
+  }
+
+  // PC infusions are numbered from our LOCAL ledger (assigned at claim time in
+  // /api/worker/iv-post/next). A null number here means the patient hasn't been
+  // seeded from PB yet (or is an ambiguous match we won't auto-number) → HOLD
+  // rather than post an unnumbered "Phosphatidylcholine Infusion" (the title-
+  // mismatch bug). Applies to the staff-confirmed path too — vouching for the
+  // patient match doesn't license posting unnumbered; staff set the # on the chart
+  // form (it then becomes authoritative). Only re-posts skip (title already set).
+  const pcNumber = s.pc?.infusionNumber ?? chart.pc?.infusionNumber;
+  if (s.kind === "pc" && pcNumber == null && !isRepost) {
+    await report({ jobId: job.id, sessionId: s.id, outcome: "held", score: null, reason: "PC infusion # not set — auto-assigns once the patient's series is bootstrapped from PB, or enter it on the chart form" });
+    log(`hold (PC not numbered yet) session=${s.id}`);
     return;
   }
 

@@ -16,10 +16,8 @@
 
 import { request } from "undici";
 import { loadEnvLocal } from "../src/lib/load-env.js";
-import { pbLogin, searchPbPatientCandidates, type PbSession } from "../src/uploaders/practicebetter.js";
-import { listSessionNotes } from "../src/uploaders/pb-sessionnotes.js";
-import { parseInfusionTitle } from "../src/iv/build-note-content.js";
-import { pickBestMatch } from "../src/iv/match-patient.js";
+import { pbLogin, type PbSession } from "../src/uploaders/practicebetter.js";
+import { readPbInfusionSeed } from "../src/iv/pc-series.js";
 import { drainIvPosts } from "../src/iv/post-drain.js";
 
 loadEnvLocal();
@@ -36,7 +34,7 @@ const SWEEP_MINAGE_MIN = Number(process.env.IV_SWEEP_MINAGE_MIN ?? 60);
 const SWEEP_DAYS = process.env.IV_SWEEP_DAYS ?? "2";
 const DRAIN_MS = Number(process.env.IV_DRAIN_INTERVAL_MS ?? 5 * 60 * 1000);
 const RELOGIN_MS = Number(process.env.IV_RELOGIN_MS ?? 3 * 60 * 60 * 1000); // re-login every ~3h (PB sessions expire)
-const PC_ENRICH_EVERY_MIN = Number(process.env.IV_PC_ENRICH_EVERY_MIN ?? 10); // PC infusion-# enrich cadence
+const PC_SEED_EVERY_MIN = Number(process.env.IV_PC_ENRICH_EVERY_MIN ?? 10); // PC series-seed cadence (one-time PB read per patient)
 
 const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -61,32 +59,30 @@ async function runSweep(minAgeMin: number, label: string) {
   log(`sweep(${label}) → ${txt}`);
 }
 
-/** Best-effort PC infusion-series enrich: pull pending PC sessions from the API,
- *  look up each patient's last PC note in PB, and set the NEXT infusion # + vials.
- *  Caller wraps this in withTimeout so it can never hang the drain loop. */
-async function enrichPcHistory(pb: PbSession): Promise<void> {
+/** One-time-per-patient PC SERIES SEED: pull PC patients that have no ledger row
+ *  yet, read each one's PC count from PB ONCE (readPbInfusionSeed), and seed the
+ *  local ledger (iv_infusion_series). After this, the infusion number is owned
+ *  locally and assigned at post time — PB is never read for history again.
+ *  Ambiguous patients (PB candidates but no confident name match) are NOT seeded
+ *  → their post holds for staff (who set the #), never auto-posting a wrong #1.
+ *  Caller wraps this in withTimeout so it can never hang the loop. */
+async function seedPcSeries(pb: PbSession): Promise<void> {
   const res = await request(`${BASE}/api/worker/iv-pc-history`, { headers: { authorization: `Bearer ${SECRET}` } });
   if (res.statusCode !== 200) { await res.body.text(); return; }
-  const { sessions } = (await res.body.json()) as {
-    sessions: Array<{ id: string; patient_full_name: string | null; patient_first_name: string | null; patient_last_name: string | null; patient_email: string | null; patient_phone: string | null }>;
+  const { patients } = (await res.body.json()) as {
+    patients: Array<{ zenotiGuestId: string; patientFullName: string | null; patientFirstName: string | null; patientLastName: string | null; patientEmail: string | null; patientPhone: string | null }>;
   };
-  const updates: Array<{ sessionId: string; infusionNumber: number; vialCount: string | null }> = [];
-  for (const s of sessions) {
-    const identity = { fullName: s.patient_full_name, firstName: s.patient_first_name, lastName: s.patient_last_name, email: s.patient_email, phone: s.patient_phone };
-    const cands = await searchPbPatientCandidates(pb, (identity.fullName || identity.email || "").trim());
-    const best = pickBestMatch(identity, cands);
-    if (!best || best.signals.name !== "full") continue; // name-confident only (read-only history)
-    const notes = await listSessionNotes(pb, best.candidate.id, 50);
-    const pcs = notes
-      .map((n) => ({ name: (n.name as string) ?? "", date: String((n as Record<string, unknown>).sessionDate ?? ""), p: parseInfusionTitle((n.name as string) ?? "") }))
-      .filter((x) => x.p && /phosphatidylcholine/i.test(x.name))
-      .sort((a, b) => b.date.localeCompare(a.date));
-    if (!pcs.length) continue;
-    updates.push({ sessionId: s.id, infusionNumber: pcs[0].p!.number + 1, vialCount: pcs[0].p!.vials });
+  if (!patients?.length) return;
+  const seeds: Array<{ zenotiGuestId: string; lastNumber: number; lastVialCount: string | null; patientFullName: string | null }> = [];
+  for (const p of patients) {
+    const identity = { fullName: p.patientFullName, firstName: p.patientFirstName, lastName: p.patientLastName, email: p.patientEmail, phone: p.patientPhone };
+    const seed = await readPbInfusionSeed(pb, identity);
+    if (seed.lastNumber == null) { log(`pc-seed SKIP: "${identity.fullName}" — ${seed.reason}`); continue; }
+    seeds.push({ zenotiGuestId: p.zenotiGuestId, lastNumber: seed.lastNumber, lastVialCount: seed.lastVials, patientFullName: identity.fullName });
   }
-  if (updates.length) {
-    const r = await request(`${BASE}/api/worker/iv-pc-history`, { method: "POST", headers: { authorization: `Bearer ${SECRET}`, "content-type": "application/json" }, body: JSON.stringify({ updates }) });
-    log(`pc-history: set ${updates.length} infusion #(s) → ${r.statusCode}`);
+  if (seeds.length) {
+    const r = await request(`${BASE}/api/worker/iv-pc-history`, { method: "POST", headers: { authorization: `Bearer ${SECRET}`, "content-type": "application/json" }, body: JSON.stringify({ seeds }) });
+    log(`pc-seed: seeded ${seeds.length} patient(s) → ${r.statusCode}`);
     await r.body.text();
   }
 }
@@ -96,7 +92,7 @@ async function main() {
   let pb: PbSession | null = null;
   let pbLoginMs = 0;
   let lastPeriodicMs = 0;
-  let lastPcEnrichMs = 0;
+  let lastPcSeedMs = 0;
   const doneToday = new Set<string>(); // "<date> <HH:MM>" full-sweeps already run
 
   for (;;) {
@@ -121,21 +117,23 @@ async function main() {
         pbLoginMs = Date.now();
         log("PB session established");
       }
+      // PC series-seed runs BEFORE the drain so a just-synced PC patient gets
+      // bootstrapped, then numbered + posted in the SAME cycle (no race). One PB
+      // read per patient, ever; HARD timeout cap so it can never hang the loop
+      // (the consumables lesson). Throttled; uses the established PB session.
+      if (pb && Date.now() - lastPcSeedMs > PC_SEED_EVERY_MIN * 60_000) {
+        try {
+          await withTimeout(seedPcSeries(pb), 45_000);
+          lastPcSeedMs = Date.now();
+        } catch (e) {
+          log(`pc-seed skipped: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
       const { processed, authError } = await drainIvPosts(pb);
       if (processed) log(`drained ${processed} job(s)`);
       // A 401 means the PB session expired mid-run — drop it so we re-login next
       // cycle; the failed jobs self-heal when the next sweep re-enqueues them.
       if (authError) { log("PB 401 — re-login next cycle"); pb = null; }
-      // PC infusion-# enrich — best-effort + HARD timeout cap so it can never hang
-      // the loop (the consumables lesson). Throttled; uses the established PB session.
-      if (pb && Date.now() - lastPcEnrichMs > PC_ENRICH_EVERY_MIN * 60_000) {
-        try {
-          await withTimeout(enrichPcHistory(pb), 45_000);
-          lastPcEnrichMs = Date.now();
-        } catch (e) {
-          log(`pc-history enrich skipped: ${e instanceof Error ? e.message : String(e)}`);
-        }
-      }
     } catch (e) {
       log(`!! cycle error: ${e instanceof Error ? e.message : e}`);
       pb = null; // re-login next cycle (covers expired PB session)

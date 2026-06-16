@@ -121,7 +121,13 @@ export type IvChart = {
 
 export type IvSessionDetail = IvSessionRow & {
   patient_phone: string | null;
+  zenoti_guest_id: string | null;
   zenoti_note: string | null;
+  /** The NEXT PC infusion number from our local ledger (iv_infusion_series:
+   *  last_number + 1) — a read-only peek so the form prefills "#30" before the
+   *  number is actually assigned (it's assigned at post time). null when not a
+   *  PC session / patient not seeded yet / already numbered. */
+  pc_next_number: number | null;
 };
 
 export async function getIvSession(id: string): Promise<IvSessionDetail | null> {
@@ -129,11 +135,26 @@ export async function getIvSession(id: string): Promise<IvSessionDetail | null> 
   const db = getSupabaseAdmin();
   const { data, error } = await db
     .from("iv_sessions")
-    .select(`${IV_COLS}, patient_phone, zenoti_note`)
+    .select(`${IV_COLS}, patient_phone, zenoti_guest_id, zenoti_note`)
     .eq("id", id)
     .maybeSingle();
   if (error) throw new Error(error.message);
-  return (data as unknown as IvSessionDetail) ?? null;
+  if (!data) return null;
+  const detail = data as unknown as IvSessionDetail;
+  detail.pc_next_number = null;
+  // Peek the ledger so staff see the next infusion # before it's posted. Doesn't
+  // increment — the authoritative assignment happens once, at claim time.
+  if (detail.kind === "pc" && detail.pc_infusion_number == null && detail.zenoti_guest_id) {
+    const { data: ledger } = await db
+      .from("iv_infusion_series")
+      .select("last_number")
+      .eq("zenoti_guest_id", detail.zenoti_guest_id)
+      .eq("series", "pc")
+      .eq("seeded", true)
+      .maybeSingle();
+    if (ledger) detail.pc_next_number = ((ledger.last_number as number | null) ?? 0) + 1;
+  }
+  return detail;
 }
 
 /** The cached component rows for a template (product label + standard dose),

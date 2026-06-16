@@ -23,6 +23,95 @@ function normalizeTemplateHint(s: string | null | undefined): string {
     .trim();
 }
 
+/** Assign a PC session its infusion number from our LOCAL ledger
+ *  (iv_infusion_series) — the authoritative count, so we never parse PB note
+ *  titles or race the enrich pass. Returns { number, vialCount } or null.
+ *
+ *  Applies only to kind='pc' with a guest id, no number yet, and not a re-post.
+ *  Reads the SEEDED ledger row and atomically increments it (guarded update, so
+ *  two concurrent claims for one patient can't take the same number). If the row
+ *  isn't seeded yet (the worker hasn't done its one-time PB bootstrap for this
+ *  patient), returns null → the drain HOLDS the post instead of posting it
+ *  unnumbered (the bug this fixes). The seed lands within a loop cycle and the
+ *  next sweep re-posts it numbered.
+ *
+ *  Persists the number onto iv_sessions immediately so a re-post reuses it (never
+ *  a second increment) and the board shows it. */
+async function assignPcInfusionNumber(
+  db: ReturnType<typeof getSupabaseAdmin>,
+  s: {
+    id: string;
+    zenoti_guest_id: string | null;
+    kind: string;
+    chart: unknown;
+    pc_infusion_number: number | null;
+    pc_vial_count: string | null;
+    pb_note_id: string | null;
+  },
+): Promise<{ number: number; vialCount: string | null } | null> {
+  const guest = (s.zenoti_guest_id ?? "").trim();
+  if (s.kind !== "pc" || !guest || s.pc_infusion_number != null || s.pb_note_id) return null;
+
+  const chart = (s.chart as { pc?: { infusionNumber?: number | null; vialCount?: string } } | null) ?? null;
+  // The chart's per-visit vial count wins; the ledger's last value is a fallback.
+  const chartVials = (chart?.pc?.vialCount ?? "").trim();
+
+  // A staff-entered number on the form is AUTHORITATIVE — honor it AND sync the
+  // ledger up to it (create the row if absent), so the override propagates to the
+  // patient's future visits and the ledger never disagrees with what posted.
+  const staffNum = chart?.pc?.infusionNumber;
+  if (typeof staffNum === "number" && Number.isInteger(staffNum) && staffNum > 0) {
+    const vialCount = chartVials || s.pc_vial_count || null;
+    await db.from("iv_infusion_series").upsert(
+      { zenoti_guest_id: guest, series: "pc", last_number: staffNum, last_vial_count: vialCount, seeded: true, updated_at: new Date().toISOString() },
+      { onConflict: "zenoti_guest_id,series", ignoreDuplicates: false },
+    );
+    const { data: persisted } = await db.from("iv_sessions").update({ pc_infusion_number: staffNum, pc_vial_count: vialCount }).eq("id", s.id).is("pc_infusion_number", null).select("id").maybeSingle();
+    return persisted ? { number: staffNum, vialCount } : null;
+  }
+
+  // Auto-mint from a SEEDED ledger (atomic guarded increment).
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { data: ledger } = await db
+      .from("iv_infusion_series")
+      .select("last_number, last_vial_count")
+      .eq("zenoti_guest_id", guest)
+      .eq("series", "pc")
+      .eq("seeded", true)
+      .maybeSingle();
+    if (!ledger) return null; // not bootstrapped from PB yet → caller holds
+    const current = (ledger.last_number as number | null) ?? 0;
+    const next = current + 1;
+    const { data: bumped } = await db
+      .from("iv_infusion_series")
+      .update({ last_number: next, updated_at: new Date().toISOString() })
+      .eq("zenoti_guest_id", guest)
+      .eq("series", "pc")
+      .eq("last_number", current) // optimistic guard — fails if someone else bumped it
+      .select("last_number")
+      .maybeSingle();
+    if (!bumped) continue; // lost the race → re-read and retry
+    const vialCount = chartVials || s.pc_vial_count || (ledger.last_vial_count as string | null) || null;
+    // Persist guarded by IS NULL so a number is recorded exactly once. If the
+    // write fails or matched no row, ROLL THE LEDGER BACK so the number isn't
+    // burned (which would otherwise gap the sequence or double-increment on the
+    // next sweep), then bail → the drain holds and retries cleanly.
+    const { data: persisted } = await db
+      .from("iv_sessions")
+      .update({ pc_infusion_number: next, pc_vial_count: vialCount })
+      .eq("id", s.id)
+      .is("pc_infusion_number", null)
+      .select("id")
+      .maybeSingle();
+    if (!persisted) {
+      await db.from("iv_infusion_series").update({ last_number: current }).eq("zenoti_guest_id", guest).eq("series", "pc").eq("last_number", next);
+      return null;
+    }
+    return { number: next, vialCount };
+  }
+  return null; // extreme contention — hold this round, retry next sweep
+}
+
 export async function POST(request: Request) {
   const expected = process.env.WORKER_SHARED_SECRET;
   if (!expected) return NextResponse.json({ ok: false, error: "WORKER_SHARED_SECRET not configured" }, { status: 500 });
@@ -56,7 +145,7 @@ export async function POST(request: Request) {
   const { data: s, error: sErr } = await db
     .from("iv_sessions")
     .select(
-      "id, patient_full_name, patient_first_name, patient_last_name, patient_email, patient_phone, service_name, kind, template_hint, session_date, chart, pc_infusion_number, pc_vial_count, pb_note_id, pb_client_record_id",
+      "id, zenoti_guest_id, patient_full_name, patient_first_name, patient_last_name, patient_email, patient_phone, service_name, kind, template_hint, session_date, chart, pc_infusion_number, pc_vial_count, pb_note_id, pb_client_record_id",
     )
     .eq("id", claimed.session_id)
     .maybeSingle();
@@ -64,6 +153,12 @@ export async function POST(request: Request) {
     await db.from("iv_post_jobs").update({ status: "failed", last_error: "session not found", finished_at: new Date().toISOString() }).eq("id", claimed.id);
     return new NextResponse(null, { status: 204 });
   }
+
+  // Assign the PC infusion number from our local ledger (authoritative count) —
+  // never re-derived from PB titles, never racing the enrich pass. null means the
+  // patient isn't bootstrapped from PB yet → the drain holds the post (it won't
+  // post unnumbered).
+  const assignedPc = await assignPcInfusionNumber(db, s);
 
   // Enrich identity from patients_seed (DOB/email/phone keyed by name or email).
   let dob: string | null = null;
@@ -118,7 +213,10 @@ export async function POST(request: Request) {
       templateHint: s.template_hint,
       sessionDate: s.session_date,
       chart: s.chart ?? {},
-      pc: { infusionNumber: s.pc_infusion_number, vialCount: s.pc_vial_count },
+      pc: {
+        infusionNumber: assignedPc?.number ?? s.pc_infusion_number,
+        vialCount: assignedPc?.vialCount ?? s.pc_vial_count,
+      },
       // Set once this session was posted — drives update-vs-create on re-post.
       pbNoteId: s.pb_note_id,
       pbClientRecordId: s.pb_client_record_id,
