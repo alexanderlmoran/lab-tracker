@@ -22,6 +22,7 @@
 import { request } from "undici";
 import { chromium } from "playwright";
 import { loadEnvLocal } from "../src/lib/load-env.js";
+import { reportHeartbeat } from "../src/lib/heartbeat.js";
 
 loadEnvLocal();
 
@@ -426,8 +427,11 @@ async function main() {
   for (;;) {
     try {
       await runOnce();
+      await reportHeartbeat("reconcile");
     } catch (err) {
-      log(`cycle error (continuing): ${err instanceof Error ? err.message : err}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`cycle error (continuing): ${msg}`);
+      await reportHeartbeat("reconcile", { status: "error", error: msg });
     }
     await sleep(intervalMs);
   }

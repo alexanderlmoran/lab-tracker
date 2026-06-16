@@ -6,6 +6,7 @@
 
 import { request } from "undici";
 import { loadEnvLocal } from "../src/lib/load-env.js";
+import { reportHeartbeat } from "../src/lib/heartbeat.js";
 
 loadEnvLocal();
 
@@ -33,12 +34,18 @@ async function tick(): Promise<void> {
     error?: string;
   };
   if (!body.ok) {
-    log(`sync not ok: ${body.error ?? `status ${res.statusCode}`}`);
+    // "Gmail not connected" (expired/revoked OAuth) returns ok:false — count it as
+    // a FAILURE, not a quiet skip, so the watchdog flags a dead token instead of
+    // the loop looping forever doing nothing (inbox ingest + KK forward stop).
+    const err = body.error ?? `status ${res.statusCode}`;
+    log(`sync not ok: ${err}`);
+    await reportHeartbeat("gmailsync", { status: "error", error: err });
     return;
   }
   if ((body.processed ?? 0) > 0 || (body.errors ?? 0) > 0) {
     log(`processed ${body.processed}, skipped ${body.skipped}, errors ${body.errors}`);
   }
+  await reportHeartbeat("gmailsync");
 }
 
 async function main() {
@@ -48,7 +55,9 @@ async function main() {
     try {
       await tick();
     } catch (err) {
-      log(`tick error: ${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`tick error: ${msg}`);
+      await reportHeartbeat("gmailsync", { status: "error", error: msg });
     }
     await sleep(intervalMs);
   }

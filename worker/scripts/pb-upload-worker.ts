@@ -29,6 +29,7 @@ import { request } from "undici";
 
 import { loadEnvLocal } from "../src/lib/load-env.js";
 import { uploadPdfToPb } from "../src/uploaders/practicebetter.js";
+import { reportHeartbeat } from "../src/lib/heartbeat.js";
 
 // Load .env.local first so PB_USERNAME / PB_PASSWORD / etc. are populated
 // without the user having to paste them on the command line.
@@ -193,14 +194,28 @@ async function processJob(job: Job) {
   }
 }
 
+// Throttle the "ok" heartbeat so a tight drain doesn't spam the endpoint; errors
+// always report. Liveness = "the loop is polling and the app is reachable" (a
+// stopped machine / unreachable app → no heartbeat → watchdog alerts). Per-job PB
+// failures are reported per-job (not here) — that's the dead-letter concern.
+let lastPbdrainHb = 0;
+async function pbdrainHbOk(): Promise<void> {
+  if (Date.now() - lastPbdrainHb < 30_000) return;
+  lastPbdrainHb = Date.now();
+  await reportHeartbeat("pbdrain");
+}
+
 async function tick(): Promise<boolean> {
   try {
     const job = await claimNext();
-    if (!job) return false;
+    if (!job) { await pbdrainHbOk(); return false; }
     await processJob(job);
+    await pbdrainHbOk();
     return true;
   } catch (err) {
-    log(`tick error: ${err instanceof Error ? err.message : String(err)}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`tick error: ${msg}`);
+    await reportHeartbeat("pbdrain", { status: "error", error: msg });
     return false;
   }
 }

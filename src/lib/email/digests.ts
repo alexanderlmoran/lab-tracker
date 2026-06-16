@@ -312,6 +312,9 @@ const WATCHED_LOOPS: Array<{ key: string; label: string; maxAgeH: number }> = [
   { key: "scrape-loop", label: "Portal scrape loop", maxAgeH: 6 },
   { key: "tracking", label: "FedEx tracking refresh", maxAgeH: 8 },
   { key: "ivpost", label: "IV auto-post loop", maxAgeH: 3 },
+  { key: "pbdrain", label: "PB upload drain (final mile to PracticeBetter)", maxAgeH: 2 },
+  { key: "reconcile", label: "Reconcile / auto-post engine", maxAgeH: 6 },
+  { key: "gmailsync", label: "Gmail inbox sync + KK forward", maxAgeH: 1 },
 ];
 
 /**

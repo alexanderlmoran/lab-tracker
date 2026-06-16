@@ -92,6 +92,7 @@ async function scrapeLab(labKey: string): Promise<void> {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function runOnce() {
+  const failed: string[] = [];
   for (const lab of LABS) {
     try {
       await scrapeLab(lab);
@@ -99,11 +100,15 @@ async function runOnce() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log(`${lab}: FATAL ${msg}`);
+      failed.push(lab);
       await reportHeartbeat(`scrape:${lab}`, { status: "error", error: msg });
     }
   }
-  // Whole-cycle liveness — the watchdog alerts if this stops landing.
-  await reportHeartbeat("scrape-loop");
+  // Whole-cycle liveness — but report ERROR if ANY portal hard-failed, so a broken
+  // portal (login/recipe drift) can't hide behind a green "scrape-loop" while
+  // pulling nothing. Only an all-clear cycle reports ok.
+  if (failed.length) await reportHeartbeat("scrape-loop", { status: "error", error: `${failed.length} portal(s) failed: ${failed.join(", ")}` });
+  else await reportHeartbeat("scrape-loop");
 }
 
 async function main() {
