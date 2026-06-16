@@ -70,17 +70,24 @@ export async function generateReqForm(
   // cases that lack one — don't clobber a different existing value).
   const dobIso = dobToIso(fields.dob);
   if (dobIso && dobIso !== (c?.patient_dob as string | null)) {
-    await db.from("lab_cases").update({ patient_dob: dobIso }).eq("id", caseId);
-    const name = c?.patient_name as string | undefined;
-    if (name) {
-      await db.from("lab_cases").update({ patient_dob: dobIso }).eq("patient_name", name).is("patient_dob", null);
+    // CHECK the DOB write (mirror the sex write below, which already does) — it was
+    // unchecked, so a failed save silently dropped a DOB the staff believed was
+    // stored for next time. Only run the cascade + event when the primary landed.
+    const { error: dobErr } = await db.from("lab_cases").update({ patient_dob: dobIso }).eq("id", caseId);
+    if (dobErr) {
+      console.error(`[req-form] DOB write failed for case ${caseId}: ${dobErr.message}`);
+    } else {
+      const name = c?.patient_name as string | undefined;
+      if (name) {
+        await db.from("lab_cases").update({ patient_dob: dobIso }).eq("patient_name", name).is("patient_dob", null);
+      }
+      await db.from("lab_events").insert({
+        case_id: caseId,
+        kind: "case_edited" as const,
+        actor: user.email ?? "staff",
+        note: `DOB set to ${fields.dob} via req form (propagated to this patient's DOB-less cases)`,
+      });
     }
-    await db.from("lab_events").insert({
-      case_id: caseId,
-      kind: "case_edited" as const,
-      actor: user.email ?? "staff",
-      note: `DOB set to ${fields.dob} via req form (propagated to this patient's DOB-less cases)`,
-    });
   }
 
   // Same two-way persistence for sex (M/F) — enter it once, prefilled forever.

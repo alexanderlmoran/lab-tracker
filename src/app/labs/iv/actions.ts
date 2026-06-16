@@ -267,7 +267,11 @@ export async function confirmIvMatchAndPost(sessionId: string, clientRecordId: s
 export async function markIvAlreadyDone(sessionId: string): Promise<{ ok: true }> {
   await requireSignedIn();
   const db = getSupabaseAdmin();
-  await db.from("iv_post_jobs").delete().eq("session_id", sessionId);
+  // CHECK the job delete BEFORE flipping status — if the delete fails but the
+  // status flips to "skipped", a queued job lingers and the sweep re-posts a
+  // DUPLICATE PB note. Abort if the delete didn't land.
+  const { error: delErr } = await db.from("iv_post_jobs").delete().eq("session_id", sessionId);
+  if (delErr) throw new Error(`couldn't drop the post job (not marking done, to avoid a duplicate note): ${delErr.message}`);
   const { error } = await db.from("iv_sessions").update({ charting_status: "skipped" }).eq("id", sessionId);
   if (error) throw new Error(error.message);
   revalidatePath("/labs/iv");

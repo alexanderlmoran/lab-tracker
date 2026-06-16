@@ -78,7 +78,11 @@ async function setStepBoolean(caseId: string, step: number) {
   };
   const col = colMap[step];
   if (!col) return;
-  await db.from("lab_cases").update({ [col]: true }).eq("id", caseId);
+  // CHECK the write — this was unchecked, so a transient failure silently lost the
+  // step advance while the email-send action still returned ok ("sent" but the
+  // card never moved). Throw so the caller surfaces it instead of swallowing.
+  const { error } = await db.from("lab_cases").update({ [col]: true }).eq("id", caseId);
+  if (error) throw new Error(`step ${step} (${col}) write failed for case ${caseId}: ${error.message}`);
 }
 
 async function findLatestSendOrSkip(caseId: string, kind: EmailKind) {

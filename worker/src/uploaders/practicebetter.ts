@@ -223,9 +223,16 @@ export async function findPbPatient(
     const dobMatches = candidates.filter((it) =>
       (it.profile.dayOfBirth ?? "").startsWith(dob),
     );
-    // Only narrow if DOB matched at least one — otherwise leave full list so
-    // the caller sees a single fuzzy match rather than no match at all.
-    if (dobMatches.length > 0) candidates = dobMatches;
+    if (dobMatches.length > 0) {
+      candidates = dobMatches;
+    } else if (candidates.length > 1) {
+      // DOB was given but matched NONE of several same-name hits → genuinely
+      // ambiguous. Returning candidates[0] here would post a lab to a GUESSED
+      // wrong chart. Refuse — the caller holds for a human (patient safety).
+      // (A single fuzzy hit with a mismatched DOB is still returned: likely a PB
+      // DOB typo, e.g. "Micheal" vs "Michael", not a different person.)
+      return null;
+    }
   }
   const m = candidates[0];
   return {
