@@ -473,8 +473,17 @@ export function getCaseStaleness(
   if (c.archived_at || c.deleted_at) {
     return { stale: false, daysSinceProgress: 0 };
   }
-  const closed = c.step8_protocol_emailed && c.step9_sales_followup;
-  if (closed) return { stale: false, daysSinceProgress: 0 };
+  // "Resolved" = out of the actively-chased pre-upload pipeline, so it should
+  // NOT nag as stale: fully closed (step 8+9), results already on PB (step 5), or
+  // in the ROF lane (step 6/7). The digest is meant to chase cases still awaiting
+  // sample/result/upload (steps 1-4) — not ones the team considers done. Previously
+  // only step8+9 counted, so posted/received/ROF cases flooded the stale digest.
+  const resolved =
+    (c.step8_protocol_emailed && c.step9_sales_followup) ||
+    c.step5_complete_uploaded ||
+    c.step6_rof_scheduled ||
+    c.step7_rof_completed;
+  if (resolved) return { stale: false, daysSinceProgress: 0 };
   const last = new Date(c.updated_at).getTime();
   const days = Math.floor((Date.now() - last) / 86400000);
   return { stale: days >= threshold, daysSinceProgress: days };

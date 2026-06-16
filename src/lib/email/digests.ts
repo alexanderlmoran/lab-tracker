@@ -12,6 +12,7 @@ import { Resend } from "resend";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { loadEmailConfig, INTERNAL_SUBJECT } from "./render";
 import { getCaseStaleness, getStaleDaysThreshold } from "@/lib/columns";
+import { appBaseUrl } from "@/lib/app-url";
 import type { EmailKind, LabCase } from "@/lib/types";
 
 type DispatchResult = { ok: true; messageId?: string } | { ok: false; error: string };
@@ -150,7 +151,7 @@ export async function sendCompleteUploadNotice(args: {
 }): Promise<DispatchResult> {
   const c = args.patientCase;
   const recipient = await digestRecipient();
-  const base = process.env.NEXT_PUBLIC_APP_URL ?? "https://labs";
+  const base = appBaseUrl();
   const caseUrl = `${base}/labs/${c.id}`;
   const ref = args.pbLabRequestId
     ? `<p style="margin:0 0 8px;color:#71717a;font-size:12px;">PB labrequest ${escapeHtml(args.pbLabRequestId)}</p>`
@@ -266,12 +267,12 @@ export async function runStaleDigest(opts: {
 <h2 style="margin:0 0 4px;font-size:16px;">Daily stale-case digest</h2>
 <p style="margin:0 0 14px;color:#52525b;font-size:13px;">${stale.length} case${stale.length === 1 ? "" : "s"} across ${patientCount} patient${patientCount === 1 ? "" : "s"} haven't progressed in ${threshold}+ day${threshold === 1 ? "" : "s"}.</p>
 <table cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:13px;width:100%;max-width:560px;">${rows.join("")}</table>
-<p style="margin-top:16px;color:#71717a;font-size:11px;">Open the board to act on these → ${process.env.NEXT_PUBLIC_APP_URL ?? "https://labs"}/labs?stale=1</p>
+<p style="margin-top:16px;color:#71717a;font-size:11px;">Open the board to act on these → ${appBaseUrl()}/labs?stale=1</p>
 </body></html>`;
   const text =
     `Daily stale-case digest\n\n${stale.length} case(s) across ${patientCount} patient(s) idle ${threshold}+ days.\n` +
     textRows.join("\n") +
-    `\n\nOpen the board to act: ${process.env.NEXT_PUBLIC_APP_URL ?? "https://labs"}/labs?stale=1\n`;
+    `\n\nOpen the board to act: ${appBaseUrl()}/labs?stale=1\n`;
 
   const send = await dispatchInternal({
     to: recipient,

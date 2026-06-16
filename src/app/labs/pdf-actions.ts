@@ -310,20 +310,26 @@ export async function disapproveWrongPdf(
     .is("superseded_at", null);
   if (pdfErr) return { ok: false, error: pdfErr.message };
 
-  // Per sibling: blank the accession (re-match by name+DOB next poll) and add
-  // the rejected ref to THAT sibling's own dismissed_refs so the scraper skips it.
+  // Add the rejected ref to each sibling's dismissed_refs so the scraper won't
+  // re-offer it. BUT only blank lab_external_ref on the REVIEWED card — wiping a
+  // (possibly manually-entered) accession on a sibling the operator didn't review
+  // is silent data loss. This bit us when "Access Custom" was grouped with plain
+  // "Access" (substring match) and a Wrong-PDF on one blanked the other's saved
+  // accession. The reviewed card re-matches by name+DOB next poll.
   const { data: sibRows } = await db
     .from("lab_cases")
     .select("id, dismissed_refs")
     .in("id", ids);
   for (const s of sibRows ?? []) {
+    const isReviewed = (s.id as string) === parsed.data.caseId;
     const existing = (s.dismissed_refs as string[] | null) ?? [];
     const dismissed_refs = rejectedRef
       ? Array.from(new Set([...existing, rejectedRef]))
       : existing;
+    const patch = isReviewed ? { lab_external_ref: null, dismissed_refs } : { dismissed_refs };
     const { error } = await db
       .from("lab_cases")
-      .update({ lab_external_ref: null, dismissed_refs })
+      .update(patch)
       .eq("id", s.id as string);
     if (error) return { ok: false, error: error.message };
     revalidatePath(`/labs/${s.id}`);

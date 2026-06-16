@@ -198,9 +198,20 @@ export async function recomputeTurnaroundsCore(): Promise<
     const sorted = [...bucket.days].sort((a, b) => a - b);
     // p25 / p75, rounded; clamp min to at least 1 day so the UI doesn't
     // show "Expected by 0 days" which would look broken.
-    const p25 = Math.max(1, Math.round(quantile(sorted, 0.25)));
-    const p75 = Math.max(p25, Math.round(quantile(sorted, 0.75)));
-    const median = Math.round(quantile(sorted, 0.5));
+    const p25raw = Math.max(1, Math.round(quantile(sorted, 0.25)));
+    const p75raw = Math.max(p25raw, Math.round(quantile(sorted, 0.75)));
+    // CAP the learned max to a sane multiple of the lab's coded turnaround. We
+    // learn from the step-4 *toggle* timestamp, which runs late for partial-
+    // returning labs (Access back-fills over ~2wk but gets ticked weeks later) and
+    // for back-filled historical cases — so an unguarded p75 inflated Access to
+    // ~57 days. Cap at 2× the catalog max (fallback 45d) so a structurally-late
+    // toggle can't poison the badge; legit slow labs (Genova/Cyrex) have larger
+    // coded maxes and pass through.
+    const codeMax = findLabByName(name)?.turnaroundDaysMax ?? null;
+    const cap = codeMax ? codeMax * 2 : 45;
+    const p75 = Math.min(p75raw, cap);
+    const p25 = Math.min(p25raw, p75);
+    const median = Math.min(Math.round(quantile(sorted, 0.5)), p75);
 
     // Upsert by unique `name`. If a row exists we update min/max; otherwise
     // we insert with provider/panel from the catalog entry.
