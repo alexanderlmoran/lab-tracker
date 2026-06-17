@@ -11,7 +11,9 @@
 # Usage:  cd worker && fly deploy && bash scripts/start-all-machines.sh
 set -euo pipefail
 APP="${1:-lab-tracker-worker}"
-echo "Starting all machines for $APP…"
+# NOTE: ${APP} braces + ASCII "..." — macOS's bash 3.2 reads a bare $VAR followed
+# by a multibyte char (…) as part of the var name → "unbound variable" under set -u.
+echo "Starting all machines for ${APP}..."
 ids="$(fly machine list -a "$APP" --json | python3 -c 'import sys,json; [print(m["id"]) for m in json.load(sys.stdin)]')"
 if [ -z "$ids" ]; then echo "No machines found for $APP."; exit 0; fi
 for id in $ids; do
