@@ -300,10 +300,70 @@ export type HeartbeatWatchSummary = {
   staleCount: number;
   stale: Array<{ key: string; label: string; reason: string }>;
   missing: string[];
+  /** Migrations present in the repo but NOT applied to prod (the lab_scraper_status
+   *  class — manual SQL-editor applies silently skip). Probed by schema sentinels. */
+  drift: string[];
+  /** Time-bomb credential warnings (e.g. TS_AUTHKEY 90-day expiry → PB egress dies). */
+  keyWarnings: string[];
   recipient?: string;
   emailMessageId?: string;
   emailError?: string;
 };
+
+/** Schema objects the most recent / load-bearing migrations introduce. The
+ *  watchdog probes each every run; a missing one means its migration was never
+ *  applied to prod (manual SQL-editor applies don't register in any migrations
+ *  table, so this existence probe is the only drift signal we have). ADD A ROW
+ *  HERE whenever a new migration adds a load-bearing table/column. */
+const SCHEMA_SENTINELS: Array<{ table: string; column?: string; migration: string }> = [
+  { table: "iv_infusion_series", migration: "20260616_iv_infusion_series" },
+  { table: "iv_template_refs", column: "components", migration: "20260615_iv_template_components" },
+  { table: "lab_cases", column: "patient_sex", migration: "20260609_lab_cases_patient_sex" },
+  { table: "lab_scraper_status", migration: "20260522_lab_scraper_status" },
+  { table: "patients_seed", migration: "20260614_patients_seed_profile" },
+  { table: "iv_sessions", migration: "20260609_iv_sessions" },
+  { table: "iv_post_jobs", migration: "20260609_iv_post_jobs" },
+  { table: "lab_cases", column: "pickup_carrier", migration: "20260608_pickup_cards" },
+];
+
+/** Probe each sentinel; return human labels for any whose table/column is absent
+ *  in prod. A HEAD select with limit 0 is the cheapest existence check — a
+ *  missing relation/column comes back as a PostgREST error, not rows. */
+async function checkSchemaDrift(db: ReturnType<typeof getSupabaseAdmin>): Promise<string[]> {
+  const missing: string[] = [];
+  for (const s of SCHEMA_SENTINELS) {
+    const { error } = await db
+      .from(s.table)
+      .select(s.column ?? "*", { head: true, count: "exact" })
+      .limit(0);
+    if (error) {
+      const msg = `${error.message ?? ""}`.toLowerCase();
+      // Only flag genuine "doesn't exist" — not transient errors (timeout, RLS).
+      if (msg.includes("does not exist") || msg.includes("could not find") || error.code === "42P01" || error.code === "42703") {
+        missing.push(`${s.table}${s.column ? `.${s.column}` : ""} (migration ${s.migration})`);
+      }
+    }
+  }
+  return missing;
+}
+
+/** Proactive credential-expiry warnings. TS_AUTHKEY (the Tailscale auth key that
+ *  brings up the PB egress) expires ~90 days out with no built-in alert — when it
+ *  lapses, every PB post/read dies silently. Set TS_AUTHKEY_EXPIRES_AT (ISO date)
+ *  when rotating the key; this warns 14 days ahead and after expiry. */
+function checkKeyExpiry(): string[] {
+  const out: string[] = [];
+  const iso = process.env.TS_AUTHKEY_EXPIRES_AT;
+  if (iso) {
+    const ms = new Date(iso).getTime();
+    if (Number.isFinite(ms)) {
+      const days = Math.round((ms - Date.now()) / 86_400_000);
+      if (days < 0) out.push(`TS_AUTHKEY EXPIRED ${-days}d ago — PB egress (pbdrain/reconcile/ivpost) is down until rotated + secrets reset on Fly`);
+      else if (days <= 14) out.push(`TS_AUTHKEY expires in ${days}d — rotate it (tailscale authkey) + reset TS_AUTHKEY on Fly before PB egress dies`);
+    }
+  }
+  return out;
+}
 
 /** Loops we expect alive, and how long WITHOUT A SUCCESS is too long. Keys match
  *  the heartbeats written by the worker loops + /api/worker/cases (zenoti-sync). */
@@ -347,27 +407,46 @@ export async function runHeartbeatWatch(): Promise<HeartbeatWatchSummary> {
       stale.push({ key: w.key, label: w.label, reason: last ? `no success in ${Math.round(ageH)}h (expected ≤ ${w.maxAgeH}h)` : "no successful run on record" });
     }
   }
-  if (stale.length === 0) return { ok: true, staleCount: 0, stale: [], missing };
+  // Two more silent-failure classes the premortem flagged (same watchdog, one
+  // email): migrations never applied to prod, and credential time-bombs.
+  const drift = await checkSchemaDrift(db);
+  const keyWarnings = checkKeyExpiry();
+
+  if (stale.length === 0 && drift.length === 0 && keyWarnings.length === 0) {
+    return { ok: true, staleCount: 0, stale: [], missing, drift, keyWarnings };
+  }
 
   const recipient = await digestRecipient();
   const url = `${appBaseUrl()}/labs/analytics`;
+  const problemCount = stale.length + drift.length + keyWarnings.length;
   const rowsHtml = stale
     .map((s) => `<tr><td style="padding:4px 12px 4px 0;font-weight:600;">${escapeHtml(s.label)}</td><td style="padding:4px 0;color:#b91c1c;">${escapeHtml(s.reason)}</td></tr>`)
     .join("");
+  const staleHtml = stale.length
+    ? `<p style="margin:10px 0 4px;font-weight:600;">Worker loops quiet/failing:</p><table style="font-size:13px;border-collapse:collapse;">${rowsHtml}</table>`
+    : "";
+  const driftHtml = drift.length
+    ? `<p style="margin:12px 0 4px;font-weight:600;color:#b91c1c;">⚠ Migration drift — schema NOT applied to prod (apply the migration in the Supabase SQL editor):</p><ul style="margin:0;font-size:13px;color:#b91c1c;">${drift.map((d) => `<li>${escapeHtml(d)}</li>`).join("")}</ul>`
+    : "";
+  const keyHtml = keyWarnings.length
+    ? `<p style="margin:12px 0 4px;font-weight:600;color:#b45309;">⏰ Credential expiry:</p><ul style="margin:0;font-size:13px;color:#b45309;">${keyWarnings.map((k) => `<li>${escapeHtml(k)}</li>`).join("")}</ul>`
+    : "";
   const missingNote = missing.length
     ? `<p style="margin:8px 0 0;color:#a16207;font-size:12px;">No heartbeat yet (normal right after a deploy): ${missing.map(escapeHtml).join(", ")}.</p>`
     : "";
   const html = `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#18181b;">
 <h2 style="margin:0 0 6px;font-size:16px;color:#b91c1c;">⚠ Automation health alert</h2>
-<p style="margin:0 0 10px;color:#52525b;font-size:13px;">${stale.length} worker loop(s) have gone quiet or are failing — results may not be syncing/posting until restarted.</p>
-<table style="font-size:13px;border-collapse:collapse;">${rowsHtml}</table>${missingNote}
-<p style="margin:14px 0 0;font-size:12px;color:#71717a;">Most common cause: a deploy left the Fly machine stopped — <code>fly machine start &lt;id&gt;</code>. Health view → <a href="${url}" style="color:#4338ca;">${escapeHtml(url)}</a></p>
+<p style="margin:0 0 10px;color:#52525b;font-size:13px;">${problemCount} issue(s) found — results may not be syncing/posting until resolved.</p>
+${staleHtml}${driftHtml}${keyHtml}${missingNote}
+<p style="margin:14px 0 0;font-size:12px;color:#71717a;">Loop down? Most common cause: a deploy left the Fly machine stopped — <code>fly machine start &lt;id&gt;</code> (or <code>bash worker/scripts/start-all-machines.sh</code>). Health view → <a href="${url}" style="color:#4338ca;">${escapeHtml(url)}</a></p>
 </body></html>`;
   const text =
-    `Automation health alert\n\n${stale.length} worker loop(s) quiet/failing:\n` +
-    stale.map((s) => `- ${s.label}: ${s.reason}`).join("\n") +
-    (missing.length ? `\n\nNo heartbeat yet: ${missing.join(", ")}` : "") +
-    `\n\nMost common cause: a deploy left the Fly machine stopped — fly machine start <id>.\nHealth: ${url}\n`;
+    `Automation health alert — ${problemCount} issue(s)\n` +
+    (stale.length ? `\nWorker loops quiet/failing:\n` + stale.map((s) => `- ${s.label}: ${s.reason}`).join("\n") + "\n" : "") +
+    (drift.length ? `\nMigration drift (NOT applied to prod):\n` + drift.map((d) => `- ${d}`).join("\n") + "\n" : "") +
+    (keyWarnings.length ? `\nCredential expiry:\n` + keyWarnings.map((k) => `- ${k}`).join("\n") + "\n" : "") +
+    (missing.length ? `\nNo heartbeat yet: ${missing.join(", ")}\n` : "") +
+    `\nLoop down? Often a deploy left the Fly machine stopped — fly machine start <id>.\nHealth: ${url}\n`;
 
   const send = await dispatchInternal({ to: recipient, subject: "⚠ Lab automation health alert", html, text });
   return {
@@ -375,6 +454,8 @@ export async function runHeartbeatWatch(): Promise<HeartbeatWatchSummary> {
     staleCount: stale.length,
     stale,
     missing,
+    drift,
+    keyWarnings,
     recipient,
     emailMessageId: send.ok ? send.messageId : undefined,
     emailError: send.ok ? undefined : send.error,
