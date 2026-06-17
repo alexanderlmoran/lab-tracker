@@ -19,6 +19,7 @@ How to use this file:
 
 | Need | Use this (don't rebuild) | Lesson |
 |------|--------------------------|--------|
+| Where does portal X live / who logs in / is it automated? | **`docs/PORTALS.md`** — the portal registry (every bookmark + login + scraper status) | Built from the curated Chrome bookmarks + saved passwords (both gitignored). Scraped labs → creds in `.env.local`; manual portals → `Chrome_Passwords.csv` + Claude-in-Chrome. Keep it in sync with `src/lib/scrapers/registry.ts`. |
 | Barcode scan → clean tracking # | `normalizeScannedTracking` — `src/lib/tracking/normalize.ts` | FedEx label's big barcode is a 34-digit "96" string; the tracking # is the last 12 digits. Run **every** scanned tracking value through it. |
 | Free-text lab name → scraper portal | `normalizeLabName` / `sameLab` / `probeKeyForLab` — `src/lib/scrapers/normalize-lab.ts` | Staff type "Access Custom", "Vibrant · EBOO". Match on the canonical portal, never raw string equality. |
 | Display a case's lab + panel | `labelForCase` / `panelFor` — `src/lib/labs/label.ts` | Zenoti multi-panel tests store `lab_name="Vibrant"`, `lab_panel=null`; the panel lives in `zenoti_service_name`. Recover it for display. |

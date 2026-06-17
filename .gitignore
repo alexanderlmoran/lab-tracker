@@ -53,3 +53,7 @@ next-env.d.ts
 /worker/captures/
 /worker/node_modules/
 /worker/dist/
+
+# Personal Chrome export (portal URLs) — curated, committed version is docs/PORTALS.md
+/bookmarks_6_17_26.html
+bookmarks_*.html
