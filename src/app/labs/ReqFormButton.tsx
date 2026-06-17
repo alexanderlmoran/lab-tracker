@@ -39,8 +39,19 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [filename, setFilename] = useState("req-form.pdf");
   const [calibrate, setCalibrate] = useState(false);
-  const [custom, setCustom] = useState<Array<{ key: string; label: string }>>([]);
+  const [custom, setCustom] = useState<Array<{ key: string; label: string; value?: string }>>([]);
   const [customValues, setCustomValues] = useState<Record<string, string>>({});
+
+  // Set the custom-field list AND pre-fill any constant defaults (FacilityName,
+  // NPI, etc.) without clobbering a value the staff already typed.
+  function applyCustom(list: Array<{ key: string; label: string; value?: string }>) {
+    setCustom(list);
+    setCustomValues((prev) => {
+      const next = { ...prev };
+      for (const c of list) if (c.value && !next[c.key]) next[c.key] = c.value;
+      return next;
+    });
+  }
 
   // Only render the button if this lab has a req-form template.
   if (!specForLab(labName)) return null;
@@ -56,7 +67,7 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
       setMissing(r.missing);
       setLabel(r.label);
       setEditableKeys(r.editableKeys);
-      setCustom(r.custom);
+      applyCustom(r.custom);
     });
   }
   function close() {
@@ -75,7 +86,7 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
     setCalibrate(false);
     start(async () => {
       const r = await prepareReqForm(caseId);
-      if (r.ok) setCustom(r.custom);
+      if (r.ok) applyCustom(r.custom);
     });
   }
   function generate() {
@@ -168,7 +179,7 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
                           <label key={cf.key} className="flex flex-col gap-0.5 text-[11px] text-zinc-600">
                             {cf.label}
                             <input
-                              value={customValues[cf.key] ?? ""}
+                              value={customValues[cf.key] ?? cf.value ?? ""}
                               onChange={(e) => setCustomValues((v) => ({ ...v, [cf.key]: e.target.value }))}
                               className="rounded border border-emerald-300 bg-emerald-50/40 px-2 py-1 text-[13px] text-zinc-900"
                             />

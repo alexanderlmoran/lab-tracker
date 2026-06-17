@@ -59,6 +59,32 @@ const CLINIC = {
   email: "labs@centnerhb.com",
 };
 
+/** Constant auto-fills for a template's CUSTOM calibrator fields, matched by the
+ *  field's LABEL (the calibrator stores user-added fields by label). Clinic/provider
+ *  constants so staff never re-type them each print. Patient-specific, payment, and
+ *  signature-date fields are intentionally omitted — they stay blank for staff.
+ *  Returns {} for templates with no constants. */
+export function reqFormCustomDefaults(templateKey: string): Record<string, string> {
+  if (templateKey === "mitoswab.pdf") {
+    return {
+      NewSample: "X", // default to a new (not replacement) sample
+      ReportEmail: "X", // provider preferred reporting = Email
+      FacilityName: process.env.PRACTICE_NAME || "Centner Wellness",
+      Telephone: CLINIC.phone,
+      FacilityEmail: CLINIC.email,
+      AddressStreet: CLINIC.address,
+      AddressCity: CLINIC.city,
+      AddressState: CLINIC.state,
+      AddressZipCode: CLINIC.zip,
+      AddressCountry: "USA",
+      Country: "USA", // patient block routes to the clinic
+      ProviderNPI: "1124065693",
+      PhysicianTitle: "MD",
+    };
+  }
+  return {};
+}
+
 export async function resolveReqForm(
   caseId: string,
   opts: { orderNumber?: string } = {},

@@ -2,7 +2,7 @@
 
 import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
-import { resolveReqForm } from "@/lib/req-forms/resolve";
+import { resolveReqForm, reqFormCustomDefaults } from "@/lib/req-forms/resolve";
 import { fillReqForm } from "@/lib/req-forms/fill";
 import { specForLab, REQ_FORM_SPECS } from "@/lib/req-forms/specs";
 import { loadOverrides, saveOverrides, mergeFields, type FieldOverrides, type CustomField } from "@/lib/req-forms/overrides";
@@ -29,6 +29,7 @@ export async function prepareReqForm(caseId: string) {
   const r = await resolveReqForm(caseId);
   if (!r) return { ok: false as const, error: "No requisition template for this lab yet." };
   const ov = await loadOverrides(r.spec.templateKey);
+  const defaults = reqFormCustomDefaults(r.spec.templateKey);
   return {
     ok: true as const,
     label: r.spec.label,
@@ -36,8 +37,9 @@ export async function prepareReqForm(caseId: string) {
     fields: r.data,
     missing: r.missing,
     editableKeys: r.editableKeys,
-    // user-added fields the dialog renders as extra editable inputs
-    custom: ov.custom.map((c) => ({ key: c.key, label: c.label })),
+    // user-added fields the dialog renders as extra editable inputs; `value`
+    // pre-fills clinic constants (FacilityName/NPI/etc.) so staff don't re-type.
+    custom: ov.custom.map((c) => ({ key: c.key, label: c.label, value: defaults[c.label] ?? "" })),
   };
 }
 
@@ -112,7 +114,17 @@ export async function generateReqForm(
   // Expand into checkbox X's + split MM/DD/YYYY date segments (re-derived from
   // the staff-edited dob/collectionDate so they always match the typed values).
   const fill = expandStampFields(fields);
-  const bytes = await fillReqForm(spec, fill, customValues);
+  // Merge constant defaults UNDER the staff-entered values, matched by the custom
+  // field's label — so clinic constants (FacilityName/NPI/etc.) always stamp even
+  // if the client didn't send them, while a staff override still wins.
+  const ov = await loadOverrides(spec.templateKey);
+  const defaults = reqFormCustomDefaults(spec.templateKey);
+  const mergedCustom: Record<string, string> = {};
+  for (const c of ov.custom) {
+    const v = (customValues[c.key] ?? "").trim() || defaults[c.label] || "";
+    if (v) mergedCustom[c.key] = v;
+  }
+  const bytes = await fillReqForm(spec, fill, mergedCustom);
   return {
     ok: true as const,
     pdfBase64: Buffer.from(bytes).toString("base64"),
