@@ -88,6 +88,40 @@ export const REQ_FORM_SPECS: ReqFormSpec[] = [
       fastingX: { x: 936, yTop: 541, size: 32 }, // X on "FASTING □"
     },
   },
+  {
+    labs: ["mitoswab", "mito swab", "mitochondrial", "mitochondria"],
+    label: "MitoSwab — Requisition",
+    templateKey: "mitoswab.pdf",
+    // Specimen ID is assigned by the lab (Laboratory Use Only); nothing we stamp.
+    orderNumber: "assign",
+    // NOTE: this template is a NORMAL 612×792 (US Letter) PDF, not a big scan like
+    // the others — so coords are small and font ≈9pt. These are first-pass
+    // estimates; FINE-TUNE in the in-app calibrator (Settings → req forms).
+    // Per-patient + clinic fields only; the FACILITY/PHYSICIAN constant block
+    // (Facility name / NPI / fax) is a follow-up — add fields + values once Alex
+    // confirms he wants them auto-stamped vs. pre-printed.
+    fields: {
+      // Top box — "Date Specimen Collected:"
+      collectionDate: { x: 168, yTop: 33, size: 9 },
+      // FACILITY — "Physician Name:" (resolve fills orderingProvider)
+      orderingProvider: { x: 152, yTop: 193, size: 9, maxChars: 40 },
+      // PATIENT INFORMATION — First / Last / DOB / Gender row
+      firstName: { x: 66, yTop: 400, size: 9 },
+      lastName: { x: 236, yTop: 400, size: 9 },
+      dob: { x: 402, yTop: 400, size: 9 },
+      sexMaleX: { x: 548, yTop: 401, size: 9 }, // X on □Male
+      sexFemaleX: { x: 596, yTop: 401, size: 9 }, // X on □Female
+      // Street Address / Telephone
+      address: { x: 70, yTop: 430, size: 9 },
+      phone: { x: 402, yTop: 430, size: 9 },
+      // City / State / Email
+      city: { x: 56, yTop: 460, size: 9 },
+      state: { x: 252, yTop: 460, size: 9 },
+      email: { x: 402, yTop: 460, size: 9, maxChars: 36 },
+      // Zip / (Country)
+      zip: { x: 76, yTop: 490, size: 9 },
+    },
+  },
 ];
 
 export function specForLab(labName: string | null): ReqFormSpec | null {
