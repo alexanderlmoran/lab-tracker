@@ -219,6 +219,8 @@ export type HeldIvPost = {
   matchReason: string | null;
   candidateId: string | null; // best PB candidate the matcher found (if any)
   isTie: boolean; // reason flags a too-close runner-up → don't offer 1-click confirm
+  patientEmail: string | null; // needed to create a PB account (PB requires email)
+  noPbAccount: boolean; // held because the patient has no PB account → offer "Create PB account & post"
 };
 
 export async function listHeldIvPosts(): Promise<HeldIvPost[]> {
@@ -226,7 +228,7 @@ export async function listHeldIvPosts(): Promise<HeldIvPost[]> {
   const db = getSupabaseAdmin();
   const { data, error } = await db
     .from("iv_post_jobs")
-    .select("id, session_id, match_score, match_reason, pb_client_record_id, iv_sessions(service_name, patient_full_name, session_date, kind)")
+    .select("id, session_id, match_score, match_reason, pb_client_record_id, iv_sessions(service_name, patient_full_name, patient_email, session_date, kind)")
     .eq("status", "held")
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
@@ -237,6 +239,7 @@ export async function listHeldIvPosts(): Promise<HeldIvPost[]> {
     .map((j: Record<string, unknown>) => {
     const s = (j.iv_sessions ?? {}) as Record<string, unknown>;
     const reason = (j.match_reason as string | null) ?? null;
+    const candidateId = (j.pb_client_record_id as string | null) ?? null;
     return {
       jobId: j.id as string,
       sessionId: j.session_id as string,
@@ -245,8 +248,13 @@ export async function listHeldIvPosts(): Promise<HeldIvPost[]> {
       sessionDate: (s.session_date as string) ?? "",
       matchScore: (j.match_score as number | null) ?? null,
       matchReason: reason,
-      candidateId: (j.pb_client_record_id as string | null) ?? null,
+      candidateId,
       isTie: !!reason && /runner-up too close/i.test(reason),
+      patientEmail: (s.patient_email as string | null) ?? null,
+      // No PB account found (or creation blocked on a missing field) → the only
+      // resolution is to create the account. Other holds (low confidence, no
+      // scaffold, etc.) have a candidate or a different fix, so don't offer it.
+      noPbAccount: !candidateId && !!reason && /no pb candidates|create pb account/i.test(reason),
     };
   });
 }
@@ -257,6 +265,20 @@ export async function confirmIvMatchAndPost(sessionId: string, clientRecordId: s
   await requireSignedIn();
   const db = getSupabaseAdmin();
   const { error: uErr } = await db.from("iv_sessions").update({ pb_client_record_id: clientRecordId }).eq("id", sessionId);
+  if (uErr) throw new Error(uErr.message);
+  await enqueueIvPost(sessionId);
+  return { ok: true };
+}
+
+/** Resolve a "no PB account" hold by CREATING the account: flag the session and
+ *  re-queue. The worker, when it still finds no candidate, creates the PB record
+ *  (createPbPatient — which sends PB's invitation email) and posts to it. Only
+ *  reachable from the held card when the patient has no account AND has an email
+ *  (PB requires one). Staff-gated by design: nothing is auto-created. */
+export async function createPbAccountAndPost(sessionId: string): Promise<{ ok: true }> {
+  await requireSignedIn();
+  const db = getSupabaseAdmin();
+  const { error: uErr } = await db.from("iv_sessions").update({ create_pb_account: true }).eq("id", sessionId);
   if (uErr) throw new Error(uErr.message);
   await enqueueIvPost(sessionId);
   return { ok: true };

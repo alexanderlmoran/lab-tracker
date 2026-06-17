@@ -282,7 +282,7 @@ export function IvChartForm({
           <button type="button" className="text-xs font-medium text-zinc-600 hover:text-zinc-900" onClick={() => set({ components: [...(chart.components ?? []), { name: "", standardDose: "", addOnDose: "" }] })}>
             + Add component
           </button>
-          <p className="text-[11px] text-zinc-400">{templateComponents.length ? "Prefilled from this template — edit, remove, or add (type to search) as needed. " : ""}This table is exactly what posts to the PB note — enter each component given, with its dose. (Lot # / stock tracking is coming separately.)</p>
+          <p className="text-[11px] text-zinc-400">{templateComponents.length ? "Prefilled from this template — edit, remove, or add (type to search) as needed. " : ""}This table is exactly what posts to the PB note — enter each component given, with its dose. Doses in <strong>mg/mcg/g</strong> — use mL only for blends (Amino Acids, Trace Minerals, B-Complex). (Lot # / stock tracking is coming separately.)</p>
         </div>
       </Section>
 

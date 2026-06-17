@@ -145,7 +145,7 @@ export async function POST(request: Request) {
   const { data: s, error: sErr } = await db
     .from("iv_sessions")
     .select(
-      "id, zenoti_guest_id, patient_full_name, patient_first_name, patient_last_name, patient_email, patient_phone, service_name, kind, template_hint, session_date, chart, pc_infusion_number, pc_vial_count, pb_note_id, pb_client_record_id",
+      "id, zenoti_guest_id, patient_full_name, patient_first_name, patient_last_name, patient_email, patient_phone, service_name, kind, template_hint, session_date, chart, pc_infusion_number, pc_vial_count, pb_note_id, pb_client_record_id, create_pb_account",
     )
     .eq("id", claimed.session_id)
     .maybeSingle();
@@ -220,6 +220,9 @@ export async function POST(request: Request) {
       // Set once this session was posted — drives update-vs-create on re-post.
       pbNoteId: s.pb_note_id,
       pbClientRecordId: s.pb_client_record_id,
+      // Staff clicked "Create PB account & post" — the drain creates the PB
+      // record (via createPbPatient) IF it still finds no candidate.
+      createPbAccount: !!s.create_pb_account,
     },
     identity: {
       fullName: s.patient_full_name,

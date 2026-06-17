@@ -54,7 +54,9 @@ export async function POST(request: Request) {
   if (p.outcome === "success") {
     await db
       .from("iv_sessions")
-      .update({ charting_status: "posted", pb_note_id: p.pbNoteId ?? null, pb_client_record_id: p.pbClientRecordId ?? null, posted_at: now })
+      // Clear create_pb_account: the account now exists (created or matched), so a
+      // future re-post must never create a second one.
+      .update({ charting_status: "posted", pb_note_id: p.pbNoteId ?? null, pb_client_record_id: p.pbClientRecordId ?? null, posted_at: now, create_pb_account: false })
       .eq("id", p.sessionId);
   } else if (p.outcome === "failed") {
     await db.from("iv_sessions").update({ last_error: p.error ?? "post failed" }).eq("id", p.sessionId);

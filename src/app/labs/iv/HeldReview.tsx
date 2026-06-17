@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { confirmIvMatchAndPost, enqueueIvPost, markIvAlreadyDone, type HeldIvPost } from "./actions";
+import { confirmIvMatchAndPost, createPbAccountAndPost, enqueueIvPost, markIvAlreadyDone, type HeldIvPost } from "./actions";
 
 const PB_URL = "https://my.practicebetter.io";
 
@@ -46,6 +46,9 @@ export function HeldReview({ held }: { held: HeldIvPost[] }) {
                 {h.matchScore != null ? `score ${h.matchScore} · ` : ""}
                 {h.matchReason ?? "held"}
               </span>
+              {h.noPbAccount && h.patientEmail && (
+                <span className="text-xs text-zinc-500" title="The email PB will invite">{h.patientEmail}</span>
+              )}
               <span className="ml-auto flex items-center gap-2">
                 <a
                   href={PB_URL}
@@ -87,6 +90,22 @@ export function HeldReview({ held }: { held: HeldIvPost[] }) {
                     {busy ? "…" : "Confirm & post"}
                   </button>
                 )}
+                {h.noPbAccount &&
+                  (h.patientEmail ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => run(h.jobId, () => createPbAccountAndPost(h.sessionId))}
+                      className="rounded bg-emerald-700 px-2 py-0.5 text-xs font-medium text-white hover:bg-emerald-800 disabled:opacity-50"
+                      title={`No PB account found — create one for ${h.patientEmail} (sends PB's invitation email) and post this note`}
+                    >
+                      {busy ? "…" : "Create PB account & post"}
+                    </button>
+                  ) : (
+                    <span className="text-xs text-red-700" title="PB needs an email to create an account — add the patient's email in Zenoti, then Re-try">
+                      ⚠ no email — add in Zenoti
+                    </span>
+                  ))}
                 {h.isTie && <span className="text-xs text-red-700" title="Two close candidates — open the chart and verify the patient by hand">⚠ ambiguous</span>}
               </span>
             </li>

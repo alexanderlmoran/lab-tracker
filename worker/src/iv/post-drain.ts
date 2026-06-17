@@ -8,7 +8,7 @@
 
 import { request } from "undici";
 
-import { pbLogin, searchPbPatientCandidates, type PbSession } from "../uploaders/practicebetter.js";
+import { pbLogin, searchPbPatientCandidates, createPbPatient, type PbSession } from "../uploaders/practicebetter.js";
 import { getSessionNote, scaffoldFromNote, createSessionNote, updateSessionNote, listSessionNotes } from "../uploaders/pb-sessionnotes.js";
 import { buildIvNoteContent, ivNoteSummary, ivNoteTitle, type IvChartInput } from "./build-note-content.js";
 import { defaultIvChart, mergeIvChart } from "./default-chart.js";
@@ -25,7 +25,7 @@ function env() {
 
 type Claim = {
   job: { id: string; sessionId: string };
-  session: { id: string; serviceName: string; kind: string; templateHint: string | null; sessionDate: string; chart: IvChartInput; pc: { infusionNumber?: number | null; vialCount?: string }; pbNoteId?: string | null; pbClientRecordId?: string | null };
+  session: { id: string; serviceName: string; kind: string; templateHint: string | null; sessionDate: string; chart: IvChartInput; pc: { infusionNumber?: number | null; vialCount?: string }; pbNoteId?: string | null; pbClientRecordId?: string | null; createPbAccount?: boolean };
   identity: PatientIdentity;
   referenceNoteId: string | null;
   /** true = matched the service's own template; false = generic base-IV fallback
@@ -188,6 +188,29 @@ async function handle(claim: Claim, pb: PbSession) {
   const candidates = await searchPbPatientCandidates(pb, query);
   const best = pickBestMatch(identity, candidates);
   if (!best) {
+    // No PB account exists for this patient. If staff explicitly clicked "Create
+    // PB account & post", create the record now (createPbPatient sends PB's invite
+    // email) and post to it. We only do this when the matcher found NOBODY, so a
+    // bad search can't spawn a duplicate of an existing patient — that's the whole
+    // safety property. Without the staff flag, hold as before. Build the note body
+    // FIRST so an empty scaffold holds without leaving an orphan account behind.
+    if (s.createPbAccount) {
+      const first = (identity.firstName || identity.fullName?.split(/\s+/)[0] || "").trim();
+      const last = (identity.lastName || identity.fullName?.split(/\s+/).slice(1).join(" ") || "").trim();
+      const email = (identity.email || "").trim();
+      if (!first || !last || !email) {
+        await report({ jobId: job.id, sessionId: s.id, outcome: "held", score: null, reason: "can't create PB account — need first name, last name, and email (add the patient's email in Zenoti, then re-try)" });
+        log(`hold (create-account: missing first/last/email) session=${s.id}`);
+        return;
+      }
+      const content = await buildContentOrHold();
+      if (!content) return;
+      const newPatient = await createPbPatient(pb, { firstName: first, lastName: last, email, dob: identity.dob });
+      const created = await createSessionNote(pb, { clientRecordId: newPatient.id, name: title, summary, sessionDate, content });
+      await report({ jobId: job.id, sessionId: s.id, outcome: "success", pbNoteId: created.id, pbClientRecordId: newPatient.id, score: null, reason: `created PB account + posted (${email})` });
+      log(`CREATED PB account=${newPatient.id} + POSTED note=${created.id} session=${s.id}`);
+      return;
+    }
     await report({ jobId: job.id, sessionId: s.id, outcome: "held", score: null, reason: "no PB candidates for query" });
     log(`hold (no candidates) session=${s.id}`);
     return;

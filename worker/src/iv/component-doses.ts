@@ -36,11 +36,15 @@ const RAW: Record<string, string> = {
   "Leucovorin 10mg/ml (mixed with bacteriostatic water)": "30mg", // 5/7
   "Phosphatidylcholine Push 50mg/ml (10 - 15 ml + 20 ml D5W)": "500mg", // 5/7
   "Methylcobalamin {B12} 10mg/ml (5mg-10mg)": "10mg", // 4/6
-  // Single-protocol products (clean dose, smaller sample)
-  "Carnitine 500mg/ml": "10mL",
-  "Ascorbic Acid 500mg/ml": "10mL",
-  "Magnesium 200mg/ml": "4mL",
-  "Trace Minerals": "5mL",
+  // Single-protocol products (clean dose, smaller sample).
+  // Doses are expressed as MASS (mg/mcg/g), not volume — only blends without a
+  // single active concentration (Amino Acid Blend, Trace Minerals, B-Complex) stay
+  // in mL. The conc-bearing products are converted from their historical mL dose:
+  // Carnitine/Vit C 500mg/ml × 10mL = 5 g; Magnesium 200mg/ml × 4mL = 800 mg.
+  "Carnitine 500mg/ml": "5 g",
+  "Ascorbic Acid 500mg/ml": "5 g",
+  "Magnesium 200mg/ml": "800 mg",
+  "Trace Minerals": "5mL", // blend — dosed by volume (no single active conc)
   "Nicotinamide Riboside": "500mg",
   "NR": "500mg",
   "Curcumin 20mg/ml": "200mg",
