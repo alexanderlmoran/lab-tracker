@@ -86,28 +86,42 @@ export async function GET(request: Request) {
     SCRAPER_REGISTRY.map((p) => probe(p.key, p.loginUrl)),
   );
 
-  // Read current consecutive_failures so we can increment/reset accurately.
+  // Read current failure counts AND the real scrapers' last success. The shallow
+  // GET above false-reds portals that block datacenter fetches or have TLS/DNS
+  // quirks (access refuses, glycanage/spectracell fail TLS, golda won't resolve)
+  // even though our actual scraper works fine. The `scrape:<key>` heartbeat is
+  // ground truth, so a fresh one OVERRIDES a failed shallow probe — the health
+  // view stops lying about portals we're successfully scraping. Portals with no
+  // active scraper (e.g. golda) keep the honest shallow result.
   const { data: existingRows } = await db
     .from("lab_scraper_status")
-    .select("portal_key, consecutive_failures");
+    .select("portal_key, consecutive_failures, last_success_at");
   const existingMap = new Map(
     (existingRows ?? []).map((r) => [
       r.portal_key as string,
       r.consecutive_failures as number,
     ]),
   );
+  const SCRAPER_FRESH_MS = 24 * 60 * 60 * 1000;
+  const scraperFresh = (key: string): boolean => {
+    const row = (existingRows ?? []).find((r) => r.portal_key === `scrape:${key}`);
+    const ts = row?.last_success_at ? new Date(row.last_success_at as string).getTime() : 0;
+    return ts > 0 && Date.now() - ts < SCRAPER_FRESH_MS;
+  };
 
   // UPSERT per portal — failures increment, successes reset to 0.
   const upserts = results.map((r) => {
     const prev = existingMap.get(r.portalKey) ?? 0;
+    const overridden = !r.ok && scraperFresh(r.portalKey);
+    const ok = r.ok || overridden;
     return {
       portal_key: r.portalKey,
       last_check_at: now,
-      last_success_at: r.ok ? now : null,
-      last_failure_at: r.ok ? null : now,
+      last_success_at: ok ? now : null,
+      last_failure_at: ok ? null : now,
       last_status_code: r.statusCode,
-      last_error: r.error,
-      consecutive_failures: r.ok ? 0 : prev + 1,
+      last_error: overridden ? `shallow probe blocked (${r.error}); real scraper OK` : r.error,
+      consecutive_failures: ok ? 0 : prev + 1,
     };
   });
 
@@ -132,7 +146,8 @@ export async function GET(request: Request) {
     }
   }
 
-  const failures = results.filter((r) => !r.ok);
+  // Report EFFECTIVE health (after scraper-ground-truth override), not raw probe.
+  const failures = upserts.filter((u) => !u.last_success_at).map((u) => ({ portalKey: u.portal_key, error: u.last_error }));
   return NextResponse.json({
     ok: true,
     checkedAt: now,
