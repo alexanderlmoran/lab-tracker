@@ -94,32 +94,28 @@ export const REQ_FORM_SPECS: ReqFormSpec[] = [
     templateKey: "mitoswab.pdf",
     // Specimen ID is assigned by the lab (Laboratory Use Only); nothing we stamp.
     orderNumber: "assign",
-    // NOTE: this template is a NORMAL 612×792 (US Letter) PDF, not a big scan like
-    // the others — so coords are small and font ≈9pt. These are first-pass
-    // estimates; FINE-TUNE in the in-app calibrator (Settings → req forms).
-    // Per-patient + clinic fields only; the FACILITY/PHYSICIAN constant block
-    // (Facility name / NPI / fax) is a follow-up — add fields + values once Alex
-    // confirms he wants them auto-stamped vs. pre-printed.
+    // NORMAL 612×792 (US Letter) PDF (not a big scan) → small coords, ~11pt fonts.
+    // Coords below are CALIBRATED in-app (2026-06-17, baked from the calibrator
+    // export). The rest of the form — facility/physician block, payment, consent,
+    // New/Replacement + Email-reporting checkboxes — was laid out as CUSTOM fields
+    // in the saved override (__overrides/mitoswab.pdf.json); those render as
+    // staff-fillable inputs in the dialog. OPEN: auto-fill the clinic CONSTANTS
+    // (FacilityName/NPI/Telephone/FacilityEmail/Country/ReportEmail) instead of
+    // re-typing — needs a custom-field default-value mechanism + the clinic NPI.
     fields: {
-      // Top box — "Date Specimen Collected:"
-      collectionDate: { x: 168, yTop: 33, size: 9 },
-      // FACILITY — "Physician Name:" (resolve fills orderingProvider)
-      orderingProvider: { x: 152, yTop: 193, size: 9, maxChars: 40 },
-      // PATIENT INFORMATION — First / Last / DOB / Gender row
-      firstName: { x: 66, yTop: 400, size: 9 },
-      lastName: { x: 236, yTop: 400, size: 9 },
-      dob: { x: 402, yTop: 400, size: 9 },
-      sexMaleX: { x: 548, yTop: 401, size: 9 }, // X on □Male
-      sexFemaleX: { x: 596, yTop: 401, size: 9 }, // X on □Female
-      // Street Address / Telephone
-      address: { x: 70, yTop: 430, size: 9 },
-      phone: { x: 402, yTop: 430, size: 9 },
-      // City / State / Email
-      city: { x: 56, yTop: 460, size: 9 },
-      state: { x: 252, yTop: 460, size: 9 },
-      email: { x: 402, yTop: 460, size: 9, maxChars: 36 },
-      // Zip / (Country)
-      zip: { x: 76, yTop: 490, size: 9 },
+      collectionDate: { x: 151, yTop: 27, size: 11 },
+      orderingProvider: { x: 121, yTop: 173, size: 12, maxChars: 40 }, // Physician Name
+      firstName: { x: 91, yTop: 339, size: 12 },
+      lastName: { x: 236, yTop: 340, size: 12 },
+      dob: { x: 437, yTop: 339, size: 11 },
+      sexMaleX: { x: 518, yTop: 343, size: 9 },
+      sexFemaleX: { x: 547, yTop: 343, size: 9 },
+      address: { x: 107, yTop: 359, size: 11 },
+      phone: { x: 378, yTop: 358, size: 11 },
+      city: { x: 70, yTop: 378, size: 11 },
+      state: { x: 244, yTop: 376, size: 11 },
+      email: { x: 362, yTop: 378, size: 12, maxChars: 36 },
+      zip: { x: 120, yTop: 396, size: 11 },
     },
   },
 ];
