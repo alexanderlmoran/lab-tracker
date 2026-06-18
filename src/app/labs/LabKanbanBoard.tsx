@@ -19,7 +19,7 @@ import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { labelForCase } from "@/lib/labs/label";
 import { archiveLabCase, setStepCompleted } from "./actions";
 import { CaseDetail } from "./CaseDetail";
-import { formatPersonName, formatShortDate } from "@/lib/format";
+import { easternDateIso, formatPersonName, formatShortDate } from "@/lib/format";
 import {
   ZERO_COUNTS,
   attemptCardClasses,
@@ -572,24 +572,38 @@ function todoDateHeader(iso: string | null): string {
   return pretty;
 }
 
-/** Group TO DO units into dated sections (ascending by collection date; undated
- *  last) so the column reads as date blocks the user scrolls — the lead card's
- *  collection_date drives the group. Stable, so each date keeps the column sort
- *  WITHIN it. Nothing is hidden; the "next 7 days" just become the first blocks. */
+/** TO DO as a WEEK VIEW: ALWAYS render today → +7 as date sections (even when a
+ *  day has no labs — that's how the user sees the whole week, not just the days
+ *  that happen to have work). Plus overdue (past, dated), beyond-window (future
+ *  past +7), and undated sections — but those only appear when they hold labs.
+ *  The lead card's collection_date buckets each unit; stable, so the per-column
+ *  sort still orders WITHIN a day. Nothing is hidden. */
 function groupTodoByDate(units: LabCase[][]): { key: string; label: string; items: LabCase[][] }[] {
-  const sorted = [...units].sort((a, b) =>
-    (a[0].collection_date ?? "9999-12-31").localeCompare(b[0].collection_date ?? "9999-12-31"),
-  );
-  const out: { key: string; label: string; items: LabCase[][] }[] = [];
-  for (const u of sorted) {
-    const key = u[0].collection_date ?? "nodate";
-    const last = out[out.length - 1];
-    if (!last || last.key !== key) {
-      out.push({ key, label: todoDateHeader(u[0].collection_date ?? null), items: [u] });
-    } else {
-      last.items.push(u);
-    }
+  const byDate = new Map<string, LabCase[][]>();
+  for (const u of units) {
+    const k = u[0].collection_date ?? "nodate";
+    const arr = byDate.get(k);
+    if (arr) arr.push(u);
+    else byDate.set(k, [u]);
   }
+
+  const today = easternDateIso();
+  const base = Date.parse(today + "T00:00:00Z");
+  const windowKeys: string[] = [];
+  for (let i = 0; i <= 7; i++) windowKeys.push(new Date(base + i * 86_400_000).toISOString().slice(0, 10));
+  const lastWindow = windowKeys[windowKeys.length - 1];
+  const dated = [...byDate.keys()].filter((k) => k !== "nodate");
+
+  const out: { key: string; label: string; items: LabCase[][] }[] = [];
+  const push = (key: string, items: LabCase[][]) => out.push({ key, label: todoDateHeader(key === "nodate" ? null : key), items });
+  // Overdue (dated before today) — only if present.
+  for (const k of dated.filter((k) => k < today).sort()) push(k, byDate.get(k)!);
+  // The week — today → +7, ALWAYS (empty days included).
+  for (const k of windowKeys) push(k, byDate.get(k) ?? []);
+  // Beyond the window (dated after +7) — only if present.
+  for (const k of dated.filter((k) => k > lastWindow).sort()) push(k, byDate.get(k)!);
+  // Undated — only if present.
+  if (byDate.has("nodate")) push("nodate", byDate.get("nodate")!);
   return out;
 }
 
@@ -970,11 +984,15 @@ export function LabKanbanBoard({
                 // scroll a week of work by date instead of one undifferentiated list.
                 groupTodoByDate(units).map((g) => (
                   <Fragment key={`todo:${g.key}`}>
-                    <div className="sticky top-0 z-10 -mx-0.5 border-b border-zinc-200 bg-zinc-50/95 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-600 backdrop-blur">
+                    <div className="sticky top-0 z-10 -mx-0.5 border-b border-orange-200 bg-orange-100/95 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-orange-700 backdrop-blur">
                       {g.label}{" "}
-                      <span className="font-normal normal-case text-zinc-400">({g.items.length})</span>
+                      <span className="font-normal normal-case text-orange-500/70">({g.items.length})</span>
                     </div>
-                    {g.items.map(renderUnit)}
+                    {g.items.length ? (
+                      g.items.map(renderUnit)
+                    ) : (
+                      <p className="px-2 py-1 text-[11px] text-zinc-300">—</p>
+                    )}
                   </Fragment>
                 ))
               ) : (
