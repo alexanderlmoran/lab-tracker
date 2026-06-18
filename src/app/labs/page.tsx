@@ -9,6 +9,8 @@ import { PatientFocusBoard } from "./PatientFocusBoard";
 import { LabsTabs, type LabsTab } from "./LabsTabs";
 import { TimeRangeTabs } from "./TimeRangeTabs";
 import { SearchBar } from "./SearchBar";
+import { LabFilterSelect } from "./LabFilterSelect";
+import { DateGroupToggle } from "./DateGroupToggle";
 import { MergeViewMenu } from "./MergeViewMenu";
 import { KanbanFilterChips } from "./KanbanFilterChips";
 import { RefreshAllTrackingButton } from "./RefreshAllTrackingButton";
@@ -113,9 +115,11 @@ export default async function LabsPage({
           {!isPatientFocus ? (
             <>
               {tab === "labs" ? <MergeViewMenu /> : null}
+              {tab === "labs" ? <DateGroupToggle /> : null}
               <div className="min-w-[180px] max-w-md flex-1">
-                <SearchBar labNames={labNames} />
+                <SearchBar />
               </div>
+              <LabFilterSelect labNames={labNames} />
               <TimeRangeTabs since={since} />
               {tab === "labs" ? <KanbanFilterChips /> : null}
               <RefreshAllTrackingButton />

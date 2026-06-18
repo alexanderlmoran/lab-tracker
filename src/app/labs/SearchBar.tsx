@@ -3,11 +3,10 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 
-export function SearchBar({ labNames }: { labNames: string[] }) {
+export function SearchBar() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [q, setQ] = useState(searchParams.get("q") ?? "");
-  const [lab, setLab] = useState(searchParams.get("lab") ?? "");
   const [, startTransition] = useTransition();
 
   // Debounce search input → URL push.
@@ -28,26 +27,16 @@ export function SearchBar({ labNames }: { labNames: string[] }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
 
-  function onLabChange(value: string) {
-    setLab(value);
-    const params = new URLSearchParams(searchParams.toString());
-    if (value) params.set("lab", value);
-    else params.delete("lab");
-    const next = params.toString();
-    startTransition(() => {
-      router.replace(next ? `/labs?${next}` : "/labs");
-    });
-  }
-
   function onClear() {
     setQ("");
-    setLab("");
     startTransition(() => {
       router.replace("/labs");
     });
   }
 
-  const hasFilters = q.length > 0 || lab.length > 0;
+  // Show Clear when the search text OR the (now-separate) lab filter is active —
+  // Clear still resets everything.
+  const hasFilters = q.length > 0 || !!searchParams.get("lab");
 
   return (
     <div className="flex w-full flex-wrap items-center gap-2">
@@ -58,19 +47,6 @@ export function SearchBar({ labNames }: { labNames: string[] }) {
         placeholder="Search patient name, email, or tracking #"
         className="min-w-[200px] flex-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none"
       />
-      <select
-        value={lab}
-        onChange={(e) => onLabChange(e.target.value)}
-        aria-label="Lab filter"
-        className="rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 focus:border-zinc-500 focus:outline-none"
-      >
-        <option value="">All labs</option>
-        {labNames.map((name) => (
-          <option key={name} value={name}>
-            {name}
-          </option>
-        ))}
-      </select>
       {hasFilters ? (
         <button
           type="button"
