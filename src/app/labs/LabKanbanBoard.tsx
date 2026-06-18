@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { LabCase, StepNumber } from "@/lib/types";
 import {
   COLUMN_LABEL,
   LAB_BOARD_COLUMN_ORDER,
   type ColumnKey,
+  daysFromTodayIso,
   expectedCountdown,
   getCaseStaleness,
   getColumnFor,
@@ -558,6 +559,40 @@ function StaticColumn({
   );
 }
 
+/** "06/18/2026" header for the TO DO date dividers, with a Today/Tomorrow/overdue
+ *  hint. Undated cases get their own header (never hidden). */
+function todoDateHeader(iso: string | null): string {
+  if (!iso) return "No collection date";
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const pretty = m ? `${m[2]}/${m[3]}/${m[1]}` : iso;
+  const d = daysFromTodayIso(iso);
+  if (d === 0) return `Today · ${pretty}`;
+  if (d === 1) return `Tomorrow · ${pretty}`;
+  if (d < 0) return `${pretty} · ${-d}d overdue`;
+  return pretty;
+}
+
+/** Group TO DO units into dated sections (ascending by collection date; undated
+ *  last) so the column reads as date blocks the user scrolls — the lead card's
+ *  collection_date drives the group. Stable, so each date keeps the column sort
+ *  WITHIN it. Nothing is hidden; the "next 7 days" just become the first blocks. */
+function groupTodoByDate(units: LabCase[][]): { key: string; label: string; items: LabCase[][] }[] {
+  const sorted = [...units].sort((a, b) =>
+    (a[0].collection_date ?? "9999-12-31").localeCompare(b[0].collection_date ?? "9999-12-31"),
+  );
+  const out: { key: string; label: string; items: LabCase[][] }[] = [];
+  for (const u of sorted) {
+    const key = u[0].collection_date ?? "nodate";
+    const last = out[out.length - 1];
+    if (!last || last.key !== key) {
+      out.push({ key, label: todoDateHeader(u[0].collection_date ?? null), items: [u] });
+    } else {
+      last.items.push(u);
+    }
+  }
+  return out;
+}
+
 export function LabKanbanBoard({
   rows,
   counts,
@@ -898,6 +933,25 @@ export function LabKanbanBoard({
           // collapse into one merged card in the group's lead column, so the
           // count reflects rendered units (not raw rows) — no ghost left behind.
           const units = sortUnits(unitsFor(col), sortByCol[col] ?? null);
+          const renderUnit = (unit: LabCase[]) =>
+            unit.length > 1 ? (
+              <MergedDupCard
+                key={`merged:${unit[0].id}`}
+                rows={unit}
+                mode={mergeMode}
+                onOpen={openLabDetail}
+                hasPendingPdf={unit.some((r) => pendingPdfSet.has(r.id))}
+              />
+            ) : (
+              <LabCard
+                key={unit[0].id}
+                row={unit[0]}
+                onOpen={openLabDetail}
+                counts={counts?.[unit[0].id] ?? ZERO_COUNTS}
+                dupSiblings={dupByCaseId.get(unit[0].id)}
+                hasPendingPdf={pendingPdfSet.has(unit[0].id)}
+              />
+            );
           return (
             <StaticColumn
               key={col}
@@ -911,27 +965,20 @@ export function LabKanbanBoard({
             >
               {units.length === 0 ? (
                 <p className="px-2 py-3 text-[11px] text-zinc-400">—</p>
+              ) : col === "untouched" ? (
+                // TO DO: split into dated sections (today, tomorrow, …) so staff
+                // scroll a week of work by date instead of one undifferentiated list.
+                groupTodoByDate(units).map((g) => (
+                  <Fragment key={`todo:${g.key}`}>
+                    <div className="sticky top-0 z-10 -mx-0.5 border-b border-zinc-200 bg-zinc-50/95 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-600 backdrop-blur">
+                      {g.label}{" "}
+                      <span className="font-normal normal-case text-zinc-400">({g.items.length})</span>
+                    </div>
+                    {g.items.map(renderUnit)}
+                  </Fragment>
+                ))
               ) : (
-                units.map((unit) =>
-                  unit.length > 1 ? (
-                    <MergedDupCard
-                      key={`merged:${unit[0].id}`}
-                      rows={unit}
-                      mode={mergeMode}
-                      onOpen={openLabDetail}
-                      hasPendingPdf={unit.some((r) => pendingPdfSet.has(r.id))}
-                    />
-                  ) : (
-                    <LabCard
-                      key={unit[0].id}
-                      row={unit[0]}
-                      onOpen={openLabDetail}
-                      counts={counts?.[unit[0].id] ?? ZERO_COUNTS}
-                      dupSiblings={dupByCaseId.get(unit[0].id)}
-                      hasPendingPdf={pendingPdfSet.has(unit[0].id)}
-                    />
-                  ),
-                )
+                units.map(renderUnit)
               )}
             </StaticColumn>
           );
