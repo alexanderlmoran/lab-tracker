@@ -20,12 +20,12 @@ const STORAGE_PATH = "captures/zenoti/20260522-103507/storage.json";
 const BASE = process.env.TRACKER_BASE_URL;
 const SECRET = process.env.WORKER_SHARED_SECRET;
 const INTERVAL_MS = Number(process.env.ZENOTI_SYNC_INTERVAL_MS ?? "60000");
-// Pull today + N days forward each tick. Default 1 day (today + tomorrow)
-// keeps the board tight on what staff is actively working — the lab team's
-// observed UX 2026-05-22 was that pulling 30 days flooded the kanban with
-// future bookings they hadn't realized were on the schedule. Bump
-// ZENOTI_DAYS_AHEAD if you want more lead time for prep / kits / labels.
-const DAYS_AHEAD = Number(process.env.ZENOTI_DAYS_AHEAD ?? "1");
+// Pull today + N days forward each tick. Default 7 (today + a week) so staff can
+// plan upcoming collections by date. It used to be 1 (today + tomorrow) because
+// "30 days flooded the kanban with future bookings" — but the board now GROUPS
+// the TO DO / Ready-to-Ship columns into date sections, so a week of lead time
+// reads as organized day blocks, not a flood. Override ZENOTI_DAYS_AHEAD for more.
+const DAYS_AHEAD = Number(process.env.ZENOTI_DAYS_AHEAD ?? "7");
 
 if (!BASE) throw new Error("TRACKER_BASE_URL is required");
 if (!SECRET) throw new Error("WORKER_SHARED_SECRET is required");

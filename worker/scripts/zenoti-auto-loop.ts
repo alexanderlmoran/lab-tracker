@@ -3,7 +3,7 @@
 //  - Logs in headless on startup, again every ZENOTI_RELOGIN_MS (~20h, before
 //    the ~24h cookie expiry), and again on any sync error (likely a dead cookie).
 //  - Every ZENOTI_LOOP_INTERVAL_MS (default 3 min) fetches lab appointments for
-//    TODAY + ZENOTI_DAYS_AHEAD days (default 1 = today + tomorrow) and UPSERTs
+//    TODAY + ZENOTI_DAYS_AHEAD days (default 7 = today + a week) and UPSERTs
 //    them into the tracker (/api/worker/cases, idempotent by zenoti_appointment_id).
 //
 // Needs: ZENOTI_USERNAME/PASSWORD, TRACKER_BASE_URL, WORKER_SHARED_SECRET.
@@ -29,7 +29,7 @@ const BASE = process.env.TRACKER_BASE_URL;
 const SECRET = process.env.WORKER_SHARED_SECRET;
 const STORAGE = process.env.ZENOTI_STORAGE_PATH ?? "/tmp/zenoti-session.json";
 const INTERVAL_MS = Number(process.env.ZENOTI_LOOP_INTERVAL_MS ?? "180000"); // 3 min
-const DAYS_AHEAD = Number(process.env.ZENOTI_DAYS_AHEAD ?? "1"); // today + tomorrow
+const DAYS_AHEAD = Number(process.env.ZENOTI_DAYS_AHEAD ?? "7"); // today + a week (date-grouped board organizes the lead time)
 const RELOGIN_MS = Number(process.env.ZENOTI_RELOGIN_MS ?? String(20 * 60 * 60 * 1000)); // 20h
 // Patient-profile enrichment is far slower-changing than appointments (DOB /
 // address rarely move), so it rides the loop's always-fresh session but only
