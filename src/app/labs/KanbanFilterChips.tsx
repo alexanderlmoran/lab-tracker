@@ -15,11 +15,23 @@ export function KanbanFilterChips() {
 
   const probablyReadyOnly = searchParams.get("ready") === "1";
   const staleOnly = searchParams.get("stale") === "1";
+  // Date breaks default ON; ?dates=off hides them (TO DO / Ready to Ship go flat).
+  const datesOff = searchParams.get("dates") === "off";
 
   function toggle(key: "ready" | "stale", isOn: boolean) {
     const params = new URLSearchParams(searchParams.toString());
     if (isOn) params.delete(key);
     else params.set(key, "1");
+    const qs = params.toString();
+    startTransition(() => {
+      router.replace(qs ? `/labs?${qs}` : "/labs");
+    });
+  }
+
+  function toggleDates() {
+    const params = new URLSearchParams(searchParams.toString());
+    if (datesOff) params.delete("dates");
+    else params.set("dates", "off");
     const qs = params.toString();
     startTransition(() => {
       router.replace(qs ? `/labs?${qs}` : "/labs");
@@ -51,6 +63,18 @@ export function KanbanFilterChips() {
         title="Show only cases with no progress in a while"
       >
         Stale only
+      </button>
+      <button
+        type="button"
+        onClick={toggleDates}
+        className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+          datesOff
+            ? "border-zinc-300 bg-white text-zinc-400 line-through hover:bg-zinc-50"
+            : "border-orange-300 bg-orange-50 text-orange-800"
+        }`}
+        title="Group TO DO / Ready to Ship into date sections by collection date — click to hide the date breaks"
+      >
+        Date breaks
       </button>
     </div>
   );

@@ -19,7 +19,7 @@ import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { labelForCase } from "@/lib/labs/label";
 import { archiveLabCase, setStepCompleted } from "./actions";
 import { CaseDetail } from "./CaseDetail";
-import { easternDateIso, formatPersonName, formatShortDate } from "@/lib/format";
+import { formatPersonName, formatShortDate } from "@/lib/format";
 import {
   ZERO_COUNTS,
   attemptCardClasses,
@@ -572,19 +572,12 @@ function todoDateHeader(iso: string | null): string {
   return pretty;
 }
 
-/** Break a column's units into date sections by collection_date (lead card's
- *  date buckets the unit; stable, so the per-column sort still orders WITHIN a
- *  day). Two modes:
- *   - skeleton (TO DO): ALWAYS render today → +7 as sections, even empty days, so
- *     the user sees the whole week; plus overdue / beyond-window / undated when
- *     they hold labs.
- *   - non-skeleton (Ready to Ship): only the dates that actually have labs, in
- *     order — no empty-day clutter in a busy column.
- *  Nothing is ever hidden. */
-function groupByCollectionDate(
-  units: LabCase[][],
-  opts: { skeleton: boolean },
-): { key: string; label: string; items: LabCase[][] }[] {
+/** Break a column's units into date sections by collection_date — ONLY for days
+ *  that actually have labs (ascending), so empty days (weekends, etc.) never show
+ *  as clutter, but a day with even one lab gets its header. The lead card's date
+ *  buckets each unit; stable, so the per-column sort still orders WITHIN a day.
+ *  Undated cases group last. Nothing is hidden. */
+function groupByCollectionDate(units: LabCase[][]): { key: string; label: string; items: LabCase[][] }[] {
   const byDate = new Map<string, LabCase[][]>();
   for (const u of units) {
     const k = u[0].collection_date ?? "nodate";
@@ -592,25 +585,11 @@ function groupByCollectionDate(
     if (arr) arr.push(u);
     else byDate.set(k, [u]);
   }
-
-  const today = easternDateIso();
   const dated = [...byDate.keys()].filter((k) => k !== "nodate").sort();
   const out: { key: string; label: string; items: LabCase[][] }[] = [];
   const push = (key: string, items: LabCase[][]) =>
     out.push({ key, label: todoDateHeader(key === "nodate" ? null : key), items });
-
-  if (opts.skeleton) {
-    const base = Date.parse(today + "T00:00:00Z");
-    const windowKeys: string[] = [];
-    for (let i = 0; i <= 7; i++) windowKeys.push(new Date(base + i * 86_400_000).toISOString().slice(0, 10));
-    const lastWindow = windowKeys[windowKeys.length - 1];
-    for (const k of dated.filter((k) => k < today)) push(k, byDate.get(k)!); // overdue
-    for (const k of windowKeys) push(k, byDate.get(k) ?? []); // today → +7, always
-    for (const k of dated.filter((k) => k > lastWindow)) push(k, byDate.get(k)!); // beyond +7
-  } else {
-    for (const k of dated) push(k, byDate.get(k)!); // present dates only
-  }
-  // Undated — only if present.
+  for (const k of dated) push(k, byDate.get(k)!);
   if (byDate.has("nodate")) push("nodate", byDate.get("nodate")!);
   return out;
 }
@@ -634,6 +613,9 @@ export function LabKanbanBoard({
 
   const probablyReadyOnly = searchParams.get("ready") === "1";
   const staleOnly = searchParams.get("stale") === "1";
+  // Date-section headers in TO DO / Ready to Ship are on by default; ?dates=off hides
+  // them (flat list) — the "Date breaks" toggle in the toolbar.
+  const hideDateBreaks = searchParams.get("dates") === "off";
 
   const filtered = useMemo(() => {
     let list = rows;
@@ -987,21 +969,17 @@ export function LabKanbanBoard({
             >
               {units.length === 0 ? (
                 <p className="px-2 py-3 text-[11px] text-zinc-400">—</p>
-              ) : col === "untouched" || col === "ready_to_ship" ? (
-                // Date sections by collection_date. TO DO shows the full week
-                // skeleton (plan ahead); Ready to Ship shows only dates that have
-                // labs (so a tracked 06/23 batch breaks out where it actually lives).
-                groupByCollectionDate(units, { skeleton: col === "untouched" }).map((g) => (
+              ) : (col === "untouched" || col === "ready_to_ship") && !hideDateBreaks ? (
+                // Date sections by collection_date — only days that actually have
+                // labs (so a tracked 06/23 batch breaks out where it lives). Toggle
+                // off via the "Date breaks" chip (?dates=off) for a flat list.
+                groupByCollectionDate(units).map((g) => (
                   <Fragment key={`todo:${g.key}`}>
                     <div className="sticky top-0 z-10 -mx-0.5 border-b border-orange-200 bg-orange-100/95 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-orange-700 backdrop-blur">
                       {g.label}{" "}
                       <span className="font-normal normal-case text-orange-500/70">({g.items.length})</span>
                     </div>
-                    {g.items.length ? (
-                      g.items.map(renderUnit)
-                    ) : (
-                      <p className="px-2 py-1 text-[11px] text-zinc-300">—</p>
-                    )}
+                    {g.items.map(renderUnit)}
                   </Fragment>
                 ))
               ) : (
