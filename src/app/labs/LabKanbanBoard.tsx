@@ -572,13 +572,19 @@ function todoDateHeader(iso: string | null): string {
   return pretty;
 }
 
-/** TO DO as a WEEK VIEW: ALWAYS render today → +7 as date sections (even when a
- *  day has no labs — that's how the user sees the whole week, not just the days
- *  that happen to have work). Plus overdue (past, dated), beyond-window (future
- *  past +7), and undated sections — but those only appear when they hold labs.
- *  The lead card's collection_date buckets each unit; stable, so the per-column
- *  sort still orders WITHIN a day. Nothing is hidden. */
-function groupTodoByDate(units: LabCase[][]): { key: string; label: string; items: LabCase[][] }[] {
+/** Break a column's units into date sections by collection_date (lead card's
+ *  date buckets the unit; stable, so the per-column sort still orders WITHIN a
+ *  day). Two modes:
+ *   - skeleton (TO DO): ALWAYS render today → +7 as sections, even empty days, so
+ *     the user sees the whole week; plus overdue / beyond-window / undated when
+ *     they hold labs.
+ *   - non-skeleton (Ready to Ship): only the dates that actually have labs, in
+ *     order — no empty-day clutter in a busy column.
+ *  Nothing is ever hidden. */
+function groupByCollectionDate(
+  units: LabCase[][],
+  opts: { skeleton: boolean },
+): { key: string; label: string; items: LabCase[][] }[] {
   const byDate = new Map<string, LabCase[][]>();
   for (const u of units) {
     const k = u[0].collection_date ?? "nodate";
@@ -588,20 +594,22 @@ function groupTodoByDate(units: LabCase[][]): { key: string; label: string; item
   }
 
   const today = easternDateIso();
-  const base = Date.parse(today + "T00:00:00Z");
-  const windowKeys: string[] = [];
-  for (let i = 0; i <= 7; i++) windowKeys.push(new Date(base + i * 86_400_000).toISOString().slice(0, 10));
-  const lastWindow = windowKeys[windowKeys.length - 1];
-  const dated = [...byDate.keys()].filter((k) => k !== "nodate");
-
+  const dated = [...byDate.keys()].filter((k) => k !== "nodate").sort();
   const out: { key: string; label: string; items: LabCase[][] }[] = [];
-  const push = (key: string, items: LabCase[][]) => out.push({ key, label: todoDateHeader(key === "nodate" ? null : key), items });
-  // Overdue (dated before today) — only if present.
-  for (const k of dated.filter((k) => k < today).sort()) push(k, byDate.get(k)!);
-  // The week — today → +7, ALWAYS (empty days included).
-  for (const k of windowKeys) push(k, byDate.get(k) ?? []);
-  // Beyond the window (dated after +7) — only if present.
-  for (const k of dated.filter((k) => k > lastWindow).sort()) push(k, byDate.get(k)!);
+  const push = (key: string, items: LabCase[][]) =>
+    out.push({ key, label: todoDateHeader(key === "nodate" ? null : key), items });
+
+  if (opts.skeleton) {
+    const base = Date.parse(today + "T00:00:00Z");
+    const windowKeys: string[] = [];
+    for (let i = 0; i <= 7; i++) windowKeys.push(new Date(base + i * 86_400_000).toISOString().slice(0, 10));
+    const lastWindow = windowKeys[windowKeys.length - 1];
+    for (const k of dated.filter((k) => k < today)) push(k, byDate.get(k)!); // overdue
+    for (const k of windowKeys) push(k, byDate.get(k) ?? []); // today → +7, always
+    for (const k of dated.filter((k) => k > lastWindow)) push(k, byDate.get(k)!); // beyond +7
+  } else {
+    for (const k of dated) push(k, byDate.get(k)!); // present dates only
+  }
   // Undated — only if present.
   if (byDate.has("nodate")) push("nodate", byDate.get("nodate")!);
   return out;
@@ -979,10 +987,11 @@ export function LabKanbanBoard({
             >
               {units.length === 0 ? (
                 <p className="px-2 py-3 text-[11px] text-zinc-400">—</p>
-              ) : col === "untouched" ? (
-                // TO DO: split into dated sections (today, tomorrow, …) so staff
-                // scroll a week of work by date instead of one undifferentiated list.
-                groupTodoByDate(units).map((g) => (
+              ) : col === "untouched" || col === "ready_to_ship" ? (
+                // Date sections by collection_date. TO DO shows the full week
+                // skeleton (plan ahead); Ready to Ship shows only dates that have
+                // labs (so a tracked 06/23 batch breaks out where it actually lives).
+                groupByCollectionDate(units, { skeleton: col === "untouched" }).map((g) => (
                   <Fragment key={`todo:${g.key}`}>
                     <div className="sticky top-0 z-10 -mx-0.5 border-b border-orange-200 bg-orange-100/95 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-orange-700 backdrop-blur">
                       {g.label}{" "}
