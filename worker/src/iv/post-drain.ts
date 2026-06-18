@@ -9,7 +9,7 @@
 import { request } from "undici";
 
 import { pbLogin, searchPbPatientCandidates, createPbPatient, type PbSession } from "../uploaders/practicebetter.js";
-import { getSessionNote, scaffoldFromNote, createSessionNote, updateSessionNote, listSessionNotes } from "../uploaders/pb-sessionnotes.js";
+import { getSessionNote, scaffoldFromNote, createSessionNote, updateSessionNote, findSameDayNote } from "../uploaders/pb-sessionnotes.js";
 import { buildIvNoteContent, ivNoteSummary, ivNoteTitle, type IvChartInput } from "./build-note-content.js";
 import { defaultIvChart, mergeIvChart } from "./default-chart.js";
 import { pickBestMatch, type PatientIdentity } from "./match-patient.js";
@@ -64,19 +64,8 @@ async function findSameDayDuplicate(
   title: string,
   templateHint: string | null,
 ): Promise<string | null> {
-  const dateKey = (sessionDate ?? "").slice(0, 10);
-  if (!dateKey) return null;
-  const notes = await listSessionNotes(pb, clientRecordId).catch(() => [] as Awaited<ReturnType<typeof listSessionNotes>>);
-  const norm = (x?: string | null) => (x ?? "").toLowerCase().replace(/\s+/g, " ").trim();
-  const keys = [norm(templateHint), norm(title)].filter((k) => k.length >= 4);
-  for (const n of notes) {
-    const meta = n as Record<string, unknown>;
-    const nDate = String(meta.sessionDate ?? meta.date ?? "").slice(0, 10);
-    if (nDate !== dateKey) continue;
-    const nName = norm(n.name);
-    if (nName && keys.some((k) => nName.includes(k) || k.includes(nName))) return n.name ?? "(untitled)";
-  }
-  return null;
+  const note = await findSameDayNote(pb, clientRecordId, sessionDate, [templateHint ?? "", title]);
+  return note ? note.name ?? "(untitled)" : null;
 }
 
 async function handle(claim: Claim, pb: PbSession) {

@@ -91,6 +91,33 @@ export async function listSessionNotes(
   return Array.isArray(j) ? j : j.items ?? [];
 }
 
+/** Find a client's PB note on a given DATE whose title overlaps any of `titleKeys`
+ *  (each ≥4 chars, matched in both directions). Shared by the post-time duplicate
+ *  guard ("don't double-post") AND the PB→tracker reconcile pass ("a note exists
+ *  in PB, capture it"). Defensive: a list failure resolves to null so a transient
+ *  read error never blocks a post or a sync. */
+export async function findSameDayNote(
+  session: PbSession,
+  clientRecordId: string,
+  sessionDate: string,
+  titleKeys: string[],
+): Promise<PbSessionNote | null> {
+  const dateKey = (sessionDate ?? "").slice(0, 10);
+  if (!dateKey) return null;
+  const norm = (x?: string | null) => (x ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const keys = titleKeys.map(norm).filter((k) => k.length >= 4);
+  if (!keys.length) return null;
+  const notes = await listSessionNotes(session, clientRecordId).catch(() => [] as PbSessionNote[]);
+  for (const n of notes) {
+    const meta = n as Record<string, unknown>;
+    const nDate = String(meta.sessionDate ?? meta.date ?? "").slice(0, 10);
+    if (nDate !== dateKey) continue;
+    const nName = norm(n.name);
+    if (nName && keys.some((k) => nName.includes(k) || k.includes(nName))) return n;
+  }
+  return null;
+}
+
 // ── Answer builders (the verified encoding) ──────────────────────────────
 
 /** singlechoicegrid: pick a column per row. `selectedColByRow[i]` = column index

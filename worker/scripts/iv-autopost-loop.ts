@@ -20,6 +20,7 @@ import { pbLogin, type PbSession } from "../src/uploaders/practicebetter.js";
 import { readPbInfusionSeed } from "../src/iv/pc-series.js";
 import { reportHeartbeat } from "../src/lib/heartbeat.js";
 import { drainIvPosts } from "../src/iv/post-drain.js";
+import { reconcileChartedNotes } from "../src/iv/reconcile.js";
 
 loadEnvLocal();
 const BASE = process.env.TRACKER_BASE_URL;
@@ -36,6 +37,7 @@ const SWEEP_DAYS = process.env.IV_SWEEP_DAYS ?? "2";
 const DRAIN_MS = Number(process.env.IV_DRAIN_INTERVAL_MS ?? 5 * 60 * 1000);
 const RELOGIN_MS = Number(process.env.IV_RELOGIN_MS ?? 3 * 60 * 60 * 1000); // re-login every ~3h (PB sessions expire)
 const PC_SEED_EVERY_MIN = Number(process.env.IV_PC_ENRICH_EVERY_MIN ?? 10); // PC series-seed cadence (one-time PB read per patient)
+const RECONCILE_EVERY_MIN = Number(process.env.IV_RECONCILE_EVERY_MIN ?? 15); // PB→tracker sync cadence (detect hand-charted notes, esp. EBOO)
 
 const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -94,6 +96,7 @@ async function main() {
   let pbLoginMs = 0;
   let lastPeriodicMs = 0;
   let lastPcSeedMs = 0;
+  let lastReconcileMs = 0;
   const doneToday = new Set<string>(); // "<date> <HH:MM>" full-sweeps already run
 
   for (;;) {
@@ -135,6 +138,18 @@ async function main() {
       // A 401 means the PB session expired mid-run — drop it so we re-login next
       // cycle; the failed jobs self-heal when the next sweep re-enqueues them.
       if (authError) { log("PB 401 — re-login next cycle"); pb = null; }
+      // PB→tracker reconcile: detect sessions charted in PB by hand (esp. EBOO/EBO2)
+      // and capture them so the board stays in sync. Throttled + HARD timeout cap so
+      // a slow PB read can never hang the loop (the consumables lesson).
+      if (pb && Date.now() - lastReconcileMs > RECONCILE_EVERY_MIN * 60_000) {
+        try {
+          const { checked, captured } = await withTimeout(reconcileChartedNotes(pb), 60_000);
+          if (captured) log(`reconcile: captured ${captured}/${checked} from PB`);
+          lastReconcileMs = Date.now();
+        } catch (e) {
+          log(`reconcile skipped: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
       await reportHeartbeat("ivpost"); // cycle completed → liveness
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

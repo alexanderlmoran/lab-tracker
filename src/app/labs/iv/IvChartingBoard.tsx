@@ -30,8 +30,11 @@ const STATUS_STYLE: Record<string, { label: string; cls: string }> = {
  *  EBOO from looking forgotten on the board (the "shows Not charted but it's in
  *  PB" confusion). */
 function statusBadge(r: IvSessionRow): { label: string; cls: string } {
-  if (r.kind === "ebo" && r.charting_status !== "posted") {
-    return r.charting_status === "skipped"
+  if (r.kind === "ebo") {
+    // EBOO/EBO2 are hand-charted in PB. Once captured (auto-detected by the
+    // reconcile pass → 'posted', or staff-dismissed → 'skipped') show it as
+    // charted; otherwise it's awaiting its manual PB chart — NOT "Not charted".
+    return r.charting_status === "posted" || r.charting_status === "skipped"
       ? { label: "✓ Charted in PB", cls: "bg-green-100 text-green-800" }
       : { label: "Awaiting PB chart", cls: "bg-violet-100 text-violet-800" };
   }
