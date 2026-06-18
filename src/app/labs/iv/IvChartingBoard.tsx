@@ -23,6 +23,21 @@ const STATUS_STYLE: Record<string, { label: string; cls: string }> = {
   skipped: { label: "Manual / skipped", cls: "bg-zinc-100 text-zinc-500" },
 };
 
+/** Status badge for a row. EBOO/EBO2 are charted BY HAND in PB (the tracker can't
+ *  post them), so a still-`pending` EBOO is NOT "Not charted" — it's waiting for
+ *  its manual PB chart. And once staff mark it done, "Manual / skipped" reads as
+ *  "didn't happen" when it actually IS charted — so show it as done. This keeps
+ *  EBOO from looking forgotten on the board (the "shows Not charted but it's in
+ *  PB" confusion). */
+function statusBadge(r: IvSessionRow): { label: string; cls: string } {
+  if (r.kind === "ebo" && r.charting_status !== "posted") {
+    return r.charting_status === "skipped"
+      ? { label: "✓ Charted in PB", cls: "bg-green-100 text-green-800" }
+      : { label: "Awaiting PB chart", cls: "bg-violet-100 text-violet-800" };
+  }
+  return STATUS_STYLE[r.charting_status] ?? STATUS_STYLE.pending;
+}
+
 /** Deep-link into PracticeBetter: the exact posted note when we have both ids,
  *  else the patient's notes list, else PB's home (search by hand). */
 function pbHref(r: IvSessionRow): string {
@@ -169,7 +184,7 @@ export function IvChartingBoard({
             <tbody className="divide-y divide-zinc-100">
               {sorted.map((r) => {
                 const k = KIND_STYLE[r.kind] ?? KIND_STYLE.standard;
-                const s = STATUS_STYLE[r.charting_status] ?? STATUS_STYLE.pending;
+                const s = statusBadge(r);
                 const tmpl =
                   r.kind === "ebo"
                     ? "manual (hand-charted)"
@@ -244,10 +259,18 @@ export function IvChartingBoard({
                             type="button"
                             disabled={pending && busyId === r.id}
                             onClick={() => markDone(r.id)}
-                            className="rounded border border-zinc-300 px-2 py-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-50"
-                            title="Already charted by hand in PB — dismiss from the board"
+                            className={`rounded px-2 py-0.5 text-xs font-medium disabled:opacity-50 ${
+                              r.kind === "ebo"
+                                ? "border border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700"
+                                : "border border-zinc-300 text-zinc-700 hover:bg-zinc-100"
+                            }`}
+                            title={
+                              r.kind === "ebo"
+                                ? "EBOO/EBO2 is charted by hand in PB — click once you've charted it there to mark it done"
+                                : "Already charted by hand in PB — dismiss from the board"
+                            }
                           >
-                            {pending && busyId === r.id ? "…" : "Already done"}
+                            {pending && busyId === r.id ? "…" : r.kind === "ebo" ? "✓ Charted in PB" : "Already done"}
                           </button>
                         )}
                         {r.charting_status !== "posted" &&
@@ -288,7 +311,8 @@ export function IvChartingBoard({
       <p className="mt-3 text-xs text-zinc-400">
         Charting form + confidence-graded PB posting are live. The post worker grades the patient
         match (name + DOB + email) and auto-posts at ≥95; lower-confidence matches hold for review.
-        EBOO/EBO2 are charted by hand in PB.
+        EBOO/EBO2 are charted by hand in PB — they show <strong>Awaiting PB chart</strong> (not
+        &ldquo;Not charted&rdquo;); click <strong>✓ Charted in PB</strong> once you&rsquo;ve charted it there.
       </p>
     </div>
   );
