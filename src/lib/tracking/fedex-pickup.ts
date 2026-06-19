@@ -191,6 +191,94 @@ function clinicUtcOffset(): string {
   return part?.match(/GMT([+-]\d{2}:\d{2})/)?.[1] ?? "-04:00";
 }
 
+/** Inverse of timeToMinutes → "HH:MM:00" (clamped to the same day). */
+function minutesToHms(total: number): string {
+  const t = Math.max(0, Math.min(23 * 60 + 59, Math.round(total)));
+  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}:00`;
+}
+
+/** Pull an "HH:MM" / "HH:MM:SS" out of a FedEx field (which may be a bare time
+ *  or a full ISO timestamp), normalized to "HH:MM:SS". */
+function extractHms(v: unknown): string | null {
+  const m = String(v ?? "").match(/(\d{2}):(\d{2})(?::(\d{2}))?/);
+  return m ? `${m[1]}:${m[2]}:${m[3] ?? "00"}` : null;
+}
+
+type PickupWindow = {
+  available: boolean;
+  /** Minutes FedEx needs between the ready time and close (lead time). */
+  accessMinutes: number;
+  /** Latest local time a same-day request is still accepted ("HH:MM:SS"). */
+  cutOffTime: string | null;
+  /** Latest local time the truck will arrive — use as customerCloseTime. */
+  latestTime: string | null;
+};
+
+/**
+ * Ask FedEx what pickup window is actually available for the clinic address on a
+ * given date (read-only — no truck). The old code guessed a fixed 2:30pm ready /
+ * 4:30pm close, which FedEx rejects with "Package is not accessible for the
+ * request time" whenever the requested ready time lands after the area's
+ * same-day cutoff. Returns null (→ caller falls back to env defaults, no
+ * regression) when availabilities is unreachable or unparseable.
+ */
+async function fetchPickupWindow(opts: {
+  readyDate: string;
+  carrier: "FDXE" | "FDXG";
+  schedule: "SAME_DAY" | "FUTURE_DAY";
+}): Promise<PickupWindow | null> {
+  const cfg = readPickupConfig();
+  if ("missing" in cfg) return null;
+  let token: string;
+  let base: string;
+  try {
+    ({ token, base } = await getPickupToken());
+  } catch {
+    return null;
+  }
+  const body = {
+    pickupAddress: { postalCode: cfg.zip, countryCode: cfg.country },
+    pickupRequestType: [opts.schedule],
+    carriers: [opts.carrier],
+    countryRelationship: "DOMESTIC",
+  };
+  let json: { output?: { options?: Array<Record<string, unknown>> } } | null = null;
+  try {
+    const res = await fetch(`${base}/pickup/v1/pickups/availabilities`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "x-locale": "en_US" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    json = await res.json().catch(() => null);
+  } catch {
+    return null;
+  }
+  const options = json?.output?.options ?? [];
+  if (!options.length) return null;
+  const want = opts.schedule.replace(/[^A-Z]/g, "");
+  const norm = (s: unknown) => String(s ?? "").toUpperCase().replace(/[^A-Z]/g, "");
+  // FedEx echoes carrier + schedule on each option; match ours, else take the
+  // first available, else the first option.
+  const match =
+    options.find((o) => norm(o.carrier) === opts.carrier && norm(o.scheduleDay ?? o.schedule) === want) ??
+    options.find((o) => o.available !== false) ??
+    options[0];
+  // accessTime is FedEx's required lead window between the ready time and close,
+  // formatted "HH:MM:SS" as a DURATION (e.g. "02:00:00" = 120 min). Guard the
+  // parse: anything implausible as a lead time (≤0 or >4h — including a
+  // clock-of-day value FedEx might send instead) falls back to a safe 60-min
+  // default rather than computing an absurd ready window.
+  const accessRaw = extractHms(match.accessTime);
+  const accessParsed = accessRaw ? timeToMinutes(accessRaw) : 60;
+  return {
+    available: match.available !== false,
+    accessMinutes: accessParsed > 0 && accessParsed <= 240 ? accessParsed : 60,
+    cutOffTime: extractHms(match.cutOffTime),
+    latestTime: extractHms(match.latestTimeForPickup ?? match.latestPickupDateTime ?? match.businessCloseTime),
+  };
+}
+
 export async function schedulePickup(input: SchedulePickupInput): Promise<SchedulePickupResult> {
   const cfg = readPickupConfig();
   if ("missing" in cfg) {
@@ -219,31 +307,58 @@ export async function schedulePickup(input: SchedulePickupInput): Promise<Schedu
     throw new FedExError(`Ready date ${input.readyDate} already passed — pick today or later.`);
   }
   const pickupDateType = input.readyDate === todayLocal ? "SAME_DAY" : "FUTURE_DAY";
-  if (pickupDateType === "SAME_DAY") {
-    // FedEx rejects a same-day ready time that's already in the past with a
-    // bare "invalid ready time" — booking after the default 2:30pm used to
-    // dead-end there. Clamp to ~20 min from now instead, and refuse with a
-    // real explanation when that leaves under an hour before close (FedEx's
-    // minimum ready→close window).
-    const now = clinicTimeNow();
-    if (readyTime <= now) {
-      readyTime = roundUpToFiveMinutes(now, 20);
-      if (readyTime < now) {
-        // Rounding crossed midnight — the same-day window is simply over.
-        throw new FedExError(
-          "Too late for a same-day pickup today — schedule for the next business day.",
-        );
-      }
-    }
-    if (timeToMinutes(cfg.closeTime) - timeToMinutes(readyTime) < 60) {
+
+  // Ask FedEx for the REAL pickup window for this address+date instead of
+  // guessing. The old fixed 2:30pm-ready / 4:30pm-close pair triggered "Package
+  // is not accessible for the request time" whenever the ready time fell after
+  // the area's same-day cutoff — Alex had to fall back to picking 12:30–16:30 by
+  // hand on fedex.com. We fit the ready time into FedEx's window and widen the
+  // close to FedEx's latest pickup time. A null window keeps the env defaults
+  // (no regression when availabilities is unreachable).
+  const win = await fetchPickupWindow({
+    readyDate: input.readyDate,
+    carrier: input.carrierCode ?? "FDXE",
+    schedule: pickupDateType,
+  });
+  let closeTime = cfg.closeTime;
+  const accessMin = win?.accessMinutes ?? 60;
+  if (win) {
+    if (!win.available) {
       throw new FedExError(
-        `Too late for a same-day pickup — earliest ready time is now ${readyTime.slice(0, 5)} ` +
-          `but the pickup close time is ${cfg.closeTime.slice(0, 5)}, and FedEx needs at least an ` +
-          `hour between them. Schedule for the next business day, or drop the package at a FedEx ` +
-          `location today.`,
+        pickupDateType === "SAME_DAY"
+          ? "FedEx has no same-day pickup available for the clinic today — schedule the next business day, or drop the package at a FedEx location."
+          : `FedEx has no pickup available on ${input.readyDate} — choose another business day.`,
+      );
+    }
+    // Adopt FedEx's latest pickup time as the close when it's later than ours —
+    // the wider window FedEx actually accepts.
+    if (win.latestTime && timeToMinutes(win.latestTime) > timeToMinutes(closeTime)) {
+      closeTime = win.latestTime;
+    }
+  }
+
+  // Latest ready time that still leaves FedEx's required lead window before close
+  // (and, same-day, is no later than the request cutoff).
+  let latestReady = timeToMinutes(closeTime) - accessMin;
+  if (pickupDateType === "SAME_DAY" && win?.cutOffTime) {
+    latestReady = Math.min(latestReady, timeToMinutes(win.cutOffTime));
+  }
+  if (pickupDateType === "SAME_DAY") {
+    // Ready can't be in the past — clamp to ~20 min from now.
+    const earliestReady = timeToMinutes(roundUpToFiveMinutes(clinicTimeNow(), 20));
+    if (timeToMinutes(readyTime) < earliestReady) readyTime = minutesToHms(earliestReady);
+    if (earliestReady > latestReady) {
+      throw new FedExError(
+        `Too late for a same-day pickup — FedEx needs the package ready by ` +
+          `${minutesToHms(latestReady).slice(0, 5)} (its cutoff / required ${accessMin}-min lead before ` +
+          `${closeTime.slice(0, 5)} close), but the earliest we can mark it ready now is ` +
+          `${minutesToHms(earliestReady).slice(0, 5)}. Schedule the next business day, or drop it at a FedEx location.`,
       );
     }
   }
+  // A preferred ready time later than the window allows is pulled back to fit,
+  // rather than letting FedEx reject the whole request.
+  if (timeToMinutes(readyTime) > latestReady) readyTime = minutesToHms(latestReady);
   const body = {
     associatedAccountNumber: { value: cfg.account },
     originDetail: {
@@ -269,7 +384,7 @@ export async function schedulePickup(input: SchedulePickupInput): Promise<Schedu
       // Defaults: ready 2:30pm (clamped forward for late same-day bookings),
       // clinic close (customerCloseTime) 4:30pm.
       readyDateTimestamp: `${input.readyDate}T${readyTime}${tzOffset}`,
-      customerCloseTime: cfg.closeTime,
+      customerCloseTime: closeTime,
       pickupDateType,
       packageLocation: process.env.FEDEX_PICKUP_PACKAGE_LOCATION ?? "FRONT",
     },
