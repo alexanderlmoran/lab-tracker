@@ -17,6 +17,7 @@ const FIELDS: Array<{ key: keyof ReqFormData; label: string }> = [
   { key: "dob", label: "DOB (MM/DD/YYYY)" },
   { key: "sex", label: "Sex (M/F)" },
   { key: "collectionDate", label: "Collection date" },
+  { key: "collectionTime", label: "Collection time" },
   { key: "orderDate", label: "Order date" },
   { key: "address", label: "Address" },
   { key: "city", label: "City" },

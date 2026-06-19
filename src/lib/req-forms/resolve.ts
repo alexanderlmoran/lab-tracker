@@ -187,6 +187,11 @@ export async function resolveReqForm(
   if (spec.fields.patientName) editableKeys.push("patientName");
   if (spec.fields.lastName) editableKeys.push("lastName", "firstName", "mi");
   editableKeys.push("dob", "sex", "collectionDate");
+  // Collection TIME — forms that position it (SpectraCell) get an editable input
+  // so staff stamp the real draw time. It was never resolved or surfaced before,
+  // so the positioned box always printed blank. Blank default (no fabricated
+  // draw time); the AM box is still auto-X'd for the typical morning draw.
+  if (spec.fields.collectionTime) editableKeys.push("collectionTime");
   if (spec.fields.orderDate) editableKeys.push("orderDate");
   if (spec.fields.orderNumber) editableKeys.push("orderNumber");
 
