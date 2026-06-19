@@ -13,22 +13,10 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { sameLab } from "@/lib/scrapers/normalize-lab";
-import {
-  findLabByName,
-  predictResultDates,
-  partialCompletionCheckDue,
-} from "@/lib/labs/catalog";
+import { partialCompletionCheckDue } from "@/lib/labs/catalog";
+import { inResultWindow } from "@/lib/labs/result-window";
 
 export const dynamic = "force-dynamic";
-
-// Fallback turnaround when the catalog has no min/max for a lab (e.g. Vibrant).
-// Keeps every accessioned sample-sent case enterable into the result window so
-// the scrape can detect results — without it the auto-pull only covered cases
-// FedEx-delivery set an expected date on.
-const DEFAULT_TURNAROUND_MIN_DAYS = 7;
-const DEFAULT_TURNAROUND_MAX_DAYS = 35;
-const addDays = (anchorIso: string, days: number) =>
-  new Date(new Date(anchorIso).getTime() + days * 86_400_000).toISOString().slice(0, 10);
 
 type Row = {
   id: string;
@@ -47,13 +35,6 @@ type Row = {
   created_at: string;
   dismissed_refs: string[] | null;
 };
-
-// Once the sample is at the lab, results can land any day — so poll from when
-// it was delivered. Without a delivery signal, start a few days after
-// collection. We deliberately DON'T wait for the predicted earliest-result date:
-// labs like Vibrant routinely return far sooner than the catalog estimate, so
-// gating on the predicted min left ready results unpulled (Vinay Mittal, 2026-06).
-const EARLY_POLL_DAYS = 2;
 
 export async function GET(request: Request) {
   const expected = process.env.WORKER_SHARED_SECRET;
@@ -109,60 +90,10 @@ export async function GET(request: Request) {
     accessionlessVibrant = vless ?? [];
   }
 
-  // A case is scrapeable when either:
-  //   (a) staff already marked results received (step2/step4) — the classic gate, OR
-  //   (b) it's in its RESULT WINDOW: sample sent, accession set, today is past the
-  //       predicted earliest result date and not more than GRACE_DAYS past the
-  //       latest — so the scheduled scrape auto-detects results the moment the
-  //       portal has them, without a human first ticking "results received".
-  //       The scraper only stages a PDF that matches the accession, so probing a
-  //       not-yet-ready case is a safe no-op. The window bounds portal load.
-  const today = new Date().toISOString().slice(0, 10);
-  // 60d grace past the predicted max: a case whose results genuinely land slow
-  // (or whose accession was entered late) used to fall out of the feed ~56d
-  // after its anchor and silently NEVER auto-pull again. Probing a not-ready
-  // case is a safe no-op (accession-matched), so the wider window only costs
-  // portal requests, not correctness.
-  const GRACE_DAYS = 60;
-  const graceFloor = new Date(Date.now() - GRACE_DAYS * 86_400_000)
-    .toISOString()
-    .slice(0, 10);
-
-  // Effective [min, max] result window. Prefer the delivery/import-set dates;
-  // otherwise predict from the catalog turnaround anchored on collection date
-  // (or created date), with a default turnaround for labs the catalog doesn't
-  // specify. This is what makes auto-pull cover NON-FedEx-delivered cases too.
-  const effectiveWindow = (c: Row): { min: string | null; max: string | null } => {
-    if (c.expected_result_at_min) {
-      return { min: c.expected_result_at_min, max: c.expected_result_at_max };
-    }
-    const anchor = c.collection_date ?? c.created_at.slice(0, 10);
-    const entry = findLabByName(c.lab_name);
-    const pred = entry ? predictResultDates(new Date(anchor), entry) : { minIso: null, maxIso: null };
-    return {
-      min: pred.minIso ?? addDays(anchor, DEFAULT_TURNAROUND_MIN_DAYS),
-      max: pred.maxIso ?? addDays(anchor, DEFAULT_TURNAROUND_MAX_DAYS),
-    };
-  };
-
-  // Poll daily from delivery (or collection + EARLY_POLL_DAYS) through the
-  // predicted max + grace — NOT from the predicted earliest date. The scraper
-  // only stages a PDF that matches the accession, so polling before the result
-  // is ready is a safe no-op; this just lets the hourly scrape catch results
-  // that arrive faster than the catalog estimate.
-  const pollStartsBy = (c: Row): string => {
-    if (c.tracking_delivered_at) return c.tracking_delivered_at.slice(0, 10);
-    const anchor = c.collection_date ?? c.created_at.slice(0, 10);
-    return addDays(anchor, EARLY_POLL_DAYS);
-  };
-  const inResultWindow = (c: Row) => {
-    if (!c.step1_sample_sent || c.step2_partial_received || c.step4_complete_received) {
-      return false;
-    }
-    const { max } = effectiveWindow(c);
-    return pollStartsBy(c) <= today && (!max || max >= graceFloor);
-  };
-
+  // A case is scrapeable when either staff already marked results received
+  // (step2/step4), OR it's inside its RESULT WINDOW (sample sent, accession set,
+  // poll-start reached, not past the grace floor). Window/poll math is shared
+  // with the sample-sent triage — see @/lib/labs/result-window.
   const rows = [...((data ?? []) as Row[]), ...(accessionlessVibrant as Row[])].filter((c) =>
     sameLab(c.lab_name, lab),
   );
