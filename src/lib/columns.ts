@@ -176,6 +176,25 @@ export function stepIsComplete(c: LabCase, step: StepNumber): boolean {
   return Boolean(c[STEP_TO_COL[step]]);
 }
 
+/** A copy of `c` with `maxStep` (and its workflow-prior steps) marked complete —
+ *  for optimistic UI after a column jump. Mirrors setStepCompleted's cascadePrior
+ *  EXACTLY: the target step is always set, but prior steps cascade only along
+ *  THIS lab's workflow (not a numeric 1..maxStep span), so a non-default workflow
+ *  (e.g. peptides [1,4]) lands in the same lane getColumnFor computes server-side
+ *  — no wrong-lane flicker before the refetch. */
+export function caseWithStepsThrough(c: LabCase, maxStep: StepNumber): LabCase {
+  const out: LabCase = { ...c };
+  (out as Record<string, unknown>)[STEP_TO_COL[maxStep]] = true;
+  const steps = getWorkflowSteps(getCaseWorkflow(c));
+  const idx = steps.indexOf(maxStep);
+  if (idx > 0) {
+    for (const s of steps.slice(0, idx)) {
+      (out as Record<string, unknown>)[STEP_TO_COL[s]] = true;
+    }
+  }
+  return out;
+}
+
 export function completedStepCount(c: LabCase): number {
   // Counts only steps relevant to the case's workflow so the "X of N"
   // display matches what the user actually sees in the checklist.

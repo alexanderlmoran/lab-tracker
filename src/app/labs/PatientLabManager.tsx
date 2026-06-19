@@ -2,8 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import type { LabCase } from "@/lib/types";
-import { COLUMN_LABEL, LAB_BOARD_COLUMN_ORDER, getColumnFor } from "@/lib/columns";
+import type { LabCase, StepNumber } from "@/lib/types";
+import {
+  COLUMN_LABEL,
+  LAB_BOARD_COLUMN_ORDER,
+  type ColumnKey,
+  caseWithStepsThrough,
+  getColumnFor,
+} from "@/lib/columns";
+import { planColumnJump, isColumnJumpTarget } from "@/lib/column-jump";
 import { probeKeyForLab } from "@/lib/scrapers/normalize-lab";
 import { normalizeScannedTracking } from "@/lib/tracking/normalize";
 import { labelForCase, panelFor } from "@/lib/labs/label";
@@ -14,6 +21,7 @@ import {
   createLabCases,
   deleteLabCase,
   listPatientCases,
+  setStepCompleted,
 } from "./actions";
 import { probeCaseResult } from "./probe-actions";
 import { BarcodeScanner } from "./BarcodeScanner";
@@ -72,6 +80,11 @@ function toRowEdit(c: LabCase): RowEdit {
 const inputCls =
   "w-full rounded border border-zinc-300 bg-white px-1.5 py-1 text-[12px] text-zinc-900 placeholder:text-zinc-400 focus:border-indigo-400 focus:outline-none";
 
+// Columns a lab can be MOVED to (reaching them ticks a step). The derived lanes
+// — TO DO / Ready to Ship / Pending Upload — follow from tracking/results and
+// have no step to flip, so they're never move targets (same rule as the board).
+const JUMP_TARGETS: ColumnKey[] = LAB_BOARD_COLUMN_ORDER.filter((c) => isColumnJumpTarget(c));
+
 /**
  * "Manage labs" — a per-patient grid for editing tracking #, accession, and
  * collection date across all of a patient's labs at once, stamping one tracking
@@ -121,6 +134,10 @@ export function ManageLabsButton({
   // unreliable inside a modal <dialog> (it can silently return false, which
   // reads as "the delete won't work, I had to leave the modal to delete").
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  // A pending "move this lab to another status" awaiting its inline confirm
+  // (moving to Complete Uploaded / ROF Scheduled alerts Nadia·Allison — surfaced
+  // before Move; patient emails never auto-fire from a move).
+  const [moveRow, setMoveRow] = useState<{ caseId: string; target: ColumnKey } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [saving, startSave] = useTransition();
@@ -215,6 +232,7 @@ export function ManageLabsButton({
     setColumnFilter("");
     setSort(null);
     setConfirmDel(null);
+    setMoveRow(null);
     setSelected(new Set());
     setError(null);
     setOpen(true);
@@ -284,6 +302,54 @@ export function ManageLabsButton({
       }
       setRows((rs) => rs.filter((row) => row.caseId !== caseId));
       setSrcCases((cs) => cs.filter((c) => c.id !== caseId));
+      router.refresh();
+    });
+  }
+
+  // Staff-alert side-effects a move to `target` would fire (surfaced before the
+  // operator confirms). NOTE: patient-facing emails are NOT auto-sent by a step
+  // toggle — they fire only via the explicit Send-email button (see
+  // setStepCompleted, backlog #11) — so the only auto side-effects are the Nadia
+  // (step 5) and Allison (step 6) staff alerts, gated on the move's target step.
+  function moveWarning(c: LabCase, target: ColumnKey): string | null {
+    const plan = planColumnJump(c, target).filter((p) => !p.alreadyComplete);
+    const bits = [
+      plan.some((p) => p.step === 5) && "alerts Nadia (once all the patient's labs reach here)",
+      plan.some((p) => p.step === 6) && "alerts Allison + closes the protocol step",
+    ].filter(Boolean) as string[];
+    return bits.length ? `⚠ ${bits.join(" + ")}` : null;
+  }
+
+  // Move a lab to another status — the SAME mechanism as a board drag-drop
+  // (planColumnJump → setStepCompleted with cascadePrior), so the lane, emails,
+  // and step cascade all behave identically. Writes immediately and reflects the
+  // new lane in the grid without a refetch (unsaved field edits are preserved).
+  function applyMove(caseId: string, target: ColumnKey) {
+    setMoveRow(null);
+    const c = srcCases.find((x) => x.id === caseId);
+    if (!c) return;
+    const plan = planColumnJump(c, target);
+    if (plan.length === 0) {
+      setError(`"${COLUMN_LABEL[target]}" is set automatically (from tracking / results), not by moving.`);
+      return;
+    }
+    const maxStep = Math.max(...plan.map((p) => p.step)) as StepNumber;
+    setError(null);
+    startSave(async () => {
+      const r = await setStepCompleted({ caseId, step: maxStep, completed: true, cascadePrior: true });
+      if (!r.ok) {
+        setError(r.error ?? "Could not move this lab.");
+        return;
+      }
+      const patched = caseWithStepsThrough(c, maxStep);
+      setSrcCases((cs) => cs.map((x) => (x.id === caseId ? patched : x)));
+      setRows((rs) =>
+        rs.map((row) =>
+          row.caseId === caseId
+            ? { ...row, column: COLUMN_LABEL[getColumnFor(patched)], step1Done: row.step1Done || maxStep >= 1 }
+            : row,
+        ),
+      );
       router.refresh();
     });
   }
@@ -768,7 +834,60 @@ export function ManageLabsButton({
                             <p className="mt-0.5 text-[10px] text-zinc-500">{r.probe.msg}</p>
                           ) : null}
                         </td>
-                        <td className="px-2 py-1.5 text-[11px] text-zinc-500">{r.column}</td>
+                        <td className="px-2 py-1.5 text-[11px] text-zinc-500">
+                          {(() => {
+                            const sc = srcCases.find((x) => x.id === r.caseId);
+                            const curCol = sc ? getColumnFor(sc) : null;
+                            if (moveRow?.caseId === r.caseId) {
+                              const warn = sc ? moveWarning(sc, moveRow.target) : null;
+                              return (
+                                <div className="flex flex-col gap-1">
+                                  <span className="text-zinc-700">→ {COLUMN_LABEL[moveRow.target]}</span>
+                                  {warn ? <span className="text-[10px] text-amber-700">{warn}</span> : null}
+                                  <div className="flex gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => applyMove(r.caseId, moveRow.target)}
+                                      disabled={saving}
+                                      className="rounded border border-emerald-300 bg-emerald-600 px-1.5 py-0.5 text-[10px] font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                                    >
+                                      Move
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setMoveRow(null)}
+                                      className="rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-[10px] text-zinc-600 hover:bg-zinc-50"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            }
+                            return (
+                              <div className="flex items-center gap-1">
+                                <span>{r.column}</span>
+                                <select
+                                  value=""
+                                  disabled={saving}
+                                  onChange={(e) => {
+                                    const t = e.target.value as ColumnKey;
+                                    if (t) setMoveRow({ caseId: r.caseId, target: t });
+                                  }}
+                                  title="Move this lab to another status"
+                                  className="rounded border border-zinc-300 bg-white px-1 py-0.5 text-[10px] text-zinc-700 focus:border-indigo-400 focus:outline-none disabled:opacity-50"
+                                >
+                                  <option value="">Move ▾</option>
+                                  {JUMP_TARGETS.filter((t) => t !== curCol).map((t) => (
+                                    <option key={t} value={t}>
+                                      {COLUMN_LABEL[t]}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            );
+                          })()}
+                        </td>
                         <td className="px-2 py-1.5">
                           {confirmDel === r.caseId ? (
                             <div className="flex items-center gap-1">
