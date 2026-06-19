@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { LabCase } from "@/lib/types";
-import { COLUMN_LABEL, getColumnFor } from "@/lib/columns";
+import { COLUMN_LABEL, LAB_BOARD_COLUMN_ORDER, getColumnFor } from "@/lib/columns";
 import { probeKeyForLab } from "@/lib/scrapers/normalize-lab";
 import { normalizeScannedTracking } from "@/lib/tracking/normalize";
 import { labelForCase, panelFor } from "@/lib/labs/label";
@@ -112,6 +112,15 @@ export function ManageLabsButton({
   // `groupFilter` narrows the grid (and every bulk action) to one collection
   // date so a fresh shipment isn't lost in the history. "" = show all.
   const [groupFilter, setGroupFilter] = useState("");
+  // Narrow the grid to one kanban column (TO DO / Ready to Ship / …) alongside
+  // the date filter — so a fresh shipment or a specific lane is easy to act on.
+  const [columnFilter, setColumnFilter] = useState("");
+  // Optional header sort (Collected / Acc# / Status), display-only.
+  const [sort, setSort] = useState<{ key: "collection" | "accession" | "column"; dir: "asc" | "desc" } | null>(null);
+  // Inline two-step delete confirm — replaces window.confirm(), which is
+  // unreliable inside a modal <dialog> (it can silently return false, which
+  // reads as "the delete won't work, I had to leave the modal to delete").
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [saving, startSave] = useTransition();
@@ -145,16 +154,50 @@ export function ManageLabsButton({
   // grid falls back to "all" instead of stranding the operator on an empty view
   // — derived during render, no effect needed.
   const effectiveGroup = groupFilter && groups.includes(groupFilter) ? groupFilter : "";
-  // Rows shown after the date filter. Everything downstream (the grid, apply-to-
-  // all, the bulk actions) operates on these so a filtered view can't touch a
-  // lab the operator can't see.
+
+  // Distinct kanban columns present, in board order — drives the column filter
+  // (only shown when there's more than one lane to choose between).
+  const columns = useMemo(() => {
+    const order = LAB_BOARD_COLUMN_ORDER.map((k) => COLUMN_LABEL[k]);
+    const seen = new Set(rows.map((r) => r.column));
+    return order.filter((label) => seen.has(label));
+  }, [rows]);
+  const effectiveColumn = columnFilter && columns.includes(columnFilter) ? columnFilter : "";
+
+  // Rows shown after the date + column filters. Everything downstream (the grid,
+  // apply-to-all, the bulk actions) operates on these so a filtered view can't
+  // touch a lab the operator can't see.
   const visibleRows = useMemo(
     () =>
-      effectiveGroup
-        ? rows.filter((r) => (r.collection.trim() || NO_DATE) === effectiveGroup)
-        : rows,
-    [rows, effectiveGroup],
+      rows.filter(
+        (r) =>
+          (!effectiveGroup || (r.collection.trim() || NO_DATE) === effectiveGroup) &&
+          (!effectiveColumn || r.column === effectiveColumn),
+      ),
+    [rows, effectiveGroup, effectiveColumn],
   );
+  const anyFilter = effectiveGroup !== "" || effectiveColumn !== "";
+
+  // Display sort (membership unchanged, so bulk-action scoping still keys off
+  // visibleRows). Status sorts by board order so "up the chain" reads top-down.
+  const colRank = useMemo(() => {
+    const order = LAB_BOARD_COLUMN_ORDER.map((k) => COLUMN_LABEL[k]);
+    return (label: string) => {
+      const i = order.indexOf(label);
+      return i === -1 ? order.length : i;
+    };
+  }, []);
+  const sortedRows = useMemo(() => {
+    if (!sort) return visibleRows;
+    const dir = sort.dir === "asc" ? 1 : -1;
+    const val = (r: RowEdit) =>
+      sort.key === "collection"
+        ? r.collection || ""
+        : sort.key === "accession"
+          ? r.accession.toLowerCase()
+          : String(colRank(r.column)).padStart(3, "0");
+    return [...visibleRows].sort((a, b) => val(a).localeCompare(val(b)) * dir);
+  }, [visibleRows, sort, colRank]);
 
   // Seed editable state each time the dialog opens, so a re-open after a save
   // reflects the refreshed rows (no stale edits linger). Uses preloaded cases
@@ -169,6 +212,9 @@ export function ManageLabsButton({
     setBulkAccession("");
     setBulkCollection("");
     setGroupFilter("");
+    setColumnFilter("");
+    setSort(null);
+    setConfirmDel(null);
     setSelected(new Set());
     setError(null);
     setOpen(true);
@@ -201,6 +247,12 @@ export function ManageLabsButton({
     setRows((rs) => rs.map((r) => (r.caseId === caseId ? { ...r, ...patch } : r)));
   }
 
+  // Header sort (Collected / Acc# / Status) — click cycles asc → desc → off.
+  function toggleSort(key: "collection" | "accession" | "column") {
+    setSort((s) => (s?.key !== key ? { key, dir: "asc" } : s.dir === "asc" ? { key, dir: "desc" } : null));
+  }
+  const sortArrow = (key: string) => (sort?.key === key ? (sort.dir === "asc" ? " ↑" : " ↓") : "");
+
   // A barcode came back — drop it into whichever field opened the scanner.
   function applyScan(code: string) {
     const target = scan;
@@ -220,11 +272,10 @@ export function ManageLabsButton({
   }
 
   // Soft-delete a row (recoverable from Settings → Deleted). Writes immediately
-  // — there's no "undo on cancel" for a delete — then drops it from the grid.
-  function deleteRow(caseId: string, label: string) {
-    if (!confirm(`Delete "${label}"?\n\nSoft delete — recoverable from Settings → Deleted.`)) {
-      return;
-    }
+  // — there's no "undo on cancel" — then drops it from the grid. Gated by an
+  // inline confirm (setConfirmDel) rather than window.confirm().
+  function performDelete(caseId: string) {
+    setConfirmDel(null);
     startSave(async () => {
       const r = await deleteLabCase(caseId);
       if (!r.ok) {
@@ -265,7 +316,7 @@ export function ManageLabsButton({
     // stamp avva's accession on avva's panels, not her sibling's); else to the
     // rows currently visible under the date filter. New labs only get stamped
     // when nothing is scoped (no selection and no active date filter).
-    const scoped = selected.size > 0 || Boolean(effectiveGroup);
+    const scoped = selected.size > 0 || anyFilter;
     const visibleIds = new Set(visibleRows.map((r) => r.caseId));
     const hit = (r: RowEdit) =>
       selected.size > 0 ? selected.has(r.caseId) : visibleIds.has(r.caseId);
@@ -481,7 +532,7 @@ export function ManageLabsButton({
                 <h2 className="text-sm font-semibold text-zinc-900">Manage labs — {patientName}</h2>
                 <p className="text-[11px] text-zinc-500">
                   {rows.length} lab{rows.length === 1 ? "" : "s"}
-                  {effectiveGroup ? ` · ${visibleRows.length} shown` : ""} · {patientEmail}
+                  {anyFilter ? ` · ${visibleRows.length} shown` : ""} · {patientEmail}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -503,6 +554,28 @@ export function ManageLabsButton({
                         return (
                           <option key={g} value={g}>
                             {g === NO_DATE ? "— no date —" : g} ({count})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </label>
+                ) : null}
+                {/* Kanban-column filter — only when the patient's labs span more
+                    than one lane (otherwise it's noise). */}
+                {columns.length > 1 ? (
+                  <label className="flex items-center gap-1.5 text-[11px] text-zinc-600">
+                    <span>Status</span>
+                    <select
+                      value={columnFilter}
+                      onChange={(e) => setColumnFilter(e.target.value)}
+                      className="rounded border border-zinc-300 bg-white px-1.5 py-1 text-[12px] text-zinc-900 focus:border-indigo-400 focus:outline-none"
+                    >
+                      <option value="">All columns ({rows.length})</option>
+                      {columns.map((col) => {
+                        const count = rows.filter((r) => r.column === col).length;
+                        return (
+                          <option key={col} value={col}>
+                            {col} ({count})
                           </option>
                         );
                       })}
@@ -535,7 +608,7 @@ export function ManageLabsButton({
                 <span className="text-[11px] font-medium text-zinc-600">
                   {selected.size > 0
                     ? `Apply to ${selected.size} selected:`
-                    : effectiveGroup
+                    : anyFilter
                       ? `Apply to ${visibleRows.length} shown:`
                       : "Apply to all:"}
                 </span>
@@ -585,15 +658,27 @@ export function ManageLabsButton({
                       {multiName ? <th className="px-2 py-1.5 font-medium" /> : null}
                       {multiName ? <th className="px-2 py-1.5 font-medium">Who</th> : null}
                       <th className="px-2 py-1.5 font-medium">Lab</th>
-                      <th className="px-2 py-1.5 font-medium">Collected</th>
+                      <th className="px-2 py-1.5 font-medium">
+                        <button type="button" onClick={() => toggleSort("collection")} className="uppercase tracking-wide hover:text-zinc-800">
+                          Collected{sortArrow("collection")}
+                        </button>
+                      </th>
                       <th className="px-2 py-1.5 font-medium">Tracking #</th>
-                      <th className="px-2 py-1.5 font-medium">Acc#</th>
-                      <th className="px-2 py-1.5 font-medium">Status</th>
+                      <th className="px-2 py-1.5 font-medium">
+                        <button type="button" onClick={() => toggleSort("accession")} className="uppercase tracking-wide hover:text-zinc-800">
+                          Acc#{sortArrow("accession")}
+                        </button>
+                      </th>
+                      <th className="px-2 py-1.5 font-medium">
+                        <button type="button" onClick={() => toggleSort("column")} className="uppercase tracking-wide hover:text-zinc-800">
+                          Status{sortArrow("column")}
+                        </button>
+                      </th>
                       <th className="px-2 py-1.5 font-medium" />
                     </tr>
                   </thead>
                   <tbody>
-                    {visibleRows.map((r) => (
+                    {sortedRows.map((r) => (
                       <tr
                         key={r.caseId}
                         className={`border-t border-zinc-100 align-top ${
@@ -685,16 +770,36 @@ export function ManageLabsButton({
                         </td>
                         <td className="px-2 py-1.5 text-[11px] text-zinc-500">{r.column}</td>
                         <td className="px-2 py-1.5">
-                          <button
-                            type="button"
-                            onClick={() => deleteRow(r.caseId, r.labLabel)}
-                            disabled={saving}
-                            title="Delete this lab (recoverable)"
-                            aria-label="Delete this lab"
-                            className="rounded border border-rose-200 bg-white px-1.5 py-0.5 text-[11px] text-rose-600 hover:bg-rose-50 disabled:opacity-50"
-                          >
-                            ✕
-                          </button>
+                          {confirmDel === r.caseId ? (
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => performDelete(r.caseId)}
+                                disabled={saving}
+                                className="rounded border border-rose-300 bg-rose-600 px-1.5 py-0.5 text-[11px] font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+                              >
+                                Delete
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDel(null)}
+                                className="rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600 hover:bg-zinc-50"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDel(r.caseId)}
+                              disabled={saving}
+                              title="Delete this lab (recoverable from Settings → Deleted)"
+                              aria-label="Delete this lab"
+                              className="rounded border border-rose-200 bg-white px-1.5 py-0.5 text-[11px] text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                            >
+                              ✕
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -832,7 +937,7 @@ export function ManageLabsButton({
                 title="Tick step 1 (Sample sent) on these labs now — writes immediately, no patient emails"
                 className="rounded-md border border-sky-300 bg-white px-3 py-1.5 text-[13px] font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-50"
               >
-                Mark {selected.size > 0 ? "selected" : effectiveGroup ? "shown" : "all"} sent
+                Mark {selected.size > 0 ? "selected" : anyFilter ? "shown" : "all"} sent
                 {sampleSentScope.length > 0 ? ` (${sampleSentScope.length})` : ""} · no email
               </button>
               <button
