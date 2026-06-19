@@ -4,10 +4,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
 
 /**
- * Toggle the by-collection-date section headers in the TO DO / Ready to Ship
- * columns. On by default; ?dates=off renders those columns as a flat list.
- * URL-driven so the board reads the same param. Lives in the toolbar between the
- * Merge menu and the search box.
+ * Toggle the by-collection-date section headers across ALL board columns. On by
+ * default; ?dates=off renders the columns as flat lists. URL-driven so the board
+ * reads the same param. Lives in the toolbar between the Merge menu and search.
  */
 export function DateGroupToggle() {
   const router = useRouter();
@@ -32,7 +31,7 @@ export function DateGroupToggle() {
           ? "border-zinc-300 bg-white text-zinc-400 line-through hover:bg-zinc-50"
           : "border-orange-300 bg-orange-50 text-orange-800"
       }`}
-      title="Group TO DO / Ready to Ship into date sections by collection date — click to hide"
+      title="Group every column into date sections by collection date — click to hide"
     >
       Group by date
     </button>

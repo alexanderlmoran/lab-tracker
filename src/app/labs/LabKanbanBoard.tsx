@@ -969,10 +969,9 @@ export function LabKanbanBoard({
             >
               {units.length === 0 ? (
                 <p className="px-2 py-3 text-[11px] text-zinc-400">—</p>
-              ) : (col === "untouched" || col === "ready_to_ship") && !hideDateBreaks ? (
-                // Date sections by collection_date — only days that actually have
-                // labs (so a tracked 06/23 batch breaks out where it lives). Toggle
-                // off via the "Date breaks" chip (?dates=off) for a flat list.
+              ) : !hideDateBreaks ? (
+                // Date sections by collection_date in EVERY column — only days that
+                // actually have labs. Toggle off via "Group by date" (?dates=off).
                 groupByCollectionDate(units).map((g) => (
                   <Fragment key={`todo:${g.key}`}>
                     <div className="sticky top-0 z-10 -mx-0.5 border-b border-orange-200 bg-orange-100/95 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-orange-700 backdrop-blur">
