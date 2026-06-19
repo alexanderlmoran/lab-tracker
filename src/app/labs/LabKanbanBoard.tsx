@@ -17,6 +17,7 @@ import {
 import { planColumnJump } from "@/lib/column-jump";
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { labelForCase } from "@/lib/labs/label";
+import { normalizeLabName } from "@/lib/scrapers/normalize-lab";
 import { archiveLabCase, setStepCompleted } from "./actions";
 import { CaseDetail } from "./CaseDetail";
 import { formatPersonName, formatShortDate } from "@/lib/format";
@@ -43,13 +44,20 @@ function formatExpectedRange(min: string | null, max: string | null): string | n
   return fmt(max ?? min ?? "");
 }
 
-// Grouping key for same-accession duplicate cards (same patient + ACC#) — the
-// same rule the dup chip uses. Null when there's no accession to group on.
+// Grouping key for same-accession duplicate cards (same patient + provider +
+// ACC#) — the same rule the dup chip uses. Null when there's no accession.
+// Provider MUST be in the key: accession/order numbers are per-vendor
+// namespaces, so a Genova case and a Vibrant Toxin Zoomer for one patient can
+// share a ref string and wrongly merge into one card — clicking the merged
+// panel then opened the OTHER provider's lab. Mirrors the server-side guard in
+// lib/labs/siblings.ts. normalizeLabName canonicalizes sub-panels (e.g.
+// "Vibrant · Total Tox" → "Vibrant") so genuine same-order panels still merge.
 function dupKey(r: LabCase): string | null {
   const ref = r.lab_external_ref?.trim();
   if (!ref) return null;
   const who = (r.patient_email || r.patient_name || "").trim().toLowerCase();
-  return `${who}::${ref}`;
+  const lab = normalizeLabName(r.lab_name).toLowerCase();
+  return `${who}::${lab}::${ref}`;
 }
 
 // Per-column chip policy (Alex, 2026-06-11): once the result is ON PB the
@@ -633,10 +641,10 @@ export function LabKanbanBoard({
   const dupByCaseId = useMemo(() => {
     const groups = new Map<string, LabCase[]>();
     for (const r of rows) {
-      const ref = r.lab_external_ref?.trim();
-      if (!ref) continue;
-      const who = (r.patient_email || r.patient_name || "").trim().toLowerCase();
-      const key = `${who}::${ref}`;
+      // Same key as the merge view (now provider-aware) so the dup chip and the
+      // merged card can never disagree on what counts as a duplicate.
+      const key = dupKey(r);
+      if (!key) continue;
       const arr = groups.get(key) ?? [];
       arr.push(r);
       groups.set(key, arr);
