@@ -65,7 +65,11 @@ export const REQ_FORM_SPECS: ReqFormSpec[] = [
       collectionPmX: { x: 488, yTop: 612, size: 22 },
       fastingYesX: { x: 550, yTop: 612, size: 24 },
       fastingNoX: { x: 629, yTop: 611, size: 23 },
-      // Billing — "Is this a redraw?" Yes/No
+      // Billing — "Is this a redraw?" Yes/No. ⚠ SUSPECTED TRANSPOSED: every other
+      // pair on this form is left=Yes / right=No (fasting 550/629, AM/PM 436/488),
+      // but here No(200) sits LEFT of Yes(261) — so a "No" X likely lands on the
+      // Yes box. Verify in the calibrator before stamping a redraw default again
+      // (the resolve.ts default was removed for now).
       redrawYesX: { x: 261, yTop: 1205, size: 24 },
       redrawNoX: { x: 200, yTop: 1206, size: 20 },
     },

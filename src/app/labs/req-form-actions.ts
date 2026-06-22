@@ -62,7 +62,7 @@ export async function generateReqForm(
   const db = getSupabaseAdmin();
   const { data: c } = await db
     .from("lab_cases")
-    .select("lab_name, patient_name, patient_dob")
+    .select("lab_name, patient_name, patient_dob, lab_external_ref")
     .eq("id", caseId)
     .maybeSingle();
   const spec = specForLab((c?.lab_name as string | null) ?? null);
@@ -107,6 +107,28 @@ export async function generateReqForm(
         kind: "case_edited" as const,
         actor: user.email ?? "staff",
         note: `Sex set to ${sexNorm} via req form (propagated to this patient's other cases)`,
+      });
+    }
+  }
+
+  // Persist a manually-entered order / Sample # (Kennedy) back to the case's
+  // accession so it shows on the patient's lab card. Guarded to "manual" mode +
+  // no existing ref so a scraped/assigned accession (SpectraCell/DoctorsData) is
+  // never clobbered. Per-kit, so NOT propagated to the patient's other cases.
+  const enteredRef = (fields.orderNumber ?? "").trim();
+  if (spec.orderNumber === "manual" && enteredRef && !((c?.lab_external_ref as string | null)?.trim())) {
+    const { error: refErr } = await db
+      .from("lab_cases")
+      .update({ lab_external_ref: enteredRef })
+      .eq("id", caseId);
+    if (refErr) {
+      console.error(`[req-form] order# write failed for case ${caseId}: ${refErr.message}`);
+    } else {
+      await db.from("lab_events").insert({
+        case_id: caseId,
+        kind: "case_edited" as const,
+        actor: user.email ?? "staff",
+        note: `Accession / Sample # set to ${enteredRef} via req form`,
       });
     }
   }

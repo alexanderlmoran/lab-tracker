@@ -160,9 +160,11 @@ export async function resolveReqForm(
     fastingX: "X",
     orderingProvider: "Virgilio Sanchez, MD",
     orderNumber,
-    // Specimen defaults: not a redraw, morning (fasting) draw. Redraw stays a
-    // manual override — "redraw" means a re-collection, not just a repeat order.
-    redrawNoX: "X",
+    // Morning (fasting) draw default. Redraw is intentionally NOT pre-selected
+    // (Alex: "preselected without my input"): it's a per-draw re-collection
+    // decision staff make by hand. The SpectraCell Yes/No boxes also need a
+    // visual calibration check first — the No-X x-coord looks transposed onto the
+    // Yes box (see specs.ts redrawYesX/redrawNoX).
     collectionAmX: "X",
   };
 
@@ -170,13 +172,26 @@ export async function resolveReqForm(
   // any prior case for this patient that maps to the SAME req-form template.
   // (PB / Zenoti history can feed this too once wired.)
   if (spec.fields.drawnBeforeYesX || spec.fields.drawnBeforeNoX) {
-    let q = db.from("lab_cases").select("id, lab_name").neq("id", caseId);
-    q = c.patient_email
-      ? q.eq("patient_email", c.patient_email)
-      : q.eq("patient_name", c.patient_name as string);
-    const { data: priors } = await q;
-    const drawnBefore = (priors ?? []).some(
-      (p) => specForLab((p.lab_name as string | null) ?? null)?.templateKey === spec.templateKey,
+    // Find prior cases for THIS patient that map to the same template. Match on a
+    // real email OR the (case-insensitive) name — NOT email-only — because a
+    // patient's cases drift across their real PB email and the synthetic Zenoti
+    // placeholder (`…@unknown.zenoti.local`), and names are stored mixed-case.
+    // Either signal matching counts (was email-exact-only → missed Leila's many
+    // prior SpectraCell draws, so it wrongly printed "not drawn before").
+    const rawEmail = c.patient_email as string | null;
+    const realEmail = rawEmail && !/@unknown\.zenoti\.local$/i.test(rawEmail) ? rawEmail : null;
+    const name = (c.patient_name as string | null)?.trim();
+    const priors: Array<{ lab_name: string | null }> = [];
+    if (realEmail) {
+      const { data } = await db.from("lab_cases").select("lab_name").neq("id", caseId).eq("patient_email", realEmail);
+      if (data) priors.push(...(data as Array<{ lab_name: string | null }>));
+    }
+    if (name) {
+      const { data } = await db.from("lab_cases").select("lab_name").neq("id", caseId).ilike("patient_name", name);
+      if (data) priors.push(...(data as Array<{ lab_name: string | null }>));
+    }
+    const drawnBefore = priors.some(
+      (p) => specForLab(p.lab_name ?? null)?.templateKey === spec.templateKey,
     );
     data.drawnBeforeYesX = drawnBefore ? "X" : "";
     data.drawnBeforeNoX = drawnBefore ? "" : "X";
