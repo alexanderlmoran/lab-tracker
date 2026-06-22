@@ -94,22 +94,24 @@ export function reqFormCustomDefaults(
       Country: "USA", // patient block routes to the clinic
       ProviderNPI: "1124065693",
       PhysicianTitle: "MD",
-      // Billing (non-sensitive) constants, env-overridable.
-      RelationshipToPatient: process.env.MITOSWAB_CC_RELATIONSHIP || "Provider",
+      // Billing (non-sensitive) constants, env-overridable. General clinic-card
+      // vars (CLINIC_*) — the SAME card is used on Kennedy/Doctors too.
+      RelationshipToPatient: process.env.CLINIC_CC_RELATIONSHIP || "Provider",
       ResponsiblePartName:
-        process.env.MITOSWAB_RESPONSIBLE_PARTY || process.env.PRACTICE_NAME || "Centner Wellness",
-      BillingZipCode: process.env.MITOSWAB_BILLING_ZIP || CLINIC.zip,
-      InvoiceEmail: process.env.MITOSWAB_INVOICE_EMAIL || CLINIC.email,
+        process.env.CLINIC_RESPONSIBLE_PARTY || process.env.PRACTICE_NAME || "Centner Wellness",
+      BillingZipCode: process.env.CLINIC_BILLING_ZIP || CLINIC.zip,
+      InvoiceEmail: process.env.CLINIC_INVOICE_EMAIL || CLINIC.email,
     };
     // Credit-card fields are SENSITIVE — sourced ONLY from env, never the repo.
+    // The clinic's GENERAL billing card (shared with Kennedy/Doctors forms).
     // Included (→ stamped + hidden as constants) only when set; until then they
     // stay editable per-case so nothing breaks before the env is configured.
-    // Set in the deployment env: MITOSWAB_CC_NAME / MITOSWAB_CC_NUMBER /
-    // MITOSWAB_CC_EXP / MITOSWAB_CC_CVV.
-    if (process.env.MITOSWAB_CC_NAME) out.CreditCardName = process.env.MITOSWAB_CC_NAME;
-    if (process.env.MITOSWAB_CC_NUMBER) out.CreditCardNumber = process.env.MITOSWAB_CC_NUMBER;
-    if (process.env.MITOSWAB_CC_EXP) out.CreditCardExpiration = process.env.MITOSWAB_CC_EXP;
-    if (process.env.MITOSWAB_CC_CVV) out.CreditCardCVV = process.env.MITOSWAB_CC_CVV;
+    // Set in the deployment env: CLINIC_CC_NAME / CLINIC_CC_NUMBER /
+    // CLINIC_CC_EXP / CLINIC_CC_CVV.
+    if (process.env.CLINIC_CC_NAME) out.CreditCardName = process.env.CLINIC_CC_NAME;
+    if (process.env.CLINIC_CC_NUMBER) out.CreditCardNumber = process.env.CLINIC_CC_NUMBER;
+    if (process.env.CLINIC_CC_EXP) out.CreditCardExpiration = process.env.CLINIC_CC_EXP;
+    if (process.env.CLINIC_CC_CVV) out.CreditCardCVV = process.env.CLINIC_CC_CVV;
     return out;
   }
   return {};
