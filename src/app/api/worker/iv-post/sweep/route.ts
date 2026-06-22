@@ -1,12 +1,18 @@
-// IV auto-post sweep. Enqueues a post job for every IV session that has
-// occurred but has no PB note yet — so a note never goes MISSING even if no one
-// charted it. The drain worker then posts each (flagged incomplete) for the
-// confidently-matched patients (>=95) and holds the rest for review.
+// IV auto-post sweep. Enqueues a post job for every IV session a human has
+// CHARTED (charting_status='ready') that has occurred. The drain worker then
+// posts each for the confidently-matched patients (>=95) and holds the rest for
+// review.
+//
+// SAFETY STOPGAP (Alex 2026-06-22): this used to ALSO enqueue un-charted
+// placeholders (pb_note_id IS NULL) "so a note never goes missing" — but that
+// auto-posted incomplete notes carrying FABRICATED vitals. Un-charted IVs now
+// wait on the board for a human to chart them; explicit "Approve & post" still
+// posts anything on demand.
 //
 // Eligibility: not cancelled, not EBOO/EBO2 (manual), not an add-on (those
-// attach to the base note), no pb_note_id yet, session_date within the window,
-// and no in-flight/held/done job already (don't churn human-held ones; a failed
-// job IS retried).
+// attach to the base note), charting_status='ready', session_date within the
+// window, and no in-flight/held/done job already (don't churn human-held ones; a
+// failed job IS retried).
 //
 // Auth: Bearer ${WORKER_SHARED_SECRET}.  Query: ?days=N (lookback window, default
 // 2), ?minAgeMin=N (only enqueue IVs that OCCURRED at least N min ago — never a
@@ -57,12 +63,11 @@ export async function POST(request: Request) {
     .eq("cancelled", false)
     .eq("is_add_on", false)
     .not("kind", "in", "(ebo,addon)")
-    .neq("charting_status", "skipped") // "Already done" → don't re-enqueue
-    // New placeholders (no note yet) OR a posted note that's since been (re-)charted
-    // — saveIvChart flips status back to 'ready' but doesn't enqueue, so the charted
-    // data would never reach the note. Re-post pushes it (the re-post branch updates
-    // in place). A successful (re-)post sets status='posted' again, so this converges.
-    .or("pb_note_id.is.null,charting_status.eq.ready")
+    // Only AUTO-post what a human charted. saveIvChart sets 'ready' on chart AND
+    // on a re-chart (which flips a 'posted' note back to 'ready'); the re-post
+    // branch below updates the existing note in place. A successful post sets
+    // 'posted', so this converges. Un-charted ('pending') sessions are excluded.
+    .eq("charting_status", "ready")
     .gte("session_date", fromStr);
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
 
