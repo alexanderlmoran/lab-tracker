@@ -59,6 +59,14 @@ const CLINIC = {
   email: "labs@centnerhb.com",
 };
 
+/** Read an env var, stripping a single layer of matching surrounding quotes —
+ *  Vercel/.env values sometimes carry literal quotes (e.g. PRACTICE_NAME set to
+ *  `'Centner Wellness'`) that would otherwise print verbatim on the form. */
+function envClean(name: string): string | undefined {
+  const v = process.env[name];
+  return v == null ? v : v.trim().replace(/^(['"])(.*)\1$/, "$2");
+}
+
 /** Constant / derived auto-fills for a template's CUSTOM calibrator fields,
  *  matched by the field's LABEL. Every label this returns is treated as MANAGED:
  *  it's stamped automatically AND hidden from the print dialog, so staff only see
@@ -83,7 +91,7 @@ export function reqFormCustomDefaults(
       PhysicianDate: ctx.orderDate ?? "",
       ConsentDate: ctx.orderDate ?? "",
       // Facility / provider constants.
-      FacilityName: process.env.PRACTICE_NAME || "Centner Wellness",
+      FacilityName: envClean("PRACTICE_NAME") || "Centner Wellness",
       Telephone: CLINIC.phone,
       FacilityEmail: CLINIC.email,
       AddressStreet: CLINIC.address,
@@ -96,11 +104,11 @@ export function reqFormCustomDefaults(
       PhysicianTitle: "MD",
       // Billing (non-sensitive) constants, env-overridable. General clinic-card
       // vars (CLINIC_*) — the SAME card is used on Kennedy/Doctors too.
-      RelationshipToPatient: process.env.CLINIC_CC_RELATIONSHIP || "Provider",
+      RelationshipToPatient: envClean("CLINIC_CC_RELATIONSHIP") || "Provider",
       ResponsiblePartName:
-        process.env.CLINIC_RESPONSIBLE_PARTY || process.env.PRACTICE_NAME || "Centner Wellness",
-      BillingZipCode: process.env.CLINIC_BILLING_ZIP || CLINIC.zip,
-      InvoiceEmail: process.env.CLINIC_INVOICE_EMAIL || CLINIC.email,
+        envClean("CLINIC_RESPONSIBLE_PARTY") || envClean("PRACTICE_NAME") || "Centner Wellness",
+      BillingZipCode: envClean("CLINIC_BILLING_ZIP") || CLINIC.zip,
+      InvoiceEmail: envClean("CLINIC_INVOICE_EMAIL") || CLINIC.email,
     };
     // Credit-card fields are SENSITIVE — sourced ONLY from env, never the repo.
     // The clinic's GENERAL billing card (shared with Kennedy/Doctors forms).
@@ -108,10 +116,14 @@ export function reqFormCustomDefaults(
     // stay editable per-case so nothing breaks before the env is configured.
     // Set in the deployment env: CLINIC_CC_NAME / CLINIC_CC_NUMBER /
     // CLINIC_CC_EXP / CLINIC_CC_CVV.
-    if (process.env.CLINIC_CC_NAME) out.CreditCardName = process.env.CLINIC_CC_NAME;
-    if (process.env.CLINIC_CC_NUMBER) out.CreditCardNumber = process.env.CLINIC_CC_NUMBER;
-    if (process.env.CLINIC_CC_EXP) out.CreditCardExpiration = process.env.CLINIC_CC_EXP;
-    if (process.env.CLINIC_CC_CVV) out.CreditCardCVV = process.env.CLINIC_CC_CVV;
+    const ccName = envClean("CLINIC_CC_NAME");
+    const ccNumber = envClean("CLINIC_CC_NUMBER");
+    const ccExp = envClean("CLINIC_CC_EXP");
+    const ccCvv = envClean("CLINIC_CC_CVV");
+    if (ccName) out.CreditCardName = ccName;
+    if (ccNumber) out.CreditCardNumber = ccNumber;
+    if (ccExp) out.CreditCardExpiration = ccExp;
+    if (ccCvv) out.CreditCardCVV = ccCvv;
     return out;
   }
   return {};
