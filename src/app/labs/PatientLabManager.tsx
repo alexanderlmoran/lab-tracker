@@ -184,13 +184,34 @@ export function ManageLabsButton({
   // — derived during render, no effect needed.
   const effectiveGroup = groupFilter && groups.includes(groupFilter) ? groupFilter : "";
 
+  // LIVE status column per row — recomputed from the row's CURRENT tracking # and
+  // sample-sent state, NOT frozen at modal-open (toRowEdit's r.column was). So
+  // adding/removing a tracking # here moves the lab between TO DO ⇄ Ready to Ship
+  // immediately, and the Status filter/sort/label follow — no stale lane until a
+  // reopen. (A lab with a tracking # and no "sample sent" is Ready to Ship, which
+  // is why such a lab never appears under the TO DO filter.)
+  const liveColumns = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of rows) {
+      const sc = srcCases.find((c) => c.id === r.caseId);
+      m.set(
+        r.caseId,
+        sc
+          ? COLUMN_LABEL[getColumnFor({ ...sc, tracking_number: r.tracking.trim() || null, step1_sample_sent: r.step1Done })]
+          : r.column,
+      );
+    }
+    return m;
+  }, [rows, srcCases]);
+  const liveCol = (r: RowEdit) => liveColumns.get(r.caseId) ?? r.column;
+
   // Distinct kanban columns present, in board order — drives the column filter
   // (only shown when there's more than one lane to choose between).
   const columns = useMemo(() => {
     const order = LAB_BOARD_COLUMN_ORDER.map((k) => COLUMN_LABEL[k]);
-    const seen = new Set(rows.map((r) => r.column));
+    const seen = new Set(liveColumns.values());
     return order.filter((label) => seen.has(label));
-  }, [rows]);
+  }, [liveColumns]);
   const effectiveColumn = columnFilter && columns.includes(columnFilter) ? columnFilter : "";
 
   // Rows shown after the date + column filters. Everything downstream (the grid,
@@ -201,9 +222,9 @@ export function ManageLabsButton({
       rows.filter(
         (r) =>
           (!effectiveGroup || (r.collection.trim() || NO_DATE) === effectiveGroup) &&
-          (!effectiveColumn || r.column === effectiveColumn),
+          (!effectiveColumn || (liveColumns.get(r.caseId) ?? r.column) === effectiveColumn),
       ),
-    [rows, effectiveGroup, effectiveColumn],
+    [rows, effectiveGroup, effectiveColumn, liveColumns],
   );
   const anyFilter = effectiveGroup !== "" || effectiveColumn !== "";
 
@@ -226,9 +247,9 @@ export function ManageLabsButton({
           ? r.collection || ""
           : sort.key === "accession"
             ? r.accession.toLowerCase()
-            : String(colRank(r.column)).padStart(3, "0");
+            : String(colRank(liveColumns.get(r.caseId) ?? r.column)).padStart(3, "0");
     return [...visibleRows].sort((a, b) => val(a).localeCompare(val(b)) * dir);
-  }, [visibleRows, sort, colRank]);
+  }, [visibleRows, sort, colRank, liveColumns]);
 
   // Seed editable state each time the dialog opens, so a re-open after a save
   // reflects the refreshed rows (no stale edits linger). Uses preloaded cases
@@ -680,7 +701,7 @@ export function ManageLabsButton({
                     >
                       <option value="">All columns ({rows.length})</option>
                       {columns.map((col) => {
-                        const count = rows.filter((r) => r.column === col).length;
+                        const count = rows.filter((r) => liveCol(r) === col).length;
                         return (
                           <option key={col} value={col}>
                             {col} ({count})
@@ -912,7 +933,7 @@ export function ManageLabsButton({
                             }
                             return (
                               <div className="flex items-center gap-1">
-                                <span>{r.column}</span>
+                                <span>{liveCol(r)}</span>
                                 <select
                                   value=""
                                   disabled={saving}
