@@ -129,7 +129,7 @@ export function ManageLabsButton({
   // the date filter — so a fresh shipment or a specific lane is easy to act on.
   const [columnFilter, setColumnFilter] = useState("");
   // Optional header sort (Collected / Acc# / Status), display-only.
-  const [sort, setSort] = useState<{ key: "collection" | "accession" | "column"; dir: "asc" | "desc" } | null>(null);
+  const [sort, setSort] = useState<{ key: "lab" | "collection" | "accession" | "column"; dir: "asc" | "desc" } | null>(null);
   // Inline two-step delete confirm — replaces window.confirm(), which is
   // unreliable inside a modal <dialog> (it can silently return false, which
   // reads as "the delete won't work, I had to leave the modal to delete").
@@ -208,11 +208,13 @@ export function ManageLabsButton({
     if (!sort) return visibleRows;
     const dir = sort.dir === "asc" ? 1 : -1;
     const val = (r: RowEdit) =>
-      sort.key === "collection"
-        ? r.collection || ""
-        : sort.key === "accession"
-          ? r.accession.toLowerCase()
-          : String(colRank(r.column)).padStart(3, "0");
+      sort.key === "lab"
+        ? r.labLabel.toLowerCase()
+        : sort.key === "collection"
+          ? r.collection || ""
+          : sort.key === "accession"
+            ? r.accession.toLowerCase()
+            : String(colRank(r.column)).padStart(3, "0");
     return [...visibleRows].sort((a, b) => val(a).localeCompare(val(b)) * dir);
   }, [visibleRows, sort, colRank]);
 
@@ -266,7 +268,7 @@ export function ManageLabsButton({
   }
 
   // Header sort (Collected / Acc# / Status) — click cycles asc → desc → off.
-  function toggleSort(key: "collection" | "accession" | "column") {
+  function toggleSort(key: "lab" | "collection" | "accession" | "column") {
     setSort((s) => (s?.key !== key ? { key, dir: "asc" } : s.dir === "asc" ? { key, dir: "desc" } : null));
   }
   const sortArrow = (key: string) => (sort?.key === key ? (sort.dir === "asc" ? " ↑" : " ↓") : "");
@@ -723,7 +725,11 @@ export function ManageLabsButton({
                     <tr className="bg-zinc-50 text-[10px] uppercase tracking-wide text-zinc-500">
                       {multiName ? <th className="px-2 py-1.5 font-medium" /> : null}
                       {multiName ? <th className="px-2 py-1.5 font-medium">Who</th> : null}
-                      <th className="px-2 py-1.5 font-medium">Lab</th>
+                      <th className="px-2 py-1.5 font-medium">
+                        <button type="button" onClick={() => toggleSort("lab")} className="uppercase tracking-wide hover:text-zinc-800">
+                          Lab{sortArrow("lab")}
+                        </button>
+                      </th>
                       <th className="px-2 py-1.5 font-medium">
                         <button type="button" onClick={() => toggleSort("collection")} className="uppercase tracking-wide hover:text-zinc-800">
                           Collected{sortArrow("collection")}
