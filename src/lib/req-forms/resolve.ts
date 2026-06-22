@@ -59,16 +59,30 @@ const CLINIC = {
   email: "labs@centnerhb.com",
 };
 
-/** Constant auto-fills for a template's CUSTOM calibrator fields, matched by the
- *  field's LABEL (the calibrator stores user-added fields by label). Clinic/provider
- *  constants so staff never re-type them each print. Patient-specific, payment, and
- *  signature-date fields are intentionally omitted — they stay blank for staff.
- *  Returns {} for templates with no constants. */
-export function reqFormCustomDefaults(templateKey: string): Record<string, string> {
+/** Constant / derived auto-fills for a template's CUSTOM calibrator fields,
+ *  matched by the field's LABEL. Every label this returns is treated as MANAGED:
+ *  it's stamped automatically AND hidden from the print dialog, so staff only see
+ *  the genuinely per-patient fields (like the KK/SpectraCell forms). `ctx.orderDate`
+ *  feeds the date fields that track the requisition date.
+ *  Returns {} for templates with no managed fields. */
+export function reqFormCustomDefaults(
+  templateKey: string,
+  ctx: { orderDate?: string } = {},
+): Record<string, string> {
   if (templateKey === "mitoswab.pdf") {
-    return {
-      NewSample: "X", // default to a new (not replacement) sample
+    const out: Record<string, string> = {
+      // Sample type — always a NEW sample (X), never a replacement.
+      NewSample: "X",
+      ReplacementSample: "",
+      // Fixed reporting / billing assertions.
       ReportEmail: "X", // provider preferred reporting = Email
+      BillingYes: "X",
+      CreditCard: "X", // pay-by-credit-card box
+      DiagnosisCode: "Z00.00",
+      // Dates track the order/requisition date.
+      PhysicianDate: ctx.orderDate ?? "",
+      ConsentDate: ctx.orderDate ?? "",
+      // Facility / provider constants.
       FacilityName: process.env.PRACTICE_NAME || "Centner Wellness",
       Telephone: CLINIC.phone,
       FacilityEmail: CLINIC.email,
@@ -80,7 +94,38 @@ export function reqFormCustomDefaults(templateKey: string): Record<string, strin
       Country: "USA", // patient block routes to the clinic
       ProviderNPI: "1124065693",
       PhysicianTitle: "MD",
+      // Billing (non-sensitive) constants, env-overridable.
+      RelationshipToPatient: process.env.MITOSWAB_CC_RELATIONSHIP || "Provider",
+      ResponsiblePartName:
+        process.env.MITOSWAB_RESPONSIBLE_PARTY || process.env.PRACTICE_NAME || "Centner Wellness",
+      BillingZipCode: process.env.MITOSWAB_BILLING_ZIP || CLINIC.zip,
+      InvoiceEmail: process.env.MITOSWAB_INVOICE_EMAIL || CLINIC.email,
     };
+    // Credit-card fields are SENSITIVE — sourced ONLY from env, never the repo.
+    // Included (→ stamped + hidden as constants) only when set; until then they
+    // stay editable per-case so nothing breaks before the env is configured.
+    // Set in the deployment env: MITOSWAB_CC_NAME / MITOSWAB_CC_NUMBER /
+    // MITOSWAB_CC_EXP / MITOSWAB_CC_CVV.
+    if (process.env.MITOSWAB_CC_NAME) out.CreditCardName = process.env.MITOSWAB_CC_NAME;
+    if (process.env.MITOSWAB_CC_NUMBER) out.CreditCardNumber = process.env.MITOSWAB_CC_NUMBER;
+    if (process.env.MITOSWAB_CC_EXP) out.CreditCardExpiration = process.env.MITOSWAB_CC_EXP;
+    if (process.env.MITOSWAB_CC_CVV) out.CreditCardCVV = process.env.MITOSWAB_CC_CVV;
+    return out;
+  }
+  return {};
+}
+
+/** Dropdown options for a template's custom fields, keyed by LABEL. A field with
+ *  options renders as a <select> in the print dialog; everything else is a text
+ *  input. MitoSwab "TechInitial" is the clinic's tech list, set via the
+ *  MITOSWAB_TECHS env (comma-separated, e.g. "AM,RS,CA"). Empty → text input. */
+export function reqFormCustomSelects(templateKey: string): Record<string, string[]> {
+  if (templateKey === "mitoswab.pdf") {
+    const techs = (process.env.MITOSWAB_TECHS || "")
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    return techs.length ? { TechInitial: techs } : {};
   }
   return {};
 }

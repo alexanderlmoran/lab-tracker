@@ -2,7 +2,7 @@
 
 import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
-import { resolveReqForm, reqFormCustomDefaults } from "@/lib/req-forms/resolve";
+import { resolveReqForm, reqFormCustomDefaults, reqFormCustomSelects } from "@/lib/req-forms/resolve";
 import { fillReqForm } from "@/lib/req-forms/fill";
 import { specForLab, REQ_FORM_SPECS } from "@/lib/req-forms/specs";
 import { loadOverrides, saveOverrides, mergeFields, type FieldOverrides, type CustomField } from "@/lib/req-forms/overrides";
@@ -29,7 +29,8 @@ export async function prepareReqForm(caseId: string) {
   const r = await resolveReqForm(caseId);
   if (!r) return { ok: false as const, error: "No requisition template for this lab yet." };
   const ov = await loadOverrides(r.spec.templateKey);
-  const defaults = reqFormCustomDefaults(r.spec.templateKey);
+  const defaults = reqFormCustomDefaults(r.spec.templateKey, { orderDate: r.data.orderDate });
+  const selects = reqFormCustomSelects(r.spec.templateKey);
   return {
     ok: true as const,
     label: r.spec.label,
@@ -37,9 +38,13 @@ export async function prepareReqForm(caseId: string) {
     fields: r.data,
     missing: r.missing,
     editableKeys: r.editableKeys,
-    // user-added fields the dialog renders as extra editable inputs; `value`
-    // pre-fills clinic constants (FacilityName/NPI/etc.) so staff don't re-type.
-    custom: ov.custom.map((c) => ({ key: c.key, label: c.label, value: defaults[c.label] ?? "" })),
+    // Only the genuinely per-case custom fields. Anything reqFormCustomDefaults
+    // manages (facility / billing / credit-card / fixed checkboxes / derived
+    // dates) is stamped automatically and HIDDEN here, so the dialog stays as
+    // lean as the KK/SpectraCell forms. A field with options renders a dropdown.
+    custom: ov.custom
+      .filter((c) => !(c.label in defaults))
+      .map((c) => ({ key: c.key, label: c.label, value: "", options: selects[c.label] ?? null })),
   };
 }
 
@@ -140,7 +145,7 @@ export async function generateReqForm(
   // field's label — so clinic constants (FacilityName/NPI/etc.) always stamp even
   // if the client didn't send them, while a staff override still wins.
   const ov = await loadOverrides(spec.templateKey);
-  const defaults = reqFormCustomDefaults(spec.templateKey);
+  const defaults = reqFormCustomDefaults(spec.templateKey, { orderDate: fields.orderDate });
   const mergedCustom: Record<string, string> = {};
   for (const c of ov.custom) {
     const v = (customValues[c.key] ?? "").trim() || defaults[c.label] || "";

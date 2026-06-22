@@ -40,12 +40,12 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [filename, setFilename] = useState("req-form.pdf");
   const [calibrate, setCalibrate] = useState(false);
-  const [custom, setCustom] = useState<Array<{ key: string; label: string; value?: string }>>([]);
+  const [custom, setCustom] = useState<Array<{ key: string; label: string; value?: string; options?: string[] | null }>>([]);
   const [customValues, setCustomValues] = useState<Record<string, string>>({});
 
   // Set the custom-field list AND pre-fill any constant defaults (FacilityName,
   // NPI, etc.) without clobbering a value the staff already typed.
-  function applyCustom(list: Array<{ key: string; label: string; value?: string }>) {
+  function applyCustom(list: Array<{ key: string; label: string; value?: string; options?: string[] | null }>) {
     setCustom(list);
     setCustomValues((prev) => {
       const next = { ...prev };
@@ -179,11 +179,26 @@ export function ReqFormButton({ caseId, labName }: { caseId: string; labName: st
                         {custom.map((cf) => (
                           <label key={cf.key} className="flex flex-col gap-0.5 text-[11px] text-zinc-600">
                             {cf.label}
-                            <input
-                              value={customValues[cf.key] ?? cf.value ?? ""}
-                              onChange={(e) => setCustomValues((v) => ({ ...v, [cf.key]: e.target.value }))}
-                              className="rounded border border-emerald-300 bg-emerald-50/40 px-2 py-1 text-[13px] text-zinc-900"
-                            />
+                            {cf.options && cf.options.length ? (
+                              <select
+                                value={customValues[cf.key] ?? cf.value ?? ""}
+                                onChange={(e) => setCustomValues((v) => ({ ...v, [cf.key]: e.target.value }))}
+                                className="rounded border border-emerald-300 bg-emerald-50/40 px-2 py-1 text-[13px] text-zinc-900"
+                              >
+                                <option value="">—</option>
+                                {cf.options.map((o) => (
+                                  <option key={o} value={o}>
+                                    {o}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                value={customValues[cf.key] ?? cf.value ?? ""}
+                                onChange={(e) => setCustomValues((v) => ({ ...v, [cf.key]: e.target.value }))}
+                                className="rounded border border-emerald-300 bg-emerald-50/40 px-2 py-1 text-[13px] text-zinc-900"
+                              />
+                            )}
                           </label>
                         ))}
                       </div>
