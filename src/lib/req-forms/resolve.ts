@@ -102,11 +102,13 @@ export function reqFormCustomDefaults(
       Country: "USA", // patient block routes to the clinic
       ProviderNPI: "1124065693",
       PhysicianTitle: "MD",
-      // Billing constants. The PATIENT is the self-pay responsible party (the
-      // clinic card is just the payment method, charted in the CreditCard block).
-      // env-overridable via CLINIC_* — the SAME card is used on Kennedy/Doctors.
-      RelationshipToPatient: envClean("CLINIC_CC_RELATIONSHIP") || "Self",
-      ResponsiblePartName: envClean("CLINIC_RESPONSIBLE_PARTY") || ctx.patientName || "",
+      // The PATIENT is the self-pay responsible party (the clinic card is just the
+      // payment method, charted in the CreditCard block). NOT env-overridable: the
+      // responsible-party NAME is per-patient (it changes every form), and the
+      // relationship is always Self. (A static CLINIC_RESPONSIBLE_PARTY="Self" env
+      // was wrongly overriding the patient name — that's why it printed "Self".)
+      RelationshipToPatient: "Self",
+      ResponsiblePartName: ctx.patientName || "",
       BillingZipCode: envClean("CLINIC_BILLING_ZIP") || CLINIC.zip,
       InvoiceEmail: envClean("CLINIC_INVOICE_EMAIL") || CLINIC.email,
     };
