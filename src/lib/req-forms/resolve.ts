@@ -75,7 +75,7 @@ function envClean(name: string): string | undefined {
  *  Returns {} for templates with no managed fields. */
 export function reqFormCustomDefaults(
   templateKey: string,
-  ctx: { orderDate?: string } = {},
+  ctx: { orderDate?: string; patientName?: string } = {},
 ): Record<string, string> {
   if (templateKey === "mitoswab.pdf") {
     const out: Record<string, string> = {
@@ -102,11 +102,11 @@ export function reqFormCustomDefaults(
       Country: "USA", // patient block routes to the clinic
       ProviderNPI: "1124065693",
       PhysicianTitle: "MD",
-      // Billing (non-sensitive) constants, env-overridable. General clinic-card
-      // vars (CLINIC_*) — the SAME card is used on Kennedy/Doctors too.
-      RelationshipToPatient: envClean("CLINIC_CC_RELATIONSHIP") || "Provider",
-      ResponsiblePartName:
-        envClean("CLINIC_RESPONSIBLE_PARTY") || envClean("PRACTICE_NAME") || "Centner Wellness",
+      // Billing constants. The PATIENT is the self-pay responsible party (the
+      // clinic card is just the payment method, charted in the CreditCard block).
+      // env-overridable via CLINIC_* — the SAME card is used on Kennedy/Doctors.
+      RelationshipToPatient: envClean("CLINIC_CC_RELATIONSHIP") || "Self",
+      ResponsiblePartName: envClean("CLINIC_RESPONSIBLE_PARTY") || ctx.patientName || "",
       BillingZipCode: envClean("CLINIC_BILLING_ZIP") || CLINIC.zip,
       InvoiceEmail: envClean("CLINIC_INVOICE_EMAIL") || CLINIC.email,
     };

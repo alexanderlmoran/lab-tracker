@@ -29,7 +29,10 @@ export async function prepareReqForm(caseId: string) {
   const r = await resolveReqForm(caseId);
   if (!r) return { ok: false as const, error: "No requisition template for this lab yet." };
   const ov = await loadOverrides(r.spec.templateKey);
-  const defaults = reqFormCustomDefaults(r.spec.templateKey, { orderDate: r.data.orderDate });
+  const defaults = reqFormCustomDefaults(r.spec.templateKey, {
+    orderDate: r.data.orderDate,
+    patientName: r.data.patientName,
+  });
   const selects = reqFormCustomSelects(r.spec.templateKey);
   return {
     ok: true as const,
@@ -145,7 +148,10 @@ export async function generateReqForm(
   // field's label — so clinic constants (FacilityName/NPI/etc.) always stamp even
   // if the client didn't send them, while a staff override still wins.
   const ov = await loadOverrides(spec.templateKey);
-  const defaults = reqFormCustomDefaults(spec.templateKey, { orderDate: fields.orderDate });
+  const defaults = reqFormCustomDefaults(spec.templateKey, {
+    orderDate: fields.orderDate,
+    patientName: fields.patientName,
+  });
   const mergedCustom: Record<string, string> = {};
   for (const c of ov.custom) {
     const v = (customValues[c.key] ?? "").trim() || defaults[c.label] || "";
