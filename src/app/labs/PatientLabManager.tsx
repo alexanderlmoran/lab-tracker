@@ -47,6 +47,8 @@ type RowEdit = {
 // A lab being added to this patient (goes through createLabCases on save).
 type NewLab = {
   key: number;
+  /** Which person this lab is for (families share one email → one card). */
+  who: string;
   labName: string;
   labPanel: string | null;
   partialExpected: boolean;
@@ -154,6 +156,16 @@ export function ManageLabsButton({
     () => new Set(rows.map((r) => normName(r.who))).size > 1,
     [rows],
   );
+  // Distinct people in this group (a family on a shared email), display-cased —
+  // the "Who" options when adding a lab to a multi-person card.
+  const personNames = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const r of rows) {
+      const k = normName(r.who);
+      if (!seen.has(k)) seen.set(k, r.who);
+    }
+    return [...seen.values()];
+  }, [rows]);
 
   // Distinct collection dates ("collection groups") present in this patient's
   // labs, newest first; rows with no date collapse into one "— no date —"
@@ -428,6 +440,7 @@ export function ManageLabsButton({
       ...ns,
       {
         key: newKey.current++,
+        who: multiName ? "" : (personNames[0] ?? patientName),
         labName: "",
         labPanel: null,
         partialExpected: false,
@@ -492,13 +505,27 @@ export function ManageLabsButton({
       return;
     }
 
-    // Dedup: don't add a lab the patient already has (same provider + panel).
-    // Different panels of the same provider (Vibrant Total Tox vs Zoomer) are
-    // allowed — only an exact provider+panel repeat is blocked.
-    const labKey = (name: string, panel: string) =>
-      `${normName(name)}|${normName(panel)}`;
-    const existingKeys = new Set(rows.map((r) => labKey(r.labName, panelFor(srcCases.find((c) => c.id === r.caseId) ?? { lab_name: r.labName, lab_panel: null, zenoti_service_name: null }))));
-    const dup = pendingNewLabs.find((n) => existingKeys.has(labKey(n.labName, n.labPanel ?? "")));
+    // Several people share this email → require a Who so the lab lands on the
+    // right chart.
+    const missingWho = multiName ? pendingNewLabs.find((n) => !n.who.trim()) : undefined;
+    if (missingWho) {
+      setError(`Pick who “${missingWho.labName || "the new lab"}” is for — several people share this email.`);
+      return;
+    }
+
+    // Dedup: don't add a lab a person already has (same provider + panel). Keyed
+    // by person so adding David's Vibrant doesn't block adding Leila's. Different
+    // panels of one provider (Vibrant Total Tox vs Zoomer) are still allowed.
+    const labKey = (who: string, name: string, panel: string) =>
+      `${normName(who)}|${normName(name)}|${normName(panel)}`;
+    const existingKeys = new Set(
+      rows.map((r) =>
+        labKey(r.who, r.labName, panelFor(srcCases.find((c) => c.id === r.caseId) ?? { lab_name: r.labName, lab_panel: null, zenoti_service_name: null })),
+      ),
+    );
+    const dup = pendingNewLabs.find((n) =>
+      existingKeys.has(labKey(n.who || patientName, n.labName, n.labPanel ?? "")),
+    );
     if (dup) {
       setError(`“${dup.labName}${dup.labPanel ? ` · ${dup.labPanel}` : ""}” already exists for this patient — remove the duplicate row.`);
       return;
@@ -514,33 +541,46 @@ export function ManageLabsButton({
       }
 
       if (pendingNewLabs.length > 0) {
-        const fd = new FormData();
-        fd.set("patientName", patientName);
-        fd.set("patientEmail", patientEmail);
-        const ref = srcCases[0];
-        fd.set("patientPhone", s(ref?.patient_phone));
-        fd.set("patientDob", s(ref?.patient_dob));
-        fd.set("patientAddress", s(ref?.patient_address));
-        if (ref?.auto_send_emails) fd.set("autoSendEmails", "on");
-        fd.set("notes", "");
-        fd.set(
-          "labsJson",
-          JSON.stringify(
-            pendingNewLabs.map((n) => ({
-              labName: n.labName.trim(),
-              labPanel: n.labPanel,
-              trackingNumber: n.tracking.trim() || null,
-              labExternalRef: n.accession.trim() || null,
-              noAccession: n.noAccession,
-              collectionDate: n.collection.trim() || null,
-              partialExpected: n.partialExpected,
-            })),
-          ),
-        );
-        const r = await createLabCases(fd);
-        if (!r.ok) {
-          setError(r.error ?? "Could not add labs");
-          return;
+        // Group by person so a family's new labs each land on the right chart.
+        // Email is shared across the group; phone/dob/address come from one of
+        // that person's existing cases.
+        const byWho = new Map<string, NewLab[]>();
+        for (const n of pendingNewLabs) {
+          const who = (n.who || patientName).trim();
+          const arr = byWho.get(who) ?? [];
+          arr.push(n);
+          byWho.set(who, arr);
+        }
+        for (const [who, labs] of byWho) {
+          const personCase =
+            srcCases.find((c) => normName(c.patient_name) === normName(who)) ?? srcCases[0];
+          const fd = new FormData();
+          fd.set("patientName", who);
+          fd.set("patientEmail", patientEmail);
+          fd.set("patientPhone", s(personCase?.patient_phone));
+          fd.set("patientDob", s(personCase?.patient_dob));
+          fd.set("patientAddress", s(personCase?.patient_address));
+          if (personCase?.auto_send_emails) fd.set("autoSendEmails", "on");
+          fd.set("notes", "");
+          fd.set(
+            "labsJson",
+            JSON.stringify(
+              labs.map((n) => ({
+                labName: n.labName.trim(),
+                labPanel: n.labPanel,
+                trackingNumber: n.tracking.trim() || null,
+                labExternalRef: n.accession.trim() || null,
+                noAccession: n.noAccession,
+                collectionDate: n.collection.trim() || null,
+                partialExpected: n.partialExpected,
+              })),
+            ),
+          );
+          const r = await createLabCases(fd);
+          if (!r.ok) {
+            setError(r.error ?? "Could not add labs");
+            return;
+          }
         }
       }
 
@@ -940,6 +980,23 @@ export function ManageLabsButton({
                       key={n.key}
                       className="flex flex-wrap items-end gap-2 rounded-md border border-emerald-200 bg-emerald-50/40 px-3 py-2"
                     >
+                      {multiName ? (
+                        <label className="flex flex-col gap-0.5">
+                          <span className="text-[10px] text-zinc-500">Who</span>
+                          <select
+                            value={n.who}
+                            onChange={(e) => patchNewLab(n.key, { who: e.target.value })}
+                            className={`${inputCls} w-36`}
+                          >
+                            <option value="">— pick —</option>
+                            {personNames.map((nm) => (
+                              <option key={nm} value={nm}>
+                                {nm}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      ) : null}
                       <div className="min-w-[200px] flex-1">
                         <span className="mb-0.5 block text-[10px] text-zinc-500">Lab</span>
                         <LabCombobox
@@ -1021,20 +1078,18 @@ export function ManageLabsButton({
                 </div>
               ) : null}
 
+              <button
+                type="button"
+                onClick={addNewLab}
+                className="mt-3 rounded-md border border-dashed border-zinc-300 bg-white px-3 py-1.5 text-[12px] font-medium text-zinc-600 hover:border-zinc-400 hover:bg-zinc-50"
+              >
+                + Add lab
+              </button>
               {multiName ? (
-                <p className="mt-3 text-[11px] text-zinc-500">
-                  Several people share this email — add a lab for a specific person from the New
-                  case form so it lands on the right chart.
+                <p className="mt-1 text-[11px] text-zinc-500">
+                  Several people share this email — pick who each new lab is for.
                 </p>
-              ) : (
-                <button
-                  type="button"
-                  onClick={addNewLab}
-                  className="mt-3 rounded-md border border-dashed border-zinc-300 bg-white px-3 py-1.5 text-[12px] font-medium text-zinc-600 hover:border-zinc-400 hover:bg-zinc-50"
-                >
-                  + Add lab
-                </button>
-              )}
+              ) : null}
 
               {error ? (
                 <p className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700">
