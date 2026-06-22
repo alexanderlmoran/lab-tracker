@@ -80,17 +80,33 @@ export function IvChartingBoard({
   date: string;
   loadError: string | null;
 }) {
-  const sorted = useMemo(
-    () =>
-      [...rows].sort((a, b) => {
-        const t = (a.start_at ?? "").localeCompare(b.start_at ?? "");
-        if (t !== 0) return t;
-        // Base IVs before their add-ons at the same time.
-        if (a.is_add_on !== b.is_add_on) return a.is_add_on ? 1 : -1;
-        return patientName(a).localeCompare(patientName(b));
-      }),
-    [rows],
-  );
+  const sorted = useMemo(() => {
+    // Group all of a patient's appointments together (Alex: "names together"),
+    // but anchor each patient's block at their EARLIEST slot so the daily board
+    // still reads roughly top-to-bottom by time instead of alphabetically.
+    const firstByPatient = new Map<string, string>();
+    for (const r of rows) {
+      const k = patientName(r);
+      const t = r.start_at ?? "";
+      const cur = firstByPatient.get(k);
+      if (cur === undefined || t.localeCompare(cur) < 0) firstByPatient.set(k, t);
+    }
+    return [...rows].sort((a, b) => {
+      const na = patientName(a);
+      const nb = patientName(b);
+      // 1) order patient blocks by each patient's first appointment of the day
+      const fg = (firstByPatient.get(na) ?? "").localeCompare(firstByPatient.get(nb) ?? "");
+      if (fg !== 0) return fg;
+      // 2) tie on first-slot → keep the same patient's rows adjacent
+      if (na !== nb) return na.localeCompare(nb);
+      // 3) within a patient, chronological (e.g. 11:00 then 12:55 back-to-back)
+      const t = (a.start_at ?? "").localeCompare(b.start_at ?? "");
+      if (t !== 0) return t;
+      // 4) at the same time, base IV before its add-on (↳ sits under its parent)
+      if (a.is_add_on !== b.is_add_on) return a.is_add_on ? 1 : -1;
+      return (a.service_name ?? "").localeCompare(b.service_name ?? "");
+    });
+  }, [rows]);
 
   const router = useRouter();
   const [pending, startTransition] = useTransition();
