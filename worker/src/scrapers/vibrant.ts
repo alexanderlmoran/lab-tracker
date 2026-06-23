@@ -327,6 +327,11 @@ export const vibrantScraper: LabScraper = {
           pdfBase64: pdfBuf.toString("base64"),
           pdfFilename: `vibrant_${accessionId}.pdf`,
           resultIssuedAt: parseFinalDate(reports[0].final_report_date),
+          // Authoritative collection date off the lab's own report (e.g. 06/03)
+          // so the PB post isn't dated by the scrape day or a stale booking.
+          // parseFinalDate (NOT parseUsDate) → YYYY-MM-DD, the canonical form
+          // collection_date is stored/compared/serialized in everywhere.
+          collectionDate: parseFinalDate(reports[0].final_sample_collection_date) ?? null,
           isPartial: !isOrderComplete(status),
           portalPatientName: patientEntry
             ? `${patientEntry.patient_first_name} ${patientEntry.patient_last_name}`

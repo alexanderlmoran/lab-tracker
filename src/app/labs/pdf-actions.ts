@@ -222,6 +222,34 @@ export async function approvePdf(
   });
   if (auditErr) return { ok: false, error: auditErr.message };
 
+  // Same-accession merge: don't enqueue a DUPLICATE PB post when a sibling case
+  // (same patient + accession) already has a job in flight or done — that
+  // whole-order PDF already covers this panel, and the post-success cascade
+  // completes this case when the sibling posts. Mirrors the auto-post dedup in
+  // result-ready so a manual Approve can't fan one order into N labrequests.
+  const group = await accessionSiblingIds(parsed.data.caseId);
+  const siblings = group.filter((id) => id !== parsed.data.caseId);
+  if (siblings.length) {
+    const { data: active } = await db
+      .from("pb_upload_jobs")
+      .select("id")
+      .in("case_id", siblings)
+      .in("status", ["queued", "claimed", "succeeded"])
+      .limit(1)
+      .maybeSingle();
+    if (active) {
+      await db.from("lab_events").insert({
+        case_id: parsed.data.caseId,
+        kind: "case_edited",
+        actor: user.email ?? "staff",
+        note: "Approved — a same-accession sibling is already posting/posted to PB; no duplicate post enqueued (covered by the order's other panel).",
+      });
+      revalidatePath("/labs");
+      revalidatePath(`/labs/${parsed.data.caseId}`);
+      return { ok: true };
+    }
+  }
+
   // Enqueue (or reset on Retry). The (case_id, pdf_id) unique index means a
   // prior failed job collides — upsert flips it back to queued.
   const { error: jobErr } = await db

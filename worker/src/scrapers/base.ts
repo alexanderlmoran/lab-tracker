@@ -23,6 +23,11 @@ export type ScrapeResult = {
   pdfBase64: string;
   pdfFilename: string;
   resultIssuedAt?: string;
+  /** The sample-collection date the LAB's report carries (YYYY-MM-DD), when the
+   * scraper can parse it. This is the authoritative "Date Collected/Ordered" —
+   * result-ready writes it onto the case so the PB post is dated by the real
+   * collection (not the Zenoti booking, and never the scrape day). */
+  collectionDate?: string | null;
   /** Set true when the scraper KNOWS this is a partial/interim report (not the
    * full order). Drip labs (Vibrant/Access) are also force-staged partial by
    * scrape-all until per-portal completeness detection exists. */

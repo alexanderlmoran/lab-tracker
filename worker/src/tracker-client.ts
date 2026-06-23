@@ -42,6 +42,10 @@ export type ResultReadyPayload = {
   pdfBase64: string;
   pdfFilename: string;
   resultIssuedAt?: string;
+  /** Lab-reported sample-collection date (YYYY-MM-DD). When set, result-ready
+   * writes it onto the case so the PB "Date Ordered" reflects the real
+   * collection, not the Zenoti booking or the scrape day. */
+  collectionDate?: string | null;
   source: string;
   /** When true the tracker marks step 2 (partial received) instead of step 4
    * (complete) — so a drip lab (Vibrant/Access) can't auto-complete a case off

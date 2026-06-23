@@ -16,6 +16,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { storagePathBelongsToCase } from "@/lib/labs/pdf-upload";
+import { accessionSiblingIds } from "@/lib/labs/siblings";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,10 @@ const Body = z.object({
   storagePath: z.string().min(1).optional(),
   sizeBytes: z.number().int().positive().optional(),
   resultIssuedAt: z.string().optional(),
+  /** Lab-reported sample-collection date (YYYY-MM-DD). When present and valid,
+   * it's written onto the case as the authoritative collection_date — so the PB
+   * "Date Ordered" reflects the real collection, not the scrape day. */
+  collectionDate: z.string().optional(),
   source: z.string().min(1),
   /** When true, this is a partial result (auto-toggles step2 instead of step4). */
   isPartial: z.boolean().optional().default(false),
@@ -86,7 +91,7 @@ export async function POST(request: Request) {
 
   const { data: kase, error: caseErr } = await db
     .from("lab_cases")
-    .select("id, lab_external_ref, patient_name")
+    .select("id, lab_external_ref, patient_name, collection_date")
     .eq("id", parsed.caseId)
     .single();
   if (caseErr || !kase) {
@@ -222,6 +227,26 @@ export async function POST(request: Request) {
     }
   }
 
+  // Set the case's collection_date from the lab REPORT's own sample-collection
+  // date when the case has NONE — the authoritative "Date Collected", so the PB
+  // post isn't stamped "today" (the worker's last-resort fallback for a null
+  // date, which is how a Vibrant order collected 06/03 showed the Jun-18 scrape
+  // date). SET-ONLY-WHEN-NULL on purpose: overwriting a Zenoti-synced date would
+  // break the Zenoti re-sync dedup (it matches on collection_date → a mismatch
+  // spawns a duplicate case) and must never clobber a human edit. Value is
+  // already YYYY-MM-DD from the scraper (parseFinalDate); the regex is a guard.
+  const reportCollDate = (parsed.collectionDate ?? "").trim();
+  if (!kase.collection_date && /^\d{4}-\d{2}-\d{2}$/.test(reportCollDate)) {
+    await db.from("lab_cases").update({ collection_date: reportCollDate }).eq("id", parsed.caseId);
+    await db.from("lab_events").insert({
+      case_id: parsed.caseId,
+      kind: "case_edited",
+      actor: parsed.source,
+      note: `Collection date set to ${reportCollDate} from the lab report (accession ${parsed.labExternalRef}).`,
+      meta: { pdf_id: pdfRow.id, new_collection_date: reportCollDate },
+    });
+  }
+
   // A PDF arriving from the scraper IS the signal that the lab has the
   // results — no point making staff click step 4 (or step 2 for partial)
   // by hand. Match the form's setStepCompleted(cascadePrior:true) semantics:
@@ -311,39 +336,73 @@ export async function POST(request: Request) {
   // existing pb-upload-worker drains the queue and flips step5 on success. A
   // low-confidence capture skips this block and waits in Pending Upload.
   if (parsed.autoApprove) {
-    const gradeNote =
-      parsed.confidence != null
-        ? `auto-approved by engine (capture grade ${parsed.confidence})`
-        : "auto-approved by engine";
-    const { error: auditErr } = await db.from("lab_case_audit").insert({
-      case_id: parsed.caseId,
-      pdf_id: pdfRow.id,
-      action: "approve",
-      actor_label: parsed.source,
-      notes: gradeNote,
-    });
-    if (auditErr) {
-      return NextResponse.json(
-        { ok: false, error: `pdf staged but auto-approve audit failed: ${auditErr.message}`, pdfId: pdfRow.id },
-        { status: 500 },
-      );
+    // Same-accession merge: ONE PB post per physical order. A Vibrant order is
+    // booked as N Zenoti panels → N cases sharing one accession, each staging
+    // the SAME whole-order PDF — so without this each would auto-post a
+    // duplicate labrequest. If a sibling case already has a PB job in flight or
+    // done, this whole-order result is (or will be) on PB via that sibling, so
+    // DON'T approve a duplicate. Leave the PDF in Pending Upload; the
+    // post-success cascade supersedes it + completes this case when the sibling
+    // posts. Reversible — nothing deleted; if the sibling's post fails the PDF
+    // is still here for a human to approve. (Within one scrape run staging is
+    // sequential under the per-lab scrape lock, so the check-then-enqueue can't
+    // race itself; the residual is no worse than today and never data loss.)
+    const group = await accessionSiblingIds(parsed.caseId);
+    const siblings = group.filter((id) => id !== parsed.caseId);
+    let coveredBySibling = false;
+    if (siblings.length) {
+      const { data: active } = await db
+        .from("pb_upload_jobs")
+        .select("id")
+        .in("case_id", siblings)
+        .in("status", ["queued", "claimed", "succeeded"])
+        .limit(1)
+        .maybeSingle();
+      coveredBySibling = !!active;
     }
-    const { error: jobErr } = await db.from("pb_upload_jobs").upsert(
-      {
+    if (coveredBySibling) {
+      await db.from("lab_events").insert({
+        case_id: parsed.caseId,
+        kind: "case_edited",
+        actor: parsed.source,
+        note: `Auto-post skipped — a same-accession sibling is already posting/posted this order to PB (one merged post per accession ${parsed.labExternalRef}).`,
+        meta: { pdf_id: pdfRow.id, external_ref: parsed.labExternalRef },
+      });
+    } else {
+      const gradeNote =
+        parsed.confidence != null
+          ? `auto-approved by engine (capture grade ${parsed.confidence})`
+          : "auto-approved by engine";
+      const { error: auditErr } = await db.from("lab_case_audit").insert({
         case_id: parsed.caseId,
         pdf_id: pdfRow.id,
-        status: "queued",
-        last_error: null,
-        claimed_at: null,
-        finished_at: null,
-      },
-      { onConflict: "case_id,pdf_id" },
-    );
-    if (jobErr) {
-      return NextResponse.json(
-        { ok: false, error: `pdf approved but enqueue failed: ${jobErr.message}`, pdfId: pdfRow.id },
-        { status: 500 },
+        action: "approve",
+        actor_label: parsed.source,
+        notes: gradeNote,
+      });
+      if (auditErr) {
+        return NextResponse.json(
+          { ok: false, error: `pdf staged but auto-approve audit failed: ${auditErr.message}`, pdfId: pdfRow.id },
+          { status: 500 },
+        );
+      }
+      const { error: jobErr } = await db.from("pb_upload_jobs").upsert(
+        {
+          case_id: parsed.caseId,
+          pdf_id: pdfRow.id,
+          status: "queued",
+          last_error: null,
+          claimed_at: null,
+          finished_at: null,
+        },
+        { onConflict: "case_id,pdf_id" },
       );
+      if (jobErr) {
+        return NextResponse.json(
+          { ok: false, error: `pdf approved but enqueue failed: ${jobErr.message}`, pdfId: pdfRow.id },
+          { status: 500 },
+        );
+      }
     }
   }
 

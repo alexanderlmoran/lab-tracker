@@ -79,6 +79,7 @@ app.post<{ Params: { lab: string } }>("/run/:lab", async (req, reply) => {
             pdfBase64: r.pdfBase64,
             pdfFilename: r.pdfFilename,
             resultIssuedAt: r.resultIssuedAt,
+            collectionDate: r.collectionDate,
             source: `worker:${labKey}`,
             portalPatientName: r.portalPatientName,
           });
@@ -403,6 +404,7 @@ app.post<{
               pdfBase64: f.pdfBase64,
               pdfFilename: f.pdfFilename,
               resultIssuedAt: f.resultIssuedAt,
+              collectionDate: f.collectionDate,
               source: `manual-probe:${labKey}`,
               portalPatientName: f.portalPatientName,
               autoApprove: accMatched,

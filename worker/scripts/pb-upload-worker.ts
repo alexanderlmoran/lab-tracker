@@ -63,6 +63,10 @@ type Job = {
   /** Verbatim Zenoti service name (e.g. "Labs - Access Custom"). Optional
    * — older cases pre-dating the migration may not have it. */
   zenotiServiceName: string | null;
+  /** When set, the merged title for the single post covering a multi-panel
+   * same-accession order (e.g. "Full order — 7 panels"). Used in place of the
+   * lone panel's zenotiServiceName so the PB title reflects the whole order. */
+  mergedDescriptor?: string | null;
   collectionDate: string | null;
   /** Accession # from the PDF (preferred) or case row. Used to build a
    * traceable PB lab title. May be null for pre-accession-edit cases. */
@@ -169,7 +173,7 @@ async function processJob(job: Job) {
       patientName: job.patientName,
       patientDob: job.patientDob ?? undefined,
       patientEmail: job.patientEmail ?? undefined,
-      labName: composePbLabTitle(job.labName, job.zenotiServiceName, job.accession),
+      labName: composePbLabTitle(job.labName, job.mergedDescriptor ?? job.zenotiServiceName, job.accession),
       dateOrdered,
       pdfPath,
       pdfFilename: job.pdfFilename,

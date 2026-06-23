@@ -11,6 +11,7 @@
 
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
+import { accessionSiblingIds } from "@/lib/labs/siblings";
 
 export const dynamic = "force-dynamic";
 
@@ -98,7 +99,7 @@ export async function POST(request: Request) {
 
   const { data: pdf, error: pdfErr } = await db
     .from("lab_case_pdfs")
-    .select("id, storage_path, filename, external_ref")
+    .select("id, storage_path, filename, external_ref, is_partial")
     .eq("id", claimed.pdf_id)
     .single();
   if (pdfErr || !pdf) {
@@ -106,6 +107,34 @@ export async function POST(request: Request) {
       { ok: false, error: `pdf lookup failed: ${pdfErr?.message ?? "missing"}` },
       { status: 500 },
     );
+  }
+
+  // Merged title: a Vibrant order is booked as N Zenoti panels → N cases sharing
+  // ONE accession, and the duplicate PB posts are deduped at ENQUEUE (see
+  // result-ready / approvePdf), so only one job survives. Title that single post
+  // as the whole order rather than the lone panel that happened to be enqueued —
+  // but ONLY when the report is complete (not a partial) and the siblings are
+  // genuinely distinct panels (not plain duplicate cards of one test, e.g. a
+  // Zenoti row + a bulk import sharing an accession). Read-only; best-effort.
+  let mergedDescriptor: string | null = null;
+  if (!(pdf.is_partial as boolean | null)) {
+    try {
+      const group = await accessionSiblingIds(claimed.case_id);
+      if (group.length > 1) {
+        const { data: groupRows } = await db
+          .from("lab_cases")
+          .select("zenoti_service_name")
+          .in("id", group);
+        const panels = new Set(
+          (groupRows ?? [])
+            .map((r) => ((r.zenoti_service_name as string | null) ?? "").replace(/^\s*Labs\s*-\s*/i, "").trim())
+            .filter(Boolean),
+        );
+        if (panels.size > 1) mergedDescriptor = `Full order — ${panels.size} panels`;
+      }
+    } catch (err) {
+      console.error("[pb-upload/next] merged-title computation failed", err);
+    }
   }
 
   const { data: signed, error: signErr } = await db.storage
@@ -131,6 +160,9 @@ export async function POST(request: Request) {
       // Verbatim Zenoti service ("Labs - Access Custom") — worker uses
       // this to build a richer PB title than bare labName.
       zenotiServiceName: (kase.zenoti_service_name as string | null) ?? null,
+      // When this is the single surviving post for a multi-panel accession, the
+      // worker titles it by this merged descriptor instead of the lone panel.
+      mergedDescriptor,
       collectionDate: kase.collection_date,
       // PDF-attached accession (preferred — what's actually printed on
       // the document). Falls back to the case's lab_external_ref if a
