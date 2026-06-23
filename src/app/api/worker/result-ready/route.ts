@@ -227,23 +227,28 @@ export async function POST(request: Request) {
     }
   }
 
-  // Set the case's collection_date from the lab REPORT's own sample-collection
-  // date when the case has NONE — the authoritative "Date Collected", so the PB
-  // post isn't stamped "today" (the worker's last-resort fallback for a null
-  // date, which is how a Vibrant order collected 06/03 showed the Jun-18 scrape
-  // date). SET-ONLY-WHEN-NULL on purpose: overwriting a Zenoti-synced date would
-  // break the Zenoti re-sync dedup (it matches on collection_date → a mismatch
-  // spawns a duplicate case) and must never clobber a human edit. Value is
-  // already YYYY-MM-DD from the scraper (parseFinalDate); the regex is a guard.
+  // Date the case by the lab REPORT's own sample-collection date (the
+  // authoritative "Date Collected", e.g. 06/03) so the PB post + the board show
+  // the real draw — not the Zenoti booking date (which staff sometimes enter as
+  // the order day, e.g. 06/18) and not the scrape day (the worker's "today"
+  // fallback for a null date). OVERWRITE when it differs, which is SAFE here:
+  // the Zenoti sync window is FORWARD-ONLY (today..+N, see zenoti-*-loop.ts), so
+  // a PAST appointment is never re-fetched, and a re-sync of a still-open appt
+  // matches by zenoti_appointment_id (cases/route.ts) — NOT collection_date — so
+  // this can't desync the dedup or spawn a duplicate case. Value is already
+  // YYYY-MM-DD from the scraper (parseFinalDate); the regex is a guard. Every
+  // change is logged for traceability/reversibility.
   const reportCollDate = (parsed.collectionDate ?? "").trim();
-  if (!kase.collection_date && /^\d{4}-\d{2}-\d{2}$/.test(reportCollDate)) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(reportCollDate) && reportCollDate !== (kase.collection_date ?? "")) {
     await db.from("lab_cases").update({ collection_date: reportCollDate }).eq("id", parsed.caseId);
     await db.from("lab_events").insert({
       case_id: parsed.caseId,
       kind: "case_edited",
       actor: parsed.source,
-      note: `Collection date set to ${reportCollDate} from the lab report (accession ${parsed.labExternalRef}).`,
-      meta: { pdf_id: pdfRow.id, new_collection_date: reportCollDate },
+      note: kase.collection_date
+        ? `Collection date corrected ${kase.collection_date} → ${reportCollDate} from the lab report (accession ${parsed.labExternalRef}).`
+        : `Collection date set to ${reportCollDate} from the lab report (accession ${parsed.labExternalRef}).`,
+      meta: { pdf_id: pdfRow.id, prev_collection_date: kase.collection_date, new_collection_date: reportCollDate },
     });
   }
 
