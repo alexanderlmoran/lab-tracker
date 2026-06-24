@@ -18,7 +18,7 @@ import { planColumnJump } from "@/lib/column-jump";
 import { trackingDestinationWarning } from "@/lib/labs/catalog";
 import { labelForCase } from "@/lib/labs/label";
 import { normalizeLabName } from "@/lib/scrapers/normalize-lab";
-import { archiveLabCase, setStepCompleted } from "./actions";
+import { archiveLabCase, setStepCompleted, setWithPatient } from "./actions";
 import { CaseDetail } from "./CaseDetail";
 import { formatPersonName, formatShortDate } from "@/lib/format";
 import {
@@ -669,6 +669,7 @@ export function LabKanbanBoard({
   const grouped: Record<ColumnKey, LabCase[]> = {
     untouched: [],
     ready_to_ship: [],
+    with_patient: [],
     sample_sent: [],
     partial_results: [],
     complete_results: [],
@@ -754,6 +755,35 @@ export function LabKanbanBoard({
       window.alert(
         `"${COLUMN_LABEL[targetCol]}" is set automatically (from the tracking # / results), not by moving a card here.`,
       );
+      return;
+    }
+    // "With Patient" is staff-set (not a numbered step) — dragging here records
+    // the "Given to patient" timestamp via setWithPatient, not a step jump.
+    if (targetCol === "with_patient") {
+      if (row.step1_sample_sent) {
+        window.alert("This sample has already been sent — it can't move back to With Patient.");
+        return;
+      }
+      if (
+        !window.confirm(
+          `Mark ${formatPersonName(row.patient_name)} — ${labelForCase(row)} as given to the patient?`,
+        )
+      ) {
+        return;
+      }
+      setOptimisticCols((prev) => ({ ...prev, [caseId]: targetCol }));
+      startMove(async () => {
+        const res = await setWithPatient(caseId, true);
+        if (res && !res.ok) {
+          setOptimisticCols((prev) => {
+            const { [caseId]: _, ...rest } = prev;
+            return rest;
+          });
+          window.alert(res.error ?? "Could not move the card.");
+          return;
+        }
+        router.refresh();
+      });
       return;
     }
     if (

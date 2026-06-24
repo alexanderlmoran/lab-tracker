@@ -17,13 +17,17 @@
 
 import type { LabCase } from "@/lib/types";
 
-type ShipState = Pick<LabCase, "tracking_number" | "step1_sample_sent">;
+type ShipState = Pick<LabCase, "tracking_number" | "step1_sample_sent" | "with_patient_at">;
 type LifecycleState = ShipState &
   Pick<LabCase, "archived_at" | "deleted_at" | "pickup_confirmation">;
 
-/** Sample packed with a return label, not yet handed to / scanned by the carrier. */
+/** Sample packed with a return label, not yet handed to / scanned by the carrier.
+ *  A card the staff marked "with the patient" is NOT ready to ship (the kit is
+ *  physically out with the patient) — so the With Patient lane, the Schedule-
+ *  pickup dialog, and the Tracking board agree and a pickup can't be booked for
+ *  a kit that isn't at the clinic. */
 export function isReadyToShip(c: ShipState): boolean {
-  return Boolean(c.tracking_number) && !c.step1_sample_sent;
+  return Boolean(c.tracking_number) && !c.step1_sample_sent && !c.with_patient_at;
 }
 
 /** Ready to ship and no pickup booked yet → a candidate for "Schedule pickup". */

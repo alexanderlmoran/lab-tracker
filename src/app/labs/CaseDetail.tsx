@@ -716,7 +716,7 @@ export function CaseDetail({
             the sample ships (Alex, 2026-06-11): once a card is in Sample Sent
             or later the requisition already left with the kit, so the button
             is just clutter from there through Completed. */}
-        {currentCol === "untouched" || currentCol === "ready_to_ship" ? (
+        {currentCol === "untouched" || currentCol === "ready_to_ship" || currentCol === "with_patient" ? (
           <div className="mt-2">
             <ReqFormButton caseId={row.id} labName={row.lab_name} />
           </div>

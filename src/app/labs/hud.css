@@ -15,6 +15,7 @@
   --c-new: #94a3b8;       /* slate-400 */
   --c-ready: #fb923c;     /* orange-400 — "go ship this" action lane */
   --c-sent: #38bdf8;      /* sky-400 */
+  --c-withpatient: #f472b6; /* pink-400 — kit physically with the patient */
   --c-partial: #a78bfa;   /* violet-400 */
   --c-complete: #818cf8;  /* indigo-400 */
   --c-rof-s: #facc15;     /* amber */
@@ -311,6 +312,7 @@
 
 .kanban-col[data-col="untouched"]        { --col-c: var(--c-new); }
 .kanban-col[data-col="ready_to_ship"]    { --col-c: var(--c-ready); }
+.kanban-col[data-col="with_patient"]     { --col-c: var(--c-withpatient); }
 .kanban-col[data-col="sample_sent"]      { --col-c: var(--c-sent); }
 .kanban-col[data-col="partial_results"]  { --col-c: var(--c-partial); }
 .kanban-col[data-col="complete_results"] { --col-c: var(--c-complete); }

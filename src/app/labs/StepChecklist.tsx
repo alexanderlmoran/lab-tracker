@@ -10,7 +10,7 @@ import {
   stepLabelForWorkflow,
 } from "@/lib/columns";
 import { emailKindForStep } from "@/lib/email/step-map";
-import { archiveLabCase, setStepCompleted, unarchiveLabCase } from "./actions";
+import { archiveLabCase, setStepCompleted, setWithPatient, unarchiveLabCase } from "./actions";
 import { listEmailLogs } from "./email-actions";
 import { EmailConfirmDialog, type EmailConfirmHandle } from "./EmailConfirmDialog";
 
@@ -40,6 +40,7 @@ export function StepChecklist({
   const [c, setC] = useState<LabCase>(initial);
   const [pendingStep, setPendingStep] = useState<StepNumber | null>(null);
   const [archiving, setArchiving] = useState(false);
+  const [wpPending, setWpPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
   // Default ON: same-accession siblings are one order, so the common intent is
@@ -142,6 +143,24 @@ export function StepChecklist({
     startTransition(async () => {
       const res = next ? await archiveLabCase(c.id) : await unarchiveLabCase(c.id);
       setArchiving(false);
+      if (!res.ok) {
+        setError(res.error);
+        setC(prevSnapshot);
+      }
+    });
+  }
+
+  // Staff "Given to patient" — sets the with_patient_at timestamp so the card
+  // moves to the "With Patient" lane (until the sample is sent). Not a numbered
+  // step; a derived stage row in the ladder, like Ready to Ship / Completed.
+  function onToggleWithPatient(next: boolean) {
+    setError(null);
+    setWpPending(true);
+    const prevSnapshot = c;
+    setC((prev) => ({ ...prev, with_patient_at: next ? new Date().toISOString() : null }) as LabCase);
+    startTransition(async () => {
+      const res = await setWithPatient(c.id, next);
+      setWpPending(false);
       if (!res.ok) {
         setError(res.error);
         setC(prevSnapshot);
@@ -274,6 +293,15 @@ export function StepChecklist({
           label="Ready to Ship"
           hint={c.tracking_number ? "(auto · tracking # attached)" : "(auto · add a tracking #)"}
           checked={Boolean(c.tracking_number)}
+        />
+      ) : null}
+      {workflow === "default" && !c.step1_sample_sent ? (
+        <StageRow
+          label="With Patient"
+          hint={c.with_patient_at ? "(given to patient)" : "(tap when the kit is with the patient)"}
+          checked={Boolean(c.with_patient_at)}
+          pending={wpPending}
+          onChange={onToggleWithPatient}
         />
       ) : null}
       <div className="grid gap-x-4 gap-y-0 lg:grid-cols-2">

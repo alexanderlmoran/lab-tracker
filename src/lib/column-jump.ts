@@ -15,6 +15,10 @@ const COLUMN_DEFINING_STEPS: Record<ColumnKey, StepNumber[]> = {
   // ticked) — there's no step to flip, and you can't drag a card here (it
   // needs a tracking number). Like pending_upload, it's not a jump target.
   ready_to_ship: [],
+  // with_patient is staff-set (a `with_patient_at` timestamp, not a numbered
+  // step) — set it via the "Given to patient" control in the checklist, not a
+  // step-based column jump. No defining step ⇒ not offered in the move menu.
+  with_patient: [],
   sample_sent: [1],
   partial_results: [3],
   complete_results: [5],
@@ -65,6 +69,7 @@ export function isForwardJump(from: ColumnKey, to: ColumnKey): boolean {
   const order: ColumnKey[] = [
     "untouched",
     "ready_to_ship",
+    "with_patient",
     "sample_sent",
     "partial_results",
     "complete_results",

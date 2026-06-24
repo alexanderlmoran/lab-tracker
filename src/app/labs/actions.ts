@@ -503,6 +503,33 @@ export async function unarchiveLabCase(caseId: string): Promise<ActionResult> {
   return setArchive(caseId, false);
 }
 
+/** Staff "Given to patient" toggle — sets/clears `with_patient_at`, which the
+ *  board reads to place a card in the "With Patient" lane (when the sample is
+ *  not yet sent). Independent of the numbered step1..9 pipeline. */
+export async function setWithPatient(
+  caseId: string,
+  on: boolean,
+): Promise<ActionResult> {
+  const user = await requireSignedIn();
+  const db = getSupabaseAdmin();
+  const { error } = await db
+    .from("lab_cases")
+    .update({ with_patient_at: on ? new Date().toISOString() : null })
+    .eq("id", caseId);
+  if (error) return { ok: false, error: error.message };
+
+  await db.from("lab_events").insert({
+    case_id: caseId,
+    kind: "case_edited",
+    actor: user.email ?? "admin",
+    note: on ? "Given to patient (kit handed over)" : "Un-marked ‘With Patient’",
+  });
+
+  revalidatePath("/labs");
+  revalidatePath(`/labs/${caseId}`);
+  return { ok: true };
+}
+
 async function setDeleted(
   caseId: string,
   deleted: boolean,
@@ -1089,6 +1116,13 @@ export async function setStepCompleted(input: {
       actor: user.email ?? "admin",
       note: `Predicted: ${expectedDatesEvent.min ?? "—"} to ${expectedDatesEvent.max ?? "—"}`,
     });
+  }
+
+  // Sample shipped (step 1 set directly or via cascade) → the kit is no longer
+  // with the patient: clear the pre-ship "With Patient" marker so an un-tick
+  // correction returns the card to Ready to Ship, not back to With Patient.
+  if (completed && (step === 1 || cascadedNewlySet.includes(1))) {
+    await db.from("lab_cases").update({ with_patient_at: null }).eq("id", caseId);
   }
 
   // Best-effort: when step 1 just flipped true and the case has a tracking

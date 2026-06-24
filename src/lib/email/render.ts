@@ -241,6 +241,7 @@ export async function renderTestEmail(args: {
     patient_address: null,
     lab_name: lab,
     lab_panel: samplePanel,
+    with_patient_at: null,
     tracking_number: null,
     lab_external_ref: null,
     pickup_confirmation: null,

@@ -86,6 +86,10 @@ export type LabCase = {
   tracking_location: string | null;
   pickup_scheduled_date: string | null;
   pickup_carrier: string | null;
+  // Staff-set "the kit is physically with the patient" timestamp. Drives the
+  // "With Patient" board lane (set + not-yet-sample-sent). Independent of the
+  // numbered step1..9 pipeline; null = not yet given to the patient.
+  with_patient_at: string | null;
   nadia_confirm_token: string | null;
   nadia_confirm_sent_at: string | null;
   nadia_confirm_expires_at: string | null;

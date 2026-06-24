@@ -5,6 +5,7 @@ import { easternDateIso } from "./format";
 export type ColumnKey =
   | "untouched"
   | "ready_to_ship"
+  | "with_patient"
   | "sample_sent"
   | "partial_results"
   | "complete_results"
@@ -27,6 +28,7 @@ export type ColumnKey =
 export const COLUMN_ORDER: ColumnKey[] = [
   "untouched",
   "ready_to_ship",
+  "with_patient",
   "sample_sent",
   "pending_upload",
   "partial_results",
@@ -42,17 +44,20 @@ export const LAB_BOARD_COLUMN_ORDER: ColumnKey[] = [
 ];
 
 export const COLUMN_LABEL: Record<ColumnKey, string> = {
-  untouched: "TO DO",
+  untouched: "To Do",
   // Sample drawn + return label printed, packed and waiting at the clinic for
   // the carrier. A card rests here until FedEx scans it (step 1 auto-ticks on
   // the pickup/in-transit scan). This is the ONLY set the pickup dialog books.
   ready_to_ship: "Ready to Ship",
+  // Staff tapped "Given to patient" (with_patient_at set) — the kit is
+  // physically with the patient, sample not yet sent back.
+  with_patient: "With Patient",
   sample_sent: "Sample Sent",
   // "Uploaded" labels emphasize the PB-side outcome (not merely "we got the
   // data back"). A card only lands in these lanes once the PDF actually
   // landed on the patient's PB chart. Pre-upload states sit in Pending Upload.
   partial_results: "Partial Uploaded",
-  complete_results: "Complete Uploaded",
+  complete_results: "Upload Complete",
   pending_upload: "Pending Upload",
   rof_scheduled: "ROF Scheduled",
   rof_done: "ROF Done",
@@ -131,7 +136,7 @@ const PEPTIDES_STEP_LABELS: Partial<Record<StepNumber, string>> = {
  * `completed` (archived) is not part of either strip — it's a board-level
  * bucket, not a workflow step. */
 const WORKFLOW_COLUMNS: Record<CaseWorkflow, ColumnKey[]> = {
-  default: ["untouched", "ready_to_ship", "sample_sent", "partial_results", "complete_results", "pending_upload", "rof_scheduled", "rof_done", "closed"],
+  default: ["untouched", "ready_to_ship", "with_patient", "sample_sent", "partial_results", "complete_results", "pending_upload", "rof_scheduled", "rof_done", "closed"],
   // Peptides ship a product TO the patient — there's no return sample to stage,
   // so the ready-to-ship lane doesn't apply.
   peptides: ["untouched", "sample_sent", "closed"],
@@ -256,6 +261,10 @@ export function getColumnFor(
   if (c.step3_partial_uploaded) return "partial_results";
   if (c.step2_partial_received) return "pending_upload"; // partial received, awaiting upload
   if (c.step1_sample_sent) return "sample_sent";
+  // Staff marked the kit physically given to the patient (sample not yet sent).
+  // Takes precedence over ready_to_ship; once step 1 ticks, sample_sent wins
+  // above so the card leaves this lane without needing to clear the timestamp.
+  if (c.with_patient_at) return "with_patient";
   // Tracking # attached but not yet sent (step 1 unticked) → packed and waiting
   // for the carrier. See isReadyToShip for why this isn't keyed off tracking_status.
   if (isReadyToShip(c)) return "ready_to_ship";
@@ -304,7 +313,7 @@ export const PATIENT_COLUMN_ORDER: PatientColumnKey[] = [
 ];
 
 export const PATIENT_COLUMN_LABEL: Record<PatientColumnKey, string> = {
-  p_new: "TO DO",
+  p_new: "To Do",
   p_at_lab: "At Lab",
   p_results: "Results",
   p_done: "Done",
@@ -315,6 +324,7 @@ const COL_TO_PATIENT_COL: Record<ColumnKey, PatientColumnKey> = {
   // Pre-shipment (label printed, sample not yet at the lab) → still the
   // earliest patient bucket alongside not-started.
   ready_to_ship: "p_new",
+  with_patient: "p_new",
   sample_sent: "p_at_lab",
   partial_results: "p_at_lab",
   complete_results: "p_results",
