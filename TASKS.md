@@ -3,6 +3,32 @@
 Add new entries at the top of each section. Move items to `## Done` once shipped.
 See also `docs/PLAYBOOK.md` (reuse index — read before building).
 
+## 2026-06-24 — Patient-safety hardening (CURRENT)
+
+**Incident:** Salvatore Didonato's Access result (acc `007254433`) was bound to Negin Etemad's case; a human manually posted it to her PracticeBetter chart (bypassing the tracker → not in the PB-post log). Root cause: `result-ready` attached PDFs with NO patient verification — the last-name gate only ran when the scraper sent `portalPatientName`, and the reconcile/probe path sent none. **Negin = the only real exposure** (retracted from PB). **Larisa Marmo / Matthew Buchwald = FALSE ALARMS** (their OWN labs; case accession was stale). Lesson: the "couldn't be verified / differs from the case" note ≠ wrong patient — open the PDF. Memory: `project-lab-tracker-wrong-patient-incident`.
+
+**SHIPPED 2026-06-24 (deploy/audit-fixes → Vercel + Fly):**
+- `result-ready` **fails closed** — quarantine (409 + loud log, no attach) when `!accessionMatches && !corroborated`.
+- **`AUTO_POST_ENABLED` env, default OFF** — auto-post to PB disabled by policy; captures stage for MANUAL review only. (Threshold 101 stopgap also set.) **Post to PB ONLY through the tracker** (manual PB uploads are invisible to the audit log — that's how Negin's slipped through).
+- PB 401 self-heal + honest heartbeats · job reaper · email-queue sweeper · **lost-kit watchdog** (auto-flags FedEx orphans) · GOLDA auto-scrape off · dedupe-key fix · `case_adopted` enum migration · accession NULL-overwrite guards · no_accession surfacing · Nadia "blocked by sibling" visibility.
+
+**READY TO DEPLOY (committed, not yet shipped):**
+- Phase 1 — `fix/reconcile-portal-name` (`c83e1bb`): 4 hand-written scrapers (access, cyrex, spectracell, glycanage) never passed `portalPatientName` → reconcile over-quarantined right-patient results. Fixed.
+- Idiot-proof Pending-Upload guard — `fix/pending-upload-guard` (`e7d1892`): persists `lab_case_pdfs.report_patient_name` (new migration `20260624_lab_case_pdfs_report_patient_name.sql`); review card shows **report patient + accession vs the case's**; **RED "⚠ PATIENT MISMATCH" + Approve disabled** (override = type the case patient's name, stamped to audit); **AMBER** accession-only one-click confirm; **post-step PB guard** parks name-mismatched uploads `failed` before sending.
+
+**TODO — board column / step RE-SEQUENCE (Alex 2026-06-24):** new stages, in order →
+  `1. To Do · 2. Ready to Ship · 3. With Patient · 4. Sample Sent · 5. Pending Upload · 6. Upload Complete · (keep 7+)`.
+  ⚠ NOT a pure relabel — it **inserts 3 new pre-ship stages** (To Do / Ready to Ship / With Patient) before "Sample Sent". Current step booleans: step1=sample_sent, step2=partial_received, step3=partial_uploaded, step4=complete_received, step5=complete_uploaded. Re-sequencing touches auto-advance/cascade, reconcile step-setting, the Nadia "all at step5" trigger, the `/9` counter, `columns.ts` labels+order, tracking auto-advance. **Needs a design pass + migration before implementing.** (Supersedes the old "Pending Upload → Needs your review" rename below.)
+
+**REST OF AUDIT — phase 2 (after idiot-proof deploys):**
+- Settings UI toggle for `AUTO_POST_ENABLED` (currently env/DB key).
+- Extract a shared no-auth email-dispatch helper (kill the duplicated send body from the gated auto-email wiring).
+- CHECK constraints on `tracking_status` / `iv_sessions.charting_status` / `inbound_emails.applied_action` (after eyeballing real values via the integrity scorecard).
+- Audit the inbound-EMAIL / Gmail ingest lane (never got its own pass; `queued_to_pb` can wedge).
+- Worker-poker loop to hit the new reaper / email-sweep / lost-kit routes more often than the daily cron.
+- Run the integrity scorecard SQL; clear stuck jobs / wedged emails the reaper+sweeper surface.
+- Reconcile `origin/main` with deployed code (deploy/audit-fixes is ahead; the 2 patient-alias commits still need their migration before they ship).
+
 ## Roadmap — 2026-06-08 (Alex's current backlog)
 
 **Shipped today:** Vibrant scraper fixed (AllSummaryReport — real reports now); stale Vibrant error PDFs swept; PB coverage audit (`worker/scripts/audit-pb-coverage.ts`) + Engine analytics tab (`/labs/analytics?tab=engine`, % correct PDF / posting / upload reliability); auto-post threshold **101→95** (LIVE on worker v32); 4 wrong-year collection_dates fixed.
