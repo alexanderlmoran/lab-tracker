@@ -68,6 +68,10 @@ export const glycanageScraper: LabScraper = {
           pdfBase64: buf.toString("base64"),
           pdfFilename: `glycanage_${normalizeName(match.name ?? "").replace(/\s+/g, "_")}_${ref}.pdf`,
           resultIssuedAt: (match.dos || match.createdOn)?.slice(0, 10),
+          // Carry the matched report's patient name so result-ready corroborates
+          // it and a stale case accession doesn't quarantine a right-patient
+          // result on the reconcile path. GlycanAge matches name-only (no DOB).
+          portalPatientName: match.name || undefined,
         });
       } catch (err) {
         errors.push({

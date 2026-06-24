@@ -88,6 +88,11 @@ export const cyrexScraper: LabScraper = {
             pdfBase64: pdf.buf.toString("base64"),
             pdfFilename: pdf.filename,
             resultIssuedAt: parseDate(match.resultDate) ?? parseDate(match.collectionDate),
+            // Carry the matched row's patient name so result-ready can
+            // corroborate it and not quarantine a right-patient result whose
+            // case accession is stale (the reconcile path relies on this).
+            portalPatientName:
+              `${match.lastName}, ${match.firstName}`.trim().replace(/^,\s*|,\s*$/g, "") || undefined,
           });
         } catch (err) {
           errors.push({

@@ -201,6 +201,11 @@ async function pushFound(
     pdfBase64: pdf.base64,
     pdfFilename: pdf.filename,
     resultIssuedAt: parseFinalDate(match.finalDate),
+    // The matched grid row's patient name ("LAST, FIRST") — carry it through so
+    // result-ready can corroborate the patient and not fail-closed/quarantine a
+    // right-patient result whose CASE accession is stale. The reconcile/probe
+    // path forces a download by accession, so this row IS the matched patient.
+    portalPatientName: match.name || undefined,
   });
 }
 

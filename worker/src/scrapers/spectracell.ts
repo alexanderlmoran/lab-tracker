@@ -77,6 +77,10 @@ export const spectracellScraper: LabScraper = {
             labExternalRef: match.orderId,
             pdfBase64: pdf.buf.toString("base64"),
             pdfFilename: pdf.filename,
+            // Matched row's patient name ("Last, First") → result-ready
+            // corroborates it so a stale case accession doesn't quarantine a
+            // right-patient result on the reconcile path.
+            portalPatientName: match.patientName || undefined,
           });
         } catch (err) {
           errors.push({
