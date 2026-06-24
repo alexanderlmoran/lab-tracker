@@ -45,6 +45,86 @@ export function pbRequest(
 
 // ── Types ────────────────────────────────────────────────────────────
 
+/** Thrown when PB rejects an authenticated call with 401/403 — i.e. the cached
+ *  session has expired. Callers can `instanceof PbAuthError` to know a re-login
+ *  is needed (vs. a transient network error), mirroring the drain path's
+ *  authError signal. `withPbReauth` self-heals these for one re-login + retry. */
+export class PbAuthError extends Error {
+  readonly statusCode: number;
+  constructor(message: string, statusCode: number) {
+    super(message);
+    this.name = "PbAuthError";
+    this.statusCode = statusCode;
+  }
+}
+
+/** True for any error that means "PB session expired" — a typed PbAuthError, or
+ *  a legacy string-message error that mentions 401/403/unauthorized/forbidden. */
+export function isPbAuthError(e: unknown): boolean {
+  if (e instanceof PbAuthError) return true;
+  const msg = e instanceof Error ? e.message : String(e);
+  return /\b(401|403)\b|unauthor|forbidden/i.test(msg);
+}
+
+/** A PB session plus the means to mint a fresh one. Pass this (instead of a bare
+ *  PbSession) to `withPbReauth` so a mid-run 401 self-heals: invalidate the stale
+ *  session, re-login ONCE, retry the call once. `session` is mutable so the
+ *  refreshed cookies propagate back to the caller (the loop reuses them). */
+export type PbSessionProvider = {
+  session: PbSession;
+  relogin: () => Promise<PbSession>;
+};
+
+/** Build a self-healing provider around credentials. The first `session` is the
+ *  one passed in (already logged in); `relogin()` mints a fresh session AND
+ *  updates `provider.session` in place so subsequent calls reuse it. */
+export function pbSessionProvider(
+  session: PbSession,
+  username: string,
+  password: string,
+): PbSessionProvider {
+  const provider: PbSessionProvider = {
+    session,
+    relogin: async () => {
+      provider.session = await pbLogin(username, password);
+      return provider.session;
+    },
+  };
+  return provider;
+}
+
+/** Run an authenticated PB call with one-shot 401/403 self-heal: invoke `fn`
+ *  with the current session; if it throws a PB auth error, drop the cached
+ *  session, re-login ONCE, and retry `fn` once. A second auth failure throws a
+ *  clear PbAuthError (credentials/blocked, not just a stale cookie). This is the
+ *  drain path's drop-on-authError behavior, centralized so the IV reconcile +
+ *  PC-seed paths (which reuse a cached session) stop wedging on an expired one. */
+export async function withPbReauth<T>(
+  provider: PbSessionProvider,
+  fn: (session: PbSession) => Promise<T>,
+): Promise<T> {
+  try {
+    return await fn(provider.session);
+  } catch (e) {
+    if (!isPbAuthError(e)) throw e;
+    // Stale session → invalidate, re-login once, retry once.
+    const fresh = await provider.relogin();
+    try {
+      return await fn(fresh);
+    } catch (e2) {
+      if (isPbAuthError(e2)) {
+        throw new PbAuthError(
+          `PB re-auth failed after one retry (credentials invalid or IP blocked): ${
+            e2 instanceof Error ? e2.message : String(e2)
+          }`,
+          e2 instanceof PbAuthError ? e2.statusCode : 401,
+        );
+      }
+      throw e2;
+    }
+  }
+}
+
 export type PbSession = {
   cookies: string;
   userId: string;
@@ -202,6 +282,10 @@ export async function findPbPatient(
       method: "GET",
       headers: pbApiHeaders(session),
     });
+    if (res.statusCode === 401 || res.statusCode === 403) {
+      await res.body.text().catch(() => {});
+      throw new PbAuthError(`PB patient search failed ${res.statusCode}`, res.statusCode);
+    }
     if (res.statusCode !== 200) throw new Error(`PB patient search failed ${res.statusCode}`);
     return ((await res.body.json()) as { items: PbHit[] }).items;
   };
@@ -329,6 +413,10 @@ export async function searchPbPatientCandidates(
   const q = encodeURIComponent(cleaned).replace(/%20/g, "+");
   const url = `${PB_BASE}/api/consultant/records/search?countlimit=${limit}&limit=${limit}&query=${q}`;
   const res = await pbRequest(url, { method: "GET", headers: pbApiHeaders(session) });
+  if (res.statusCode === 401 || res.statusCode === 403) {
+    await res.body.text().catch(() => {});
+    throw new PbAuthError(`PB candidate search failed ${res.statusCode}`, res.statusCode);
+  }
   if (res.statusCode !== 200) {
     throw new Error(`PB candidate search failed ${res.statusCode}`);
   }
@@ -617,6 +705,13 @@ export async function listAllConsultantLabRequests(
     method: "GET",
     headers: pbApiHeaders(session),
   });
+  if (res.statusCode === 401 || res.statusCode === 403) {
+    await res.body.text().catch(() => {});
+    throw new PbAuthError(
+      `PB list consultant labrequests failed ${res.statusCode}`,
+      res.statusCode,
+    );
+  }
   if (res.statusCode !== 200) {
     const text = await res.body.text();
     throw new Error(

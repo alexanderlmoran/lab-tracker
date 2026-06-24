@@ -17,7 +17,12 @@
 
 import { request } from "undici";
 
-import { searchPbPatientCandidates, type PbSession } from "../uploaders/practicebetter.js";
+import {
+  isPbAuthError,
+  searchPbPatientCandidates,
+  withPbReauth,
+  type PbSessionProvider,
+} from "../uploaders/practicebetter.js";
 import { findSameDayNote } from "../uploaders/pb-sessionnotes.js";
 import { ivNoteTitle } from "./build-note-content.js";
 import { pickBestMatch, type PatientIdentity } from "./match-patient.js";
@@ -68,13 +73,22 @@ async function capture(sessionId: string, pbNoteId: string, pbClientRecordId: st
   return true;
 }
 
-/** Reconcile open sessions against PB. Returns counts (checked/captured). Caller
- *  wraps this in withTimeout so a slow PB read can never hang the loop. */
-export async function reconcileChartedNotes(pb: PbSession, opts: { days?: number; max?: number } = {}): Promise<{ checked: number; captured: number }> {
+/** Reconcile open sessions against PB. Returns counts (checked/captured) plus
+ *  `authError` — true if PB rejected auth even after a re-login retry (a stale
+ *  cached session would otherwise loop 401s forever; the caller drops it). Takes
+ *  a PbSessionProvider so the candidate search self-heals on a mid-run 401:
+ *  invalidate, re-login once, retry. After a re-login the provider's session is
+ *  refreshed, so the same-day-note read reuses the fresh cookies. Caller wraps
+ *  this in withTimeout so a slow PB read can never hang the loop. */
+export async function reconcileChartedNotes(
+  provider: PbSessionProvider,
+  opts: { days?: number; max?: number } = {},
+): Promise<{ checked: number; captured: number; authError: boolean }> {
   const days = opts.days ?? 7;
   const max = opts.max ?? 60;
   const open = await fetchOpen(days, max);
   let captured = 0;
+  let authError = false;
 
   for (const s of open) {
     try {
@@ -85,14 +99,18 @@ export async function reconcileChartedNotes(pb: PbSession, opts: { days?: number
       if (!clientRecordId) {
         const query = (s.identity.fullName || s.identity.email || "").trim();
         if (!query) continue;
-        const best = pickBestMatch(s.identity, await searchPbPatientCandidates(pb, query));
+        // Self-heal a stale PB session here — this is THE call that was looping
+        // 401s ("PB candidate search failed 401") because the cached session had
+        // expired and nothing re-logged in.
+        const cands = await withPbReauth(provider, (sess) => searchPbPatientCandidates(sess, query));
+        const best = pickBestMatch(s.identity, cands);
         if (!best || !best.autoPostable) continue; // can't safely attribute → leave it
         clientRecordId = best.candidate.id;
       }
 
       const title = ivNoteTitle({ serviceName: s.serviceName, templateHint: s.templateHint, kind: s.kind, pc: s.pc });
       const keys = [s.templateHint ?? "", title, ...(s.kind === "ebo" ? EBO_TITLE_KEYS : [])];
-      const note = await findSameDayNote(pb, clientRecordId, s.sessionDate, keys);
+      const note = await findSameDayNote(provider.session, clientRecordId, s.sessionDate, keys);
       if (!note) continue; // not charted in PB (yet) → stays on the board
 
       if (await capture(s.sessionId, note.id, clientRecordId)) {
@@ -100,8 +118,12 @@ export async function reconcileChartedNotes(pb: PbSession, opts: { days?: number
         log(`reconciled session=${s.sessionId} (${s.kind}) ← PB note=${note.id} "${note.name ?? "(untitled)"}"`);
       }
     } catch (e) {
+      // A PbAuthError here means re-login ITSELF failed (not just a stale cookie)
+      // — flag it so the caller drops the session + reports an honest heartbeat
+      // instead of looping 401s while claiming healthy.
+      if (isPbAuthError(e)) authError = true;
       log(`!! reconcile session=${s.sessionId}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  return { checked: open.length, captured };
+  return { checked: open.length, captured, authError };
 }

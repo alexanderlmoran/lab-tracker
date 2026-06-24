@@ -16,7 +16,7 @@
 
 import { request } from "undici";
 import { loadEnvLocal } from "../src/lib/load-env.js";
-import { pbLogin, type PbSession } from "../src/uploaders/practicebetter.js";
+import { pbLogin, pbSessionProvider, type PbSession } from "../src/uploaders/practicebetter.js";
 import { readPbInfusionSeed } from "../src/iv/pc-series.js";
 import { reportHeartbeat } from "../src/lib/heartbeat.js";
 import { drainIvPosts } from "../src/iv/post-drain.js";
@@ -38,6 +38,10 @@ const DRAIN_MS = Number(process.env.IV_DRAIN_INTERVAL_MS ?? 5 * 60 * 1000);
 const RELOGIN_MS = Number(process.env.IV_RELOGIN_MS ?? 3 * 60 * 60 * 1000); // re-login every ~3h (PB sessions expire)
 const PC_SEED_EVERY_MIN = Number(process.env.IV_PC_ENRICH_EVERY_MIN ?? 10); // PC series-seed cadence (one-time PB read per patient)
 const RECONCILE_EVERY_MIN = Number(process.env.IV_RECONCILE_EVERY_MIN ?? 15); // PB→tracker sync cadence (detect hand-charted notes, esp. EBOO)
+// Report the heartbeat as ERROR (not ok) once PB auth has failed this many
+// cycles in a row — so a 100%-failing loop can't masquerade as healthy and the
+// 24h watchdog actually fires. A single transient 401 still self-heals silently.
+const AUTH_FAIL_THRESHOLD = 3;
 
 const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -97,9 +101,11 @@ async function main() {
   let lastPeriodicMs = 0;
   let lastPcSeedMs = 0;
   let lastReconcileMs = 0;
+  let consecutiveAuthFails = 0; // PB-auth failures in a row → heartbeat error at THRESHOLD
   const doneToday = new Set<string>(); // "<date> <HH:MM>" full-sweeps already run
 
   for (;;) {
+    let cycleAuthError = false; // any PB-auth failure (drain or reconcile) this cycle
     try {
       const { hm, date } = nowEastern();
       // Full-day catch-all sweeps at the configured times (5pm, 7:30pm).
@@ -137,20 +143,42 @@ async function main() {
       if (processed) log(`drained ${processed} job(s)`);
       // A 401 means the PB session expired mid-run — drop it so we re-login next
       // cycle; the failed jobs self-heal when the next sweep re-enqueues them.
-      if (authError) { log("PB 401 — re-login next cycle"); pb = null; }
+      if (authError) { log("PB 401 (drain) — re-login next cycle"); pb = null; cycleAuthError = true; }
       // PB→tracker reconcile: detect sessions charted in PB by hand (esp. EBOO/EBO2)
       // and capture them so the board stays in sync. Throttled + HARD timeout cap so
-      // a slow PB read can never hang the loop (the consumables lesson).
+      // a slow PB read can never hang the loop (the consumables lesson). Pass a
+      // self-healing provider so a stale cached session re-logins + retries here
+      // (this candidate search was the call looping 401s) instead of wedging.
       if (pb && Date.now() - lastReconcileMs > RECONCILE_EVERY_MIN * 60_000) {
         try {
-          const { checked, captured } = await withTimeout(reconcileChartedNotes(pb), 60_000);
+          const provider = pbSessionProvider(pb, PB_USER!, PB_PASS!);
+          const { checked, captured, authError: recAuthError } = await withTimeout(reconcileChartedNotes(provider), 60_000);
+          // The provider may have re-logged in mid-run — adopt its fresh session
+          // (and reset the 3h relogin clock ONLY if it actually changed).
+          if (provider.session !== pb) { pb = provider.session; pbLoginMs = Date.now(); }
           if (captured) log(`reconcile: captured ${captured}/${checked} from PB`);
+          if (recAuthError) { log("PB 401 (reconcile) — re-login next cycle"); pb = null; cycleAuthError = true; }
           lastReconcileMs = Date.now();
         } catch (e) {
           log(`reconcile skipped: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
-      await reportHeartbeat("ivpost"); // cycle completed → liveness
+      // Heartbeat TRUTH: don't report healthy while PB auth is failing every cycle.
+      // Count consecutive auth-failing cycles; once we cross the threshold report
+      // status=error so the 24h watchdog fires (a lone transient 401 stays silent).
+      if (cycleAuthError) {
+        consecutiveAuthFails++;
+        if (consecutiveAuthFails >= AUTH_FAIL_THRESHOLD) {
+          const err = `PB auth failing ${consecutiveAuthFails} cycles in a row (re-login not recovering)`;
+          log(`!! ${err}`);
+          await reportHeartbeat("ivpost", { status: "error", error: err });
+        } else {
+          await reportHeartbeat("ivpost"); // transient — still liveness
+        }
+      } else {
+        consecutiveAuthFails = 0;
+        await reportHeartbeat("ivpost"); // cycle completed cleanly → liveness
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log(`!! cycle error: ${msg}`);

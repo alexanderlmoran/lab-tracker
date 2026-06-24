@@ -26,7 +26,7 @@ import { reportHeartbeat } from "../src/lib/heartbeat.js";
 
 loadEnvLocal();
 
-const { pbLogin, findPbPatient, listAllConsultantLabRequests } = await import(
+const { pbLogin, findPbPatient, listAllConsultantLabRequests, isPbAuthError } = await import(
   "../src/uploaders/practicebetter.js"
 );
 const { classifyCase } = await import("../src/backfill/engine.js");
@@ -430,8 +430,19 @@ async function main() {
       await reportHeartbeat("reconcile");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log(`cycle error (continuing): ${msg}`);
-      await reportHeartbeat("reconcile", { status: "error", error: msg });
+      // A persistent PB 401/403 on the cycle's FIRST calls (pbLogin + the big
+      // labrequest pull, which sit OUTSIDE the per-patient try/catch) silently
+      // no-ops the entire 3h sweep — and withRetry doesn't treat auth as
+      // transient, so it lands here. Log it LOUDLY (not the quiet "continuing"
+      // line) and report the heartbeat as error so the watchdog actually fires.
+      if (isPbAuthError(err)) {
+        const authMsg = `PB AUTH FAILED — whole reconcile sweep skipped (expired session / bad creds / IP block): ${msg}`;
+        log(`!! ${authMsg}`);
+        await reportHeartbeat("reconcile", { status: "error", error: authMsg });
+      } else {
+        log(`cycle error (continuing): ${msg}`);
+        await reportHeartbeat("reconcile", { status: "error", error: msg });
+      }
     }
     await sleep(intervalMs);
   }
