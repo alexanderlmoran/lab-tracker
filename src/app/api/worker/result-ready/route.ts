@@ -160,6 +160,41 @@ export async function POST(request: Request) {
     });
   }
 
+  // FAIL CLOSED: require a POSITIVE patient tie BEFORE the PDF is attached. The
+  // worker pairs caseId↔PDF on its side, but a scraper that returns the wrong
+  // row (or a card whose accession was mis-keyed) must NOT silently attach
+  // another patient's result (incident: Salvatore Didonato's 007254433 landed
+  // on Negin Etemad's case). Two independent ties make a stage safe:
+  //   - corroborated: the portal patient name matched this case's patient. A
+  //     MISMATCH already 409'd at the gate above, so reaching here WITH a name
+  //     set means it matched. (No name ⇒ the scraper exposes none ⇒ unverified.)
+  //   - accessionMatches: the report's accession equals the case's stored ref —
+  //     an exact-order tie, the patient-safe match the recipe/scrapers rely on.
+  // Neither ⇒ we cannot prove the report belongs to this patient ⇒ QUARANTINE:
+  // do NOT attach, log loudly, return 409. (Allowed paths are unaffected:
+  // accession-exact stages, and name-corroborated stages incl. the Vinay-Mittal
+  // accession-adopt case where the name matched but the accession differs.)
+  const corroborated = Boolean(parsed.portalPatientName); // mismatches already 409'd above
+  const accessionMatches =
+    !!kase.lab_external_ref && parsed.labExternalRef === kase.lab_external_ref;
+  if (!accessionMatches && !corroborated) {
+    await db.from("lab_events").insert({
+      case_id: parsed.caseId,
+      kind: "case_edited",
+      actor: parsed.source,
+      note: `QUARANTINED: report accession ${parsed.labExternalRef} could not be tied to this case's patient (no portal name + accession mismatch) — NOT attached`,
+      meta: {
+        quarantined_external_ref: parsed.labExternalRef,
+        case_external_ref: kase.lab_external_ref,
+        portal_patient: parsed.portalPatientName ?? null,
+      },
+    });
+    return NextResponse.json(
+      { ok: false, error: "unverified report — quarantined" },
+      { status: 409 },
+    );
+  }
+
   // Ensure the file is in Storage: a storagePath caller already PUT it there
   // (direct-to-storage); an inline base64 caller's bytes get uploaded here.
   let storagePath: string;
@@ -210,7 +245,9 @@ export async function POST(request: Request) {
   // entered accession (overwriting it would re-point every future auto-pull
   // at the possibly-wrong order) and flags it in the activity log instead.
   if (kase.lab_external_ref !== parsed.labExternalRef) {
-    const corroborated = Boolean(parsed.portalPatientName); // mismatches already 409'd above
+    // `corroborated` computed above. With the fail-closed gate in place an
+    // accession mismatch can only reach here when the name corroborated (else
+    // it was quarantined), so the else-branch is now a defensive backstop.
     if (!kase.lab_external_ref || corroborated) {
       await db
         .from("lab_cases")
@@ -336,11 +373,31 @@ export async function POST(request: Request) {
     },
   });
 
+  // POLICY (2026-06): NO automatic posting to PracticeBetter. Auto-posting is
+  // OFF unless explicitly re-enabled via AUTO_POST_ENABLED=true. When a caller
+  // asks to auto-approve but the policy suppresses it, we STILL stage the PDF
+  // (above) so staff can review + post it by hand — we just never queue a PB
+  // upload. The suppression is logged so the activity log shows why a capture
+  // that used to auto-post now waits in Pending Upload. This is the single
+  // server-side chokepoint (every scraper/probe/engine path posts here), so the
+  // policy holds regardless of what any worker still sends as autoApprove.
+  const autoPostEnabled = process.env.AUTO_POST_ENABLED === "true";
+  const effectiveAutoApprove = parsed.autoApprove && autoPostEnabled;
+  if (parsed.autoApprove && !autoPostEnabled) {
+    await db.from("lab_events").insert({
+      case_id: parsed.caseId,
+      kind: "case_edited",
+      actor: parsed.source,
+      note: `Auto-post suppressed by policy (AUTO_POST_ENABLED off) — PDF staged for manual review, not queued to PB (accession ${parsed.labExternalRef}).`,
+      meta: { pdf_id: pdfRow.id, external_ref: parsed.labExternalRef, confidence: parsed.confidence ?? null },
+    });
+  }
+
   // Reconciliation engine auto-approve: a high-confidence capture is approved +
   // enqueued for PB upload without a human click (mirrors approvePdf). The
   // existing pb-upload-worker drains the queue and flips step5 on success. A
   // low-confidence capture skips this block and waits in Pending Upload.
-  if (parsed.autoApprove) {
+  if (effectiveAutoApprove) {
     // Same-accession merge: ONE PB post per physical order. A Vibrant order is
     // booked as N Zenoti panels → N cases sharing one accession, each staging
     // the SAME whole-order PDF — so without this each would auto-post a
@@ -411,5 +468,5 @@ export async function POST(request: Request) {
     }
   }
 
-  return NextResponse.json({ ok: true, pdfId: pdfRow.id, storagePath, autoApproved: parsed.autoApprove });
+  return NextResponse.json({ ok: true, pdfId: pdfRow.id, storagePath, autoApproved: effectiveAutoApprove });
 }
