@@ -79,13 +79,35 @@ function fallbackLabName(servicename: string): string | null {
   return first || null;
 }
 
-export function resolveLabName(servicename: string): string | null {
+/**
+ * Resolve a Zenoti service name to a tracker lab_name, or null when the
+ * service isn't lab work.
+ *
+ * Visibility: when a NON-EMPTY service is dropped — i.e. we return null for
+ * something that isn't the known "Labs" placeholder or a SKIP logistics
+ * service — we log it. A renamed / brand-new / mistyped lab service that no
+ * longer matches any rule and lacks the "Labs -" prefix would otherwise vanish
+ * with zero trace: the caller (fetch-browser) just `continue`s and no card is
+ * ever created. The log makes that silent drop visible in the worker logs so
+ * it can be caught and the mapping (or the Zenoti service name) fixed.
+ * MATCHING RULES ARE UNCHANGED — this is visibility only.
+ *
+ * `guestId` is optional context for the log line only (the caller has the
+ * Zenoti guest id — pass it so a dropped service can be traced to a patient).
+ * It never affects resolution.
+ */
+export function resolveLabName(
+  servicename: string,
+  guestId?: string | null,
+): string | null {
   if (!servicename) return null;
   const haystack = servicename.toLowerCase();
 
-  // Generic "Labs" with no suffix is a placeholder service in Zenoti — skip.
+  // Generic "Labs" with no suffix is a placeholder service in Zenoti — skip
+  // (silently: it's a known non-lab entry, not a drop worth flagging).
   if (haystack.trim() === "labs") return null;
 
+  // Logistics services are intentional non-destinations — skip silently.
   for (const skip of SKIP_PATTERNS) {
     if (haystack.includes(skip.toLowerCase())) return null;
   }
@@ -95,8 +117,23 @@ export function resolveLabName(servicename: string): string | null {
   }
 
   if (haystack.includes(LAB_PREFIX)) {
-    return fallbackLabName(servicename);
+    const fallback = fallbackLabName(servicename);
+    // A "Labs -" service whose tail is empty still produces no card — flag it.
+    if (!fallback) logDroppedService(servicename, guestId);
+    return fallback;
   }
 
+  // Reached here = a non-empty service we couldn't map and that isn't a known
+  // skip/placeholder. This is the silent-drop the caller turns into a no-op
+  // `continue` (a renamed/new/mistyped lab) — surface it so it doesn't vanish.
+  logDroppedService(servicename, guestId);
   return null;
+}
+
+/** One-line worker-log trace for a Zenoti service we dropped (no card made). */
+function logDroppedService(servicename: string, guestId?: string | null): void {
+  const who = guestId ? ` guest=${guestId}` : "";
+  console.warn(
+    `[lab-mapping] dropped unmapped service "${servicename}"${who} — no tracker card created`,
+  );
 }

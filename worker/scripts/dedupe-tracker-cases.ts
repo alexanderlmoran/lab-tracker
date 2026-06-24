@@ -6,9 +6,18 @@
 // "duplicate complete" cards. Cheaper to archive one per pair now.
 //
 // True-duplicate definition (intentionally strict):
-//   patient_name + lab_name + tracking_number + collection_date all match.
+//   patient_name + lab_name + tracking_number + collection_date
+//   + lab_external_ref (accession) all match.
 //
-// This deliberately excludes cases where lab_name or collection_date
+// The accession is part of the key because distinct panels are frequently
+// shipped in ONE box under ONE tracking# (e.g. Genova / Access send several
+// accessions per shipment). Those are SEPARATE results that happen to share a
+// tracking#, NOT duplicates — keying on tracking# alone would archive real,
+// distinct labs together. Rule: NEVER dedupe two rows whose accessions differ.
+// (Rows that both lack an accession can still pair — that's the original
+// bulk-import true-duplicate case, where neither row carried an accession.)
+//
+// This also deliberately excludes cases where lab_name or collection_date
 // differs even when tracking# is shared. Example: the Access 5/21 vs
 // Access Custom 5/22 pair shares tracking# 487953992901 but represents
 // the bulk-import row and the live Zenoti-sync row for the same shipment
@@ -45,6 +54,7 @@ type TrackerCase = {
   lab_name: string;
   collection_date: string | null;
   tracking_number: string | null;
+  lab_external_ref: string | null;
   zenoti_appointment_id: string | null;
   archived_at: string | null;
   deleted_at: string | null;
@@ -71,6 +81,15 @@ function normTracking(s: string | null): string | null {
   return s.trim().toUpperCase().replace(/\s+/g, "");
 }
 
+/** Normalize an accession (lab_external_ref) for key comparison. Missing/empty
+ * → "" so two accession-less rows still pair (the bulk-import true-dup case);
+ * any two rows with DIFFERENT non-empty accessions get different keys and are
+ * never grouped. */
+function normAccession(s: string | null): string {
+  if (!s) return "";
+  return s.trim().toUpperCase().replace(/\s+/g, "");
+}
+
 type Group = { key: string; cases: TrackerCase[] };
 
 function groupTrueDuplicates(cases: TrackerCase[]): Group[] {
@@ -79,11 +98,14 @@ function groupTrueDuplicates(cases: TrackerCase[]): Group[] {
     const tk = normTracking(c.tracking_number);
     if (!tk) continue; // can't dedupe without tracking#
     if (!c.collection_date) continue; // skip rows we can't safely identify
+    // Accession is part of the key: differing accessions → different keys →
+    // never grouped (distinct panels in one box are NOT duplicates).
     const key = [
       c.patient_name.trim().toLowerCase(),
       c.lab_name.trim().toLowerCase(),
       tk,
       c.collection_date,
+      normAccession(c.lab_external_ref),
     ].join("|");
     const arr = map.get(key) ?? [];
     arr.push(c);

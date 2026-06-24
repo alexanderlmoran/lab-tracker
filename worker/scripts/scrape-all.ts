@@ -32,6 +32,16 @@ const LABS = (process.env.SCRAPE_LABS ?? "access,cyrex,spectracell,glycanage,doc
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 
+// MANUAL-ONLY portals: no working scraper, so auto-scrape is disabled. (Mirrors
+// `autoScrape: false` in src/lib/scrapers/registry.ts — the worker is a separate
+// package and can't import that file, so the list is duplicated here. Keep the
+// two in sync.) golda has never scraped successfully (8/8 consecutive failures);
+// auto-pulling it just fails silently and falsely marks the portal red. We skip
+// it here so it stops being expected to auto-pull — GOLDA results are entered by
+// hand. If any open GOLDA cases exist we LOG them as needing manual result
+// entry so they aren't forgotten.
+const MANUAL_ONLY_LABS = new Set(["golda"]);
+
 // PATIENT SAFETY: these labs drip partial results (a Vibrant Zoomer's sections,
 // Access blood panels). The scraper can pull a finished section while the rest
 // of the order is still pending — we CANNOT confirm order-level completeness
@@ -44,7 +54,29 @@ const PARTIAL_PRONE_LABS = new Set(["vibrant", "access"]);
 
 const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`);
 
+// Map a manual-only lab key → the tracker lab_name used on its cases, so we can
+// query open cases to surface them. (Only golda today; extend if more go manual.)
+const MANUAL_ONLY_LAB_NAMES: Record<string, string> = { golda: "GOLDA" };
+
 async function scrapeLab(labKey: string): Promise<void> {
+  // Manual-only portal: never auto-scrape. Surface any open cases so a human
+  // knows to enter the result by hand, then return without launching a browser.
+  if (MANUAL_ONLY_LABS.has(labKey)) {
+    const labName = MANUAL_ONLY_LAB_NAMES[labKey] ?? labKey;
+    let openCount = 0;
+    try {
+      openCount = (await fetchOpenCases(labName)).length;
+    } catch (err) {
+      log(`${labKey}: manual-only — could not count open cases (${err instanceof Error ? err.message : String(err)})`);
+    }
+    if (openCount > 0) {
+      log(`${labKey}: MANUAL-ONLY — ${openCount} open case(s) NEED MANUAL RESULT ENTRY (no auto-scrape)`);
+    } else {
+      log(`${labKey}: MANUAL-ONLY — no auto-scrape, 0 open cases`);
+    }
+    return;
+  }
+
   let scraper: LabScraper | undefined = HANDWRITTEN[labKey];
   if (!scraper) {
     const recipe = (await loadRecipes()).find((r) => r.key === labKey);

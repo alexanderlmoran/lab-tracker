@@ -21,6 +21,15 @@ export type ScraperRegistryEntry = {
   loginUrl: string;
   /** Free-text hint shown next to "Add scraper" button. */
   notes?: string;
+  /**
+   * Whether this portal participates in automated scraping. Defaults to true
+   * (omit the field). Set false for MANUAL-ONLY portals — a human enters the
+   * result by hand because the portal has no working scraper. Manual-only
+   * portals are excluded from the auto-scrape loop and from the daily
+   * portal-health probe, so a portal we never auto-pull can't sit there
+   * silently red and racking up "consecutive failures".
+   */
+  autoScrape?: boolean;
 };
 
 export const SCRAPER_REGISTRY: ScraperRegistryEntry[] = [
@@ -82,7 +91,13 @@ export const SCRAPER_REGISTRY: ScraperRegistryEntry[] = [
     key: "golda",
     labName: "GOLDA",
     loginUrl: "https://www.goldahormones.com/",
-    notes: "Both saliva-only and saliva+urine variants route here.",
+    // MANUAL-ONLY: never scraped successfully (8/8 consecutive auto-scrape
+    // failures as of 2026-06-24). Disabled from auto-scrape so it stops
+    // silently failing and is no longer expected to auto-pull — GOLDA results
+    // are entered by hand. Both saliva-only and saliva+urine variants route
+    // here. Re-enable by removing autoScrape:false once a scraper works.
+    notes: "MANUAL-ONLY (no working scraper — enter results by hand). Both saliva-only and saliva+urine variants route here.",
+    autoScrape: false,
   },
 ];
 
