@@ -1,0 +1,11 @@
+-- 20260624_case_adopted_enum.sql
+-- FIX (system audit 2026-06-24, P0-#3): src/app/api/worker/cases/route.ts writes
+-- lab_events.kind = 'case_adopted' on Zenoti appointment adoption/re-point, but that
+-- value was never added to the lab_event_kind enum (defined in 20260506_init.sql).
+-- Every adoption INSERT therefore throws
+--   "invalid input value for enum lab_event_kind: case_adopted"
+-- and the audit/provenance row is silently lost.
+--
+-- IMPORTANT: ALTER TYPE ... ADD VALUE cannot run inside a transaction block.
+-- Apply this file STANDALONE in the Supabase SQL editor / Mgmt API (no BEGIN/COMMIT).
+alter type lab_event_kind add value if not exists 'case_adopted';
