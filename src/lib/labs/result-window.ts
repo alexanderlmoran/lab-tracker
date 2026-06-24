@@ -63,3 +63,42 @@ export function inResultWindow(c: ResultWindowCase, todayIso?: string): boolean 
   const { max } = effectiveWindow(c);
   return pollStartsBy(c) <= today && (!max || max >= graceFloor);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Lost-kit detection (the high-value one — a FedEx kit went missing with no
+// alert). Distinct from the generic stale-digest "overdue": a returned/exception
+// shipment with no accession on file and no result PDF is a kit that almost
+// certainly needs to be RE-ORDERED, not merely chased.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Extra fields the lost-kit signal reads beyond the window math. */
+export type LostKitCase = ResultWindowCase & {
+  tracking_status: string | null;
+  lab_external_ref: string | null;
+};
+
+/** Days past the poll-start window before a sample-sent case with no result is
+ *  old enough to flag as a likely-lost kit (vs. still in normal transit/turnaround). */
+export const LOST_KIT_GRACE_DAYS = 7;
+
+/** True when a sample-sent case looks like a LOST KIT that needs re-ordering —
+ *  NOT just slow. Requires (caller supplies hasLivePdf=false, i.e. no result has
+ *  landed):
+ *    - sample sent, nothing received yet
+ *    - past pollStartsBy + LOST_KIT_GRACE_DAYS (it's had time to come back)
+ *    - tracking says the shipment went sideways: 'returned' or 'exception'
+ *    - no accession on file (lab_external_ref is null) — the lab never got/logged it
+ *  The tracking + no-accession combo is what makes this "reorder" rather than the
+ *  generic "overdue" the stale digest already covers. The "no live PDF" check is
+ *  the caller's (it needs a lab_case_pdfs lookup this pure helper can't do). */
+export function isLikelyLostKit(c: LostKitCase, todayIso?: string): boolean {
+  if (!c.step1_sample_sent || c.step2_partial_received || c.step4_complete_received) {
+    return false;
+  }
+  if (c.lab_external_ref) return false; // lab logged the accession → it has the kit
+  const status = (c.tracking_status ?? "").toLowerCase();
+  if (status !== "returned" && status !== "exception") return false;
+  const today = todayIso ?? new Date().toISOString().slice(0, 10);
+  const overdueFloor = addDays(pollStartsBy(c), LOST_KIT_GRACE_DAYS);
+  return overdueFloor <= today;
+}

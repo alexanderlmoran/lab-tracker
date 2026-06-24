@@ -12,6 +12,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { accessionSiblingIds } from "@/lib/labs/siblings";
+import { reapStaleClaims } from "@/lib/labs/reap-stale-claims";
 
 export const dynamic = "force-dynamic";
 
@@ -29,13 +30,24 @@ export async function POST(request: Request) {
 
   const db = getSupabaseAdmin();
 
+  // Opportunistic stale-claim reap (cheap — one indexed select per queue when
+  // nothing is stranded). A worker that crashed mid-post leaves its row in
+  // 'claimed' forever with no timeout; freeing it HERE means the very next poll
+  // can re-claim it, so a stranded case isn't stuck waiting on the dedicated
+  // reaper poke. Best-effort: never block or fail the claim on a reaper error.
+  try {
+    await reapStaleClaims();
+  } catch (err) {
+    console.error("[pb-upload/next] opportunistic reap failed", err);
+  }
+
   // Pick the oldest queued job. PostgREST doesn't expose UPDATE...RETURNING
   // with row-locking, so we do a two-step: select id of oldest, then update
   // that specific id from queued→claimed (filter on status='queued' so two
   // concurrent pollers can't both win).
   const { data: candidate, error: pickErr } = await db
     .from("pb_upload_jobs")
-    .select("id")
+    .select("id, attempts")
     .eq("status", "queued")
     .order("created_at", { ascending: true })
     .limit(1)
@@ -48,12 +60,19 @@ export async function POST(request: Request) {
     return new NextResponse(null, { status: 204 });
   }
 
+  // Increment attempts from the value SELECTED before the claim (mirrors
+  // iv-post/next). The old code reset attempts to 1 on every claim, which made
+  // the stale-claim reaper's MAX_ATTEMPTS cap unreachable — a poison row that
+  // crashed the worker every time was reaped → requeued → re-claimed (reset to
+  // 1) → reaped → … forever. A true increment lets a repeatedly-stranded job
+  // eventually be parked as 'failed'.
+  const priorAttempts = (candidate.attempts as number | null) ?? 0;
   const { data: claimed, error: claimErr } = await db
     .from("pb_upload_jobs")
     .update({
       status: "claimed",
       claimed_at: new Date().toISOString(),
-      attempts: 1,
+      attempts: priorAttempts + 1,
     })
     .eq("id", candidate.id)
     .eq("status", "queued")
@@ -66,20 +85,6 @@ export async function POST(request: Request) {
   if (!claimed) {
     // Lost the race — another poller claimed it. Tell the worker to try again.
     return new NextResponse(null, { status: 204 });
-  }
-
-  // Bump attempts properly (the update above sets it to 1 unconditionally,
-  // which is fine for first-claim but wrong on retry). Re-fetch and adjust.
-  const { data: pre } = await db
-    .from("pb_upload_jobs")
-    .select("attempts")
-    .eq("id", claimed.id)
-    .single();
-  if (pre && typeof pre.attempts === "number" && pre.attempts !== 1) {
-    await db
-      .from("pb_upload_jobs")
-      .update({ attempts: pre.attempts + 1 })
-      .eq("id", claimed.id);
   }
 
   // Hydrate case + pdf details for the worker.

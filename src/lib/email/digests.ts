@@ -13,6 +13,7 @@ import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { loadEmailConfig, INTERNAL_SUBJECT } from "./render";
 import { getCaseStaleness, getStaleDaysThreshold } from "@/lib/columns";
 import { appBaseUrl } from "@/lib/app-url";
+import { isLikelyLostKit, type LostKitCase } from "@/lib/labs/result-window";
 import type { EmailKind, LabCase } from "@/lib/types";
 
 type DispatchResult = { ok: true; messageId?: string } | { ok: false; error: string };
@@ -292,6 +293,165 @@ export async function runStaleDigest(opts: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Email queue sweeper — unwedge email_logs rows stuck at 'queued'
+// ─────────────────────────────────────────────────────────────────────────
+
+/** A queued email older than this almost certainly never dispatched — the send
+ *  is insert(queued) → resend.send() → update(sent|failed) with NO transaction
+ *  and no sent_at, so a crash/timeout between insert and update strands the row
+ *  at 'queued' forever. Anything healthy resolves in seconds. */
+const EMAIL_STUCK_AFTER_MS = 15 * 60 * 1000;
+
+/** Marker stamped into error_message when the sweeper flips a stale 'queued' row.
+ *  Used to EXCLUDE these from the failedLast24h outage count — they're
+ *  dispatch-crash artifacts, not delivery failures, so they must not self-trigger
+ *  a false "Resend outage" alert. */
+const SWEEPER_MARKER = "email queue sweeper";
+
+export type EmailSweepSummary = {
+  ok: boolean;
+  /** Rows newly flipped 'queued' → 'failed' this run. */
+  swept: number;
+  /** Rows still 'queued' past the stuck threshold AFTER the sweep (should be 0). */
+  stillQueued: number;
+  /** GENUINE delivery failures in the last 24h (excludes the sweeper's own
+   *  stale-queued conversions) — surfaced so a real Resend outage shows as a count. */
+  failedLast24h: number;
+  error?: string;
+};
+
+/**
+ * Sweep email_logs rows wedged at status='queued' past EMAIL_STUCK_AFTER_MS.
+ *
+ * Safety: we do NOT auto-resend (the send isn't idempotent — Resend may well have
+ * delivered the email and only the status update was lost). Flag + count is the
+ * safe default: mark the row 'failed' with a reason so it stops looking pending,
+ * surface it in the health digest, and let a human re-send if truly needed.
+ *
+ * Returns the stuck/failed COUNTS too, so runHeartbeatWatch can alert on a
+ * Resend/email outage instead of it hiding in per-case email history.
+ */
+export async function sweepStuckEmails(): Promise<EmailSweepSummary> {
+  const db = getSupabaseAdmin();
+  const stuckCutoff = new Date(Date.now() - EMAIL_STUCK_AFTER_MS).toISOString();
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  // Flip stale 'queued' → 'failed'. Guard on status='queued' so we never clobber
+  // a row that just transitioned to 'sent' between our read and write.
+  const { data: swept, error: sweepErr } = await db
+    .from("email_logs")
+    .update({
+      status: "failed",
+      error_message: `${SWEEPER_MARKER}: stuck 'queued' > ${Math.round(EMAIL_STUCK_AFTER_MS / 60000)}m (dispatch crashed/timed out before status update; NOT auto-resent — re-send manually if needed)`,
+    })
+    .eq("status", "queued")
+    .lt("created_at", stuckCutoff)
+    .select("id");
+  if (sweepErr) {
+    return { ok: false, swept: 0, stillQueued: 0, failedLast24h: 0, error: sweepErr.message };
+  }
+
+  // Post-sweep counts for the digest. stillQueued should be 0 after the update;
+  // a non-zero value means rows are arriving faster than they're failing — itself
+  // worth surfacing.
+  const { count: stillQueued } = await db
+    .from("email_logs")
+    .select("id", { head: true, count: "exact" })
+    .eq("status", "queued")
+    .lt("created_at", stuckCutoff);
+  // Count GENUINE delivery failures only — exclude the rows this sweep just flipped
+  // (they carry SWEEPER_MARKER). Otherwise the sweep's own stale-queued conversions
+  // would self-trigger a false "Resend outage" alert via emailTrouble.
+  const { count: failedLast24h } = await db
+    .from("email_logs")
+    .select("id", { head: true, count: "exact" })
+    .eq("status", "failed")
+    .gte("created_at", dayAgo)
+    .or(`error_message.is.null,error_message.not.ilike.%${SWEEPER_MARKER}%`);
+
+  return {
+    ok: true,
+    swept: (swept ?? []).length,
+    stillQueued: stillQueued ?? 0,
+    failedLast24h: failedLast24h ?? 0,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Lost-kit watchdog — a returned/exception FedEx shipment with no result
+// ─────────────────────────────────────────────────────────────────────────
+
+export type LostKitSummary = {
+  ok: boolean;
+  /** Cases that look like a lost kit needing re-order (distinct from generic overdue). */
+  lostCount: number;
+  cases: Array<{ id: string; patient: string; lab: string; trackingStatus: string | null }>;
+  error?: string;
+};
+
+/**
+ * Scan active sample-sent cases for LOST KITS that need re-ordering — the
+ * high-value signal (the clinic lost a FedEx kit with no alert). A case qualifies
+ * when it's sample-sent with nothing received, tracking went 'returned'/'exception',
+ * there's no accession on file (lab_external_ref null → the lab never logged it),
+ * it's past pollStartsBy + LOST_KIT_GRACE_DAYS, AND there's no live (non-superseded)
+ * lab_case_pdfs row (no result ever landed). This is DISTINCT from the stale
+ * digest's generic "overdue" — it's "reorder", not "chase".
+ */
+export async function scanLostKits(): Promise<LostKitSummary> {
+  const db = getSupabaseAdmin();
+  // Narrow at the DB to the only shapes that can qualify: active, sample-sent,
+  // nothing received, no accession, tracking returned/exception. The pure helper
+  // (isLikelyLostKit) then applies the date math.
+  const { data, error } = await db
+    .from("lab_cases")
+    .select(
+      "id, patient_name, lab_name, lab_panel, lab_external_ref, tracking_status, " +
+        "step1_sample_sent, step2_partial_received, step4_complete_received, " +
+        "expected_result_at_min, expected_result_at_max, collection_date, " +
+        "tracking_delivered_at, created_at",
+    )
+    .is("archived_at", null)
+    .is("deleted_at", null)
+    .eq("step1_sample_sent", true)
+    .eq("step2_partial_received", false)
+    .eq("step4_complete_received", false)
+    .is("lab_external_ref", null)
+    .in("tracking_status", ["returned", "exception"]);
+  if (error) return { ok: false, lostCount: 0, cases: [], error: error.message };
+
+  // The string-concatenated select confuses PostgREST's row-type inference (it
+  // types the result as a parse-error), so cast once to the fields we read —
+  // same pattern as runStaleDigest's `as LabCase[]`.
+  type Row = LostKitCase & { id: string; patient_name: string; lab_name: string; lab_panel: string | null };
+  const rows = (data ?? []) as unknown as Row[];
+  const candidates = rows.filter((c) => isLikelyLostKit(c));
+  if (candidates.length === 0) return { ok: true, lostCount: 0, cases: [] };
+
+  // Exclude any that DO have a live result PDF (a result landed despite the
+  // tracking exception — not actually lost). One batched query over the survivors.
+  const ids = candidates.map((c) => c.id);
+  const { data: pdfs } = await db
+    .from("lab_case_pdfs")
+    .select("case_id")
+    .in("case_id", ids)
+    .is("superseded_at", null);
+  const haveLivePdf = new Set((pdfs ?? []).map((p) => p.case_id as string));
+
+  const lost = candidates.filter((c) => !haveLivePdf.has(c.id));
+  return {
+    ok: true,
+    lostCount: lost.length,
+    cases: lost.map((c) => ({
+      id: c.id,
+      patient: c.patient_name ?? "—",
+      lab: c.lab_panel ? `${c.lab_name} · ${c.lab_panel}` : c.lab_name,
+      trackingStatus: c.tracking_status ?? null,
+    })),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Reliability watchdog — alert when a worker loop goes quiet (the backbone)
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -305,6 +465,11 @@ export type HeartbeatWatchSummary = {
   drift: string[];
   /** Time-bomb credential warnings (e.g. TS_AUTHKEY 90-day expiry → PB egress dies). */
   keyWarnings: string[];
+  /** Email queue health — stuck/failed counts so a Resend outage ALERTS instead of
+   *  hiding in per-case email history. */
+  emailQueue: { swept: number; stillQueued: number; failedLast24h: number };
+  /** Lost-kit signal — returned/exception shipments with no result that need re-order. */
+  lostKits: LostKitSummary["cases"];
   recipient?: string;
   emailMessageId?: string;
   emailError?: string;
@@ -407,18 +572,39 @@ export async function runHeartbeatWatch(): Promise<HeartbeatWatchSummary> {
       stale.push({ key: w.key, label: w.label, reason: last ? `no success in ${Math.round(ageH)}h (expected ≤ ${w.maxAgeH}h)` : "no successful run on record" });
     }
   }
-  // Two more silent-failure classes the premortem flagged (same watchdog, one
-  // email): migrations never applied to prod, and credential time-bombs.
+  // More silent-failure classes the premortem/audit flagged (same watchdog, one
+  // email): migrations never applied to prod, credential time-bombs, a wedged
+  // email queue (Resend outage hiding in per-case history), and lost FedEx kits.
   const drift = await checkSchemaDrift(db);
   const keyWarnings = checkKeyExpiry();
+  // sweepStuckEmails also unwedges 'queued' rows as a side effect — running it
+  // here folds the email-queue sweep into the watchdog's regular cadence.
+  const emailSweep = await sweepStuckEmails();
+  const emailQueue = {
+    swept: emailSweep.swept,
+    stillQueued: emailSweep.stillQueued,
+    failedLast24h: emailSweep.failedLast24h,
+  };
+  // Email queue is "in trouble" if it's still backing up after the sweep or has
+  // been failing repeatedly in the last day (an outage, not a one-off bounce).
+  const emailTrouble = emailQueue.stillQueued > 0 || emailQueue.failedLast24h >= 3;
+  const lostKitScan = await scanLostKits();
+  const lostKits = lostKitScan.cases;
 
-  if (stale.length === 0 && drift.length === 0 && keyWarnings.length === 0) {
-    return { ok: true, staleCount: 0, stale: [], missing, drift, keyWarnings };
+  if (
+    stale.length === 0 &&
+    drift.length === 0 &&
+    keyWarnings.length === 0 &&
+    !emailTrouble &&
+    lostKits.length === 0
+  ) {
+    return { ok: true, staleCount: 0, stale: [], missing, drift, keyWarnings, emailQueue, lostKits };
   }
 
   const recipient = await digestRecipient();
   const url = `${appBaseUrl()}/labs/analytics`;
-  const problemCount = stale.length + drift.length + keyWarnings.length;
+  const problemCount =
+    stale.length + drift.length + keyWarnings.length + (emailTrouble ? 1 : 0) + lostKits.length;
   const rowsHtml = stale
     .map((s) => `<tr><td style="padding:4px 12px 4px 0;font-weight:600;">${escapeHtml(s.label)}</td><td style="padding:4px 0;color:#b91c1c;">${escapeHtml(s.reason)}</td></tr>`)
     .join("");
@@ -431,13 +617,32 @@ export async function runHeartbeatWatch(): Promise<HeartbeatWatchSummary> {
   const keyHtml = keyWarnings.length
     ? `<p style="margin:12px 0 4px;font-weight:600;color:#b45309;">⏰ Credential expiry:</p><ul style="margin:0;font-size:13px;color:#b45309;">${keyWarnings.map((k) => `<li>${escapeHtml(k)}</li>`).join("")}</ul>`
     : "";
+  const emailHtml = emailTrouble
+    ? `<p style="margin:12px 0 4px;font-weight:600;color:#b91c1c;">✉ Email delivery trouble (possible Resend outage — NOT auto-resent):</p><ul style="margin:0;font-size:13px;color:#b91c1c;">${
+        emailQueue.stillQueued > 0
+          ? `<li>${emailQueue.stillQueued} email(s) still stuck 'queued' after sweep</li>`
+          : ""
+      }${
+        emailQueue.failedLast24h >= 3
+          ? `<li>${emailQueue.failedLast24h} email(s) failed in the last 24h</li>`
+          : ""
+      }${emailQueue.swept > 0 ? `<li>${emailQueue.swept} stale 'queued' row(s) swept to 'failed' this run</li>` : ""}</ul>`
+    : "";
+  const lostKitHtml = lostKits.length
+    ? `<p style="margin:12px 0 4px;font-weight:600;color:#b91c1c;">📦 Kit lost — REORDER (returned/exception shipment, no result on file):</p><table style="font-size:13px;border-collapse:collapse;">${lostKits
+        .map(
+          (k) =>
+            `<tr><td style="padding:4px 12px 4px 0;font-weight:600;">${escapeHtml(k.patient)}</td><td style="padding:4px 12px 4px 0;">${escapeHtml(k.lab)}</td><td style="padding:4px 0;color:#b91c1c;">${escapeHtml(k.trackingStatus ?? "—")}</td></tr>`,
+        )
+        .join("")}</table>`
+    : "";
   const missingNote = missing.length
     ? `<p style="margin:8px 0 0;color:#a16207;font-size:12px;">No heartbeat yet (normal right after a deploy): ${missing.map(escapeHtml).join(", ")}.</p>`
     : "";
   const html = `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#18181b;">
 <h2 style="margin:0 0 6px;font-size:16px;color:#b91c1c;">⚠ Automation health alert</h2>
 <p style="margin:0 0 10px;color:#52525b;font-size:13px;">${problemCount} issue(s) found — results may not be syncing/posting until resolved.</p>
-${staleHtml}${driftHtml}${keyHtml}${missingNote}
+${staleHtml}${driftHtml}${keyHtml}${emailHtml}${lostKitHtml}${missingNote}
 <p style="margin:14px 0 0;font-size:12px;color:#71717a;">Loop down? Most common cause: a deploy left the Fly machine stopped — <code>fly machine start &lt;id&gt;</code> (or <code>bash worker/scripts/start-all-machines.sh</code>). Health view → <a href="${url}" style="color:#4338ca;">${escapeHtml(url)}</a></p>
 </body></html>`;
   const text =
@@ -445,6 +650,17 @@ ${staleHtml}${driftHtml}${keyHtml}${missingNote}
     (stale.length ? `\nWorker loops quiet/failing:\n` + stale.map((s) => `- ${s.label}: ${s.reason}`).join("\n") + "\n" : "") +
     (drift.length ? `\nMigration drift (NOT applied to prod):\n` + drift.map((d) => `- ${d}`).join("\n") + "\n" : "") +
     (keyWarnings.length ? `\nCredential expiry:\n` + keyWarnings.map((k) => `- ${k}`).join("\n") + "\n" : "") +
+    (emailTrouble
+      ? `\nEmail delivery trouble (NOT auto-resent):\n` +
+        (emailQueue.stillQueued > 0 ? `- ${emailQueue.stillQueued} still stuck 'queued' after sweep\n` : "") +
+        (emailQueue.failedLast24h >= 3 ? `- ${emailQueue.failedLast24h} failed in last 24h\n` : "") +
+        (emailQueue.swept > 0 ? `- ${emailQueue.swept} stale 'queued' swept to 'failed' this run\n` : "")
+      : "") +
+    (lostKits.length
+      ? `\nKit lost — REORDER (returned/exception, no result on file):\n` +
+        lostKits.map((k) => `- ${k.patient} — ${k.lab} (${k.trackingStatus ?? "—"})`).join("\n") +
+        "\n"
+      : "") +
     (missing.length ? `\nNo heartbeat yet: ${missing.join(", ")}\n` : "") +
     `\nLoop down? Often a deploy left the Fly machine stopped — fly machine start <id>.\nHealth: ${url}\n`;
 
@@ -456,6 +672,8 @@ ${staleHtml}${driftHtml}${keyHtml}${missingNote}
     missing,
     drift,
     keyWarnings,
+    emailQueue,
+    lostKits,
     recipient,
     emailMessageId: send.ok ? send.messageId : undefined,
     emailError: send.ok ? undefined : send.error,
