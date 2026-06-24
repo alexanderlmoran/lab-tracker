@@ -20,6 +20,11 @@ export type PendingPdf = {
   resultIssuedAt: string | null;
   attachedAt: string;
   attachedBy: string;
+  /** The patient name printed on the REPORT (portal-row name the scraper
+   * matched, else a best-effort PDF-text grab; null when unknown). Compared
+   * against caseRef.patientName so the modal can RED-banner + disable Approve
+   * on a wrong-patient last-name mismatch. */
+  reportPatientName: string | null;
   /** Signed URL for the PDF, valid ~10 min from issue. */
   signedUrl: string;
   /** True if the most recent audit row for this PDF is `disapprove_upload_failed`. */
@@ -176,6 +181,7 @@ export async function getPendingPdfForCase(
     resultIssuedAt: (pdf.result_issued_at as string | null) ?? null,
     attachedAt: pdf.attached_at as string,
     attachedBy: pdf.attached_by as string,
+    reportPatientName: (pdf.report_patient_name as string | null) ?? null,
     signedUrl,
     hadUploadFailure: Boolean(lastFailRow),
     lastUploadError: (lastFailRow?.notes as string | null) ?? null,

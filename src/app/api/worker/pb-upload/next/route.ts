@@ -13,6 +13,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { accessionSiblingIds } from "@/lib/labs/siblings";
 import { reapStaleClaims } from "@/lib/labs/reap-stale-claims";
+import { isLastNameMismatch } from "@/lib/labs/patient-name";
 
 export const dynamic = "force-dynamic";
 
@@ -104,7 +105,7 @@ export async function POST(request: Request) {
 
   const { data: pdf, error: pdfErr } = await db
     .from("lab_case_pdfs")
-    .select("id, storage_path, filename, external_ref, is_partial")
+    .select("id, storage_path, filename, external_ref, is_partial, report_patient_name")
     .eq("id", claimed.pdf_id)
     .single();
   if (pdfErr || !pdf) {
@@ -112,6 +113,51 @@ export async function POST(request: Request) {
       { ok: false, error: `pdf lookup failed: ${pdfErr?.message ?? "missing"}` },
       { status: 500 },
     );
+  }
+
+  // PATIENT-SAFETY GUARD (defense in depth): NEVER hand a job to the PB
+  // uploader when the report's own patient (last name) differs from the case's
+  // patient. This mirrors result-ready's lastNameKey gate but on the OUTBOUND
+  // side — it catches a wrong-patient PDF that slipped past staging (e.g. a
+  // human force-approved an override, or a pre-guard row staged before this
+  // shipped). Fail the claimed job (don't loop it forever) + log loudly so the
+  // card surfaces the failure instead of silently posting to the wrong chart.
+  // Only fires on a CONFIDENT mismatch (both names resolve to a last-name key);
+  // a null/blank report name never blocks (the accession tie is the backstop).
+  const reportName = (pdf.report_patient_name as string | null) ?? null;
+  const caseName = (kase.patient_name as string | null) ?? null;
+  if (isLastNameMismatch(reportName, caseName)) {
+    await db
+      .from("pb_upload_jobs")
+      .update({
+        status: "failed",
+        finished_at: new Date().toISOString(),
+        last_error: `patient mismatch — report is for "${reportName}", case is "${caseName}"; refused to post to PB`,
+      })
+      .eq("id", claimed.id);
+    await db.from("lab_events").insert({
+      case_id: claimed.case_id,
+      kind: "case_edited",
+      actor: "worker:pb-upload",
+      note: `BLOCKED PB upload — the staged report is for "${reportName}" but this case's patient is "${caseName}". Refused to post to PracticeBetter (wrong-patient guard). Re-match the result before retrying.`,
+      meta: {
+        blocked_pb_upload: true,
+        pdf_id: claimed.pdf_id,
+        report_patient_name: reportName,
+        case_patient_name: caseName,
+      },
+    });
+    await db.from("lab_case_audit").insert({
+      case_id: claimed.case_id,
+      pdf_id: claimed.pdf_id,
+      action: "disapprove_upload_failed",
+      actor_label: "worker:pb-upload",
+      notes: `wrong-patient guard: report "${reportName}" != case "${caseName}"`,
+      meta: { job_id: claimed.id, blocked_pb_upload: true },
+    });
+    // 204 so the worker just polls the next job (no PB call, no retry storm);
+    // the job is parked 'failed' and the card shows the block in its activity.
+    return new NextResponse(null, { status: 204 });
   }
 
   // Merged title: a Vibrant order is booked as N Zenoti panels → N cases sharing

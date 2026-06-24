@@ -17,6 +17,8 @@ import { z } from "zod";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { storagePathBelongsToCase } from "@/lib/labs/pdf-upload";
 import { accessionSiblingIds } from "@/lib/labs/siblings";
+import { lastNameKey } from "@/lib/labs/patient-name";
+import { extractPdfText } from "@/lib/inbound/extract-pdf";
 
 export const dynamic = "force-dynamic";
 
@@ -55,17 +57,41 @@ const Body = z.object({
   message: "pdfBase64, or storagePath + sizeBytes, is required",
 });
 
-// Loose last-name key for the patient-identity gate: "PADGETT, NICOLE" /
-// "Marc Nicole Padgett" / "nicole padgett" all → "padgett". Lenient on
-// purpose — first-name spelling variance must not block real results.
-function lastNameKey(s: string): string {
-  const clean = s.replace(/[^a-zA-Z, ]/g, " ").trim().toLowerCase();
-  if (!clean) return "";
-  if (clean.includes(",")) {
-    return clean.split(",")[0]!.trim().split(/\s+/).pop() ?? "";
+/** Best-effort: pull a patient name out of the report's PDF TEXT so we can
+ * persist the report's identity even when the scraper exposed no portal name.
+ * CHEAP only — reuses the existing `extractPdfText` (pdf-parse, no AI call) and
+ * a couple of label regexes. Returns null on anything uncertain; the caller
+ * then leaves report_patient_name null and relies on the portal/UI name + the
+ * accession tie. We never add a new parser or an Anthropic call here. */
+async function bestEffortReportName(pdfBytes: Buffer): Promise<string | null> {
+  let text: string;
+  try {
+    // Copy into a standalone ArrayBuffer (Buffer.buffer is a shared pool slice,
+    // and its type widens to SharedArrayBuffer); extractPdfText wants ArrayBuffer.
+    const ab = new ArrayBuffer(pdfBytes.byteLength);
+    new Uint8Array(ab).set(pdfBytes);
+    text = await extractPdfText(ab);
+  } catch {
+    return null; // unreadable / encrypted PDF — leave null, don't throw
   }
-  const parts = clean.split(/\s+/);
-  return parts[parts.length - 1] ?? "";
+  if (!text) return null;
+  // Look at the report's first page only — the patient banner is at the top of
+  // every lab format, and labels deeper in the doc (provider, billing) would be
+  // false hits. Match common "Patient/Name: <Name>" banners; a name is 1–4
+  // capitalized tokens or "LAST, FIRST".
+  const head = text.slice(0, 4000);
+  const patterns = [
+    /\bPatient(?:\s+Name)?\s*[:#]?\s*([A-Z][A-Za-z'’.-]+(?:,?\s+[A-Z][A-Za-z'’.-]+){0,3})/,
+    /\bName\s*[:#]\s*([A-Z][A-Za-z'’.-]+(?:,?\s+[A-Z][A-Za-z'’.-]+){0,3})/,
+  ];
+  for (const re of patterns) {
+    const m = head.match(re);
+    const candidate = m?.[1]?.trim();
+    // Only trust it if it yields a real last-name key (filters "Patient: See
+    // attached" style noise that wouldn't compare meaningfully anyway).
+    if (candidate && lastNameKey(candidate)) return candidate;
+  }
+  return null;
 }
 
 export async function POST(request: Request) {
@@ -214,6 +240,22 @@ export async function POST(request: Request) {
     }
   }
 
+  // Persist the REPORT's own patient identity on the PDF row so the Approve
+  // screen + the PB-upload claim guard can later compare it against the case
+  // patient. Order of trust:
+  //   1. portalPatientName — the portal-row name the scraper matched (already
+  //      proven to last-name-match this case at the gate above; the strongest
+  //      tie we have).
+  //   2. best-effort PDF-text extraction — ONLY when we hold the bytes (inline
+  //      path) and no portal name was given; cheap, no AI, returns null on
+  //      anything uncertain.
+  //   3. null — unknown; downstream falls back to the portal/UI name and the
+  //      accession tie. Null never blocks an upload.
+  let reportPatientName: string | null = parsed.portalPatientName?.trim() || null;
+  if (!reportPatientName && pdfBytes) {
+    reportPatientName = await bestEffortReportName(pdfBytes);
+  }
+
   const { data: pdfRow, error: pdfErr } = await db
     .from("lab_case_pdfs")
     .insert({
@@ -226,6 +268,7 @@ export async function POST(request: Request) {
       is_partial: parsed.isPartial ?? false,
       result_issued_at: parsed.resultIssuedAt ?? null,
       attached_by: parsed.source,
+      report_patient_name: reportPatientName,
     })
     .select("id")
     .single();

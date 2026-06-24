@@ -8,6 +8,7 @@ import {
   retryPdfUpload,
   type PendingPdf,
 } from "./pdf-actions";
+import { lastNameKey } from "@/lib/labs/patient-name";
 
 export type PdfReviewModalProps = {
   pdf: PendingPdf;
@@ -25,6 +26,11 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [notesOpen, setNotesOpen] = useState(false);
   const [notes, setNotes] = useState("");
+  // Wrong-patient override: on a confident last-name mismatch the Approve
+  // button is DISABLED until staff type the case patient's name, an explicit
+  // "I've verified this really is the right patient" gate (not a one-click
+  // bypass). Empty until they choose to override.
+  const [overrideText, setOverrideText] = useState("");
   const [isPending, startTransition] = useTransition();
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
 
@@ -37,12 +43,53 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
     return () => window.removeEventListener("keydown", onKey);
   }, [isPending, onClose]);
 
+  // ── Patient-identity comparison — the heart of the wrong-patient guard ──
+  // Three states, in priority order:
+  //   RED   = the REPORT's patient last-name differs from the case patient.
+  //           This is the incident we're preventing (a report for patient A
+  //           attached to patient B's case). Approve is DISABLED unless staff
+  //           explicitly type the case patient's name to override.
+  //   AMBER = names match but the accession differs (the legit stale-accession
+  //           case) → a one-click confirm, no name typing required.
+  //   GREEN = both match → no banner, normal flow.
+  const caseName = pdf.caseRef.patientName ?? "";
+  const reportName = pdf.reportPatientName ?? "";
+  const reportKey = lastNameKey(reportName);
+  const caseKey = lastNameKey(caseName);
+  // Only a CONFIDENT mismatch counts (both sides yield a last-name key). A null
+  // report name (scraper exposed none) → no banner; the accession tie + the
+  // server fail-closed gate are the backstop there.
+  const patientMismatch = Boolean(reportKey && caseKey && reportKey !== caseKey);
+
+  const accMismatch = Boolean(
+    pdf.externalRef &&
+      pdf.caseRef.caseExternalRef &&
+      pdf.externalRef !== pdf.caseRef.caseExternalRef,
+  );
+
+  // The override is satisfied only when staff retype the CASE patient's name
+  // (last-name key match) — a deliberate "I verified this is really them" act.
+  const overrideOk = patientMismatch && lastNameKey(overrideText) === caseKey;
+  // Approve is blocked while a patient mismatch stands un-overridden.
+  const approveBlocked = patientMismatch && !overrideOk;
+
   function run(action: PendingAction) {
     if (!action || pendingAction) return;
+    // Hard stop: never let an Approve fire while a patient mismatch stands
+    // un-overridden, even if something re-enabled the button (belt-and-braces
+    // beyond the `disabled` attribute).
+    if (action === "approve" && approveBlocked) return;
     setPendingAction(action);
     setError(null);
     startTransition(async () => {
-      const noteValue = notes.trim() || undefined;
+      // Stamp the wrong-patient override onto the audit note so the bypass is
+      // recorded (who knowingly approved past a mismatch, and the report name).
+      const overrideNote =
+        action === "approve" && patientMismatch && overrideOk
+          ? `OVERRIDE: approved despite patient mismatch (report "${reportName}" vs case "${caseName}")`
+          : null;
+      const noteValue =
+        [notes.trim() || null, overrideNote].filter(Boolean).join(" — ") || undefined;
       const args = { pdfId: pdf.id, caseId: pdf.caseId, notes: noteValue };
       const result =
         action === "approve"
@@ -69,14 +116,6 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
       });
     });
   }
-
-  // Wrong-patient-result is the single biggest risk in the approve flow — when
-  // the PDF's accession doesn't match the case's, warn prominently (not a 10px tag).
-  const accMismatch = Boolean(
-    pdf.externalRef &&
-      pdf.caseRef.caseExternalRef &&
-      pdf.externalRef !== pdf.caseRef.caseExternalRef,
-  );
 
   const headerSubtitle = [
     pdf.externalRef ? `Acc# ${pdf.externalRef}` : null,
@@ -120,15 +159,52 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
           </button>
         </div>
 
-        {/* ── Accession-mismatch warning (wrong-patient guard) ──────── */}
-        {accMismatch ? (
-          <div className="flex items-center gap-2 border-b border-red-300 bg-red-100 px-4 py-2 text-[12px] font-semibold text-red-800">
+        {/* ── RED: wrong-patient guard (the incident this screen prevents) ──
+         *  The report's patient differs from the case patient. Approve is
+         *  disabled; the only way through is to retype the case patient's name
+         *  (an explicit "I verified this really is them" override). */}
+        {patientMismatch ? (
+          <div className="border-b border-red-400 bg-red-100 px-4 py-2.5 text-red-900">
+            <div className="flex items-start gap-2 text-[12.5px] font-semibold">
+              <span aria-hidden className="text-base leading-none">⚠</span>
+              <span>
+                PATIENT MISMATCH — this report is for{" "}
+                <span className="font-mono">{reportName}</span>, but the case is{" "}
+                <span className="font-mono">{caseName}</span>. Do NOT upload — this looks like
+                another patient&apos;s result. Disapprove it, or if you have personally verified
+                the PDF really is this patient, type{" "}
+                <span className="font-mono">{caseName}</span> to override.
+              </span>
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                type="text"
+                value={overrideText}
+                onChange={(e) => setOverrideText(e.target.value)}
+                placeholder={`Type "${caseName}" to override`}
+                className="w-72 rounded-md border border-red-300 bg-white px-2 py-1 text-[12px] text-zinc-900 focus:border-red-500 focus:outline-none"
+                disabled={isPending}
+                aria-label="Type the case patient name to override the mismatch"
+              />
+              {overrideOk ? (
+                <span className="text-[11px] font-medium text-red-800">
+                  Override armed — Approve enabled.
+                </span>
+              ) : null}
+            </div>
+          </div>
+        ) : accMismatch ? (
+          /* ── AMBER: names match but the accession differs (legit stale
+           *  accession). Names matching = same patient, so this is a one-click
+           *  confirm, not a name-typing gate. Approve stays enabled. */
+          <div className="flex items-center gap-2 border-b border-amber-300 bg-amber-100 px-4 py-2 text-[12px] font-semibold text-amber-900">
             <span aria-hidden className="text-base leading-none">⚠</span>
             <span>
-              Accession mismatch — this PDF reports{" "}
-              <span className="font-mono">{pdf.externalRef}</span> but the case expects{" "}
-              <span className="font-mono">{pdf.caseRef.caseExternalRef}</span>. Confirm this is the
-              right patient&apos;s result before approving.
+              Accession differs (report{" "}
+              <span className="font-mono">{pdf.externalRef}</span> vs case{" "}
+              <span className="font-mono">{pdf.caseRef.caseExternalRef}</span>) — the patient name
+              matches, so this is likely the same person&apos;s newer order. Confirm it&apos;s the
+              same patient, then Approve.
             </span>
           </div>
         ) : null}
@@ -145,8 +221,29 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
             </p>
             <dl className="mt-3 space-y-2 text-[12px]">
               <div>
-                <dt className="text-[10.5px] uppercase tracking-wide text-zinc-500">Patient</dt>
+                <dt className="text-[10.5px] uppercase tracking-wide text-zinc-500">Patient (case)</dt>
                 <dd className="font-medium text-zinc-900">{pdf.caseRef.patientName}</dd>
+              </div>
+              <div>
+                <dt className="text-[10.5px] uppercase tracking-wide text-zinc-500">
+                  Patient (report)
+                </dt>
+                <dd
+                  className={`font-medium ${
+                    patientMismatch ? "text-red-700" : reportName ? "text-zinc-900" : "text-zinc-400"
+                  }`}
+                >
+                  {reportName || "— not on report —"}
+                  {patientMismatch ? (
+                    <span className="ml-1 rounded bg-red-100 px-1 text-[10px] font-semibold text-red-800">
+                      mismatch
+                    </span>
+                  ) : reportKey && caseKey ? (
+                    <span className="ml-1 rounded bg-emerald-100 px-1 text-[10px] font-medium text-emerald-800">
+                      matches
+                    </span>
+                  ) : null}
+                </dd>
               </div>
               <div>
                 <dt className="text-[10.5px] uppercase tracking-wide text-zinc-500">DOB</dt>
@@ -240,7 +337,16 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
         {/* ── Action bar ───────────────────────────────────────────── */}
         <div className="flex items-center justify-between gap-3 border-t border-zinc-200 bg-zinc-50 px-4 py-3">
           <div className="text-[11px] text-zinc-500">
-            {error ? <span className="text-red-700">{error}</span> : "Approve uploads to PracticeBetter. Disapprove skips this result and keeps searching for a newer one."}
+            {error ? (
+              <span className="text-red-700">{error}</span>
+            ) : approveBlocked ? (
+              <span className="font-medium text-red-700">
+                Approve is disabled — the report&apos;s patient doesn&apos;t match this case. Disapprove,
+                or type the case patient&apos;s name above to override.
+              </span>
+            ) : (
+              "Approve uploads to PracticeBetter. Disapprove skips this result and keeps searching for a newer one."
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -273,8 +379,13 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
             </button>
             <button
               type="button"
-              className="rounded-md bg-emerald-600 px-4 py-1.5 text-[12px] font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-              disabled={isPending}
+              className="rounded-md bg-emerald-600 px-4 py-1.5 text-[12px] font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={isPending || approveBlocked}
+              title={
+                approveBlocked
+                  ? "Patient mismatch — type the case patient's name above to override before approving"
+                  : undefined
+              }
               onClick={() => run("approve")}
             >
               {pendingAction === "approve" ? "Approving…" : "Approve & upload"}

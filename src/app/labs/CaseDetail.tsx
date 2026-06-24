@@ -39,6 +39,7 @@ import { useRouter } from "next/navigation";
 import { getLabDestination, trackingDestinationWarning } from "@/lib/labs/catalog";
 import { labelForCase } from "@/lib/labs/label";
 import { probeKeyForLab } from "@/lib/scrapers/normalize-lab";
+import { isLastNameMismatch } from "@/lib/labs/patient-name";
 import { ManualUploadButton } from "./ManualUploadButton";
 import { getAdapterFor } from "@/lib/lab-adapters";
 
@@ -789,37 +790,70 @@ export function CaseDetail({
        *  every card while the server action is in-flight: cards with no
        *  pending PDF should never show it at all. */}
       {pendingPdf ? (
-        <section className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="min-w-0">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-amber-900">
-                PDF awaiting review
-              </h3>
-              <p className="mt-0.5 text-[11.5px] text-amber-800">
-                A result PDF was attached by{" "}
-                <span className="font-mono">{pendingPdf?.attachedBy ?? "scraper"}</span>
-                {pendingPdf?.externalRef
-                  ? <>
-                      {" "}with accession{" "}
-                      <span className="font-mono">{pendingPdf.externalRef}</span>
-                    </>
-                  : null}
-                . Verify the patient + accession + collection date before approving — Approve uploads to PracticeBetter.
-              </p>
-              {pendingPdfError ? (
-                <p className="mt-1 text-[11px] text-red-700">{pendingPdfError}</p>
-              ) : null}
-            </div>
-            <button
-              type="button"
-              className="shrink-0 rounded-md bg-amber-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-amber-700 disabled:opacity-50"
-              disabled={reviewLoading || !pendingPdf}
-              onClick={() => setReviewOpen(true)}
+        (() => {
+          // Surface a wrong-patient mismatch right on the card banner — before
+          // staff even open the modal — so a bad attach is obvious at a glance.
+          const pdfMismatch = isLastNameMismatch(
+            pendingPdf.reportPatientName,
+            row.patient_name,
+          );
+          return (
+            <section
+              className={`rounded-md border px-4 py-3 ${
+                pdfMismatch ? "border-red-400 bg-red-50" : "border-amber-200 bg-amber-50"
+              }`}
             >
-              {reviewLoading ? "Loading…" : "Review PDF"}
-            </button>
-          </div>
-        </section>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <h3
+                    className={`text-xs font-semibold uppercase tracking-wide ${
+                      pdfMismatch ? "text-red-900" : "text-amber-900"
+                    }`}
+                  >
+                    {pdfMismatch ? "⚠ Patient mismatch — review" : "PDF awaiting review"}
+                  </h3>
+                  {pdfMismatch ? (
+                    <p className="mt-0.5 text-[11.5px] font-medium text-red-800">
+                      The staged report is for{" "}
+                      <span className="font-mono">{pendingPdf.reportPatientName}</span>, but this
+                      case is{" "}
+                      <span className="font-mono">{row.patient_name}</span>. Do NOT upload until you
+                      confirm the patient — open Review.
+                    </p>
+                  ) : (
+                    <p className="mt-0.5 text-[11.5px] text-amber-800">
+                      A result PDF was attached by{" "}
+                      <span className="font-mono">{pendingPdf?.attachedBy ?? "scraper"}</span>
+                      {pendingPdf?.externalRef ? (
+                        <>
+                          {" "}with accession{" "}
+                          <span className="font-mono">{pendingPdf.externalRef}</span>
+                        </>
+                      ) : null}
+                      . Verify the patient + accession + collection date before approving — Approve
+                      uploads to PracticeBetter.
+                    </p>
+                  )}
+                  {pendingPdfError ? (
+                    <p className="mt-1 text-[11px] text-red-700">{pendingPdfError}</p>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  className={`shrink-0 rounded-md px-3 py-1.5 text-[12px] font-medium text-white disabled:opacity-50 ${
+                    pdfMismatch
+                      ? "bg-red-600 hover:bg-red-700"
+                      : "bg-amber-600 hover:bg-amber-700"
+                  }`}
+                  disabled={reviewLoading || !pendingPdf}
+                  onClick={() => setReviewOpen(true)}
+                >
+                  {reviewLoading ? "Loading…" : "Review PDF"}
+                </button>
+              </div>
+            </section>
+          );
+        })()
       ) : null}
 
       {/* Backlog #6 — stuck Pending-Upload card with no PDF staged yet. The
