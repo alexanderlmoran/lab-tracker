@@ -301,6 +301,12 @@ const BulkFieldUpdateInput = z.object({
         caseId: z.string().uuid(),
         trackingNumber: z.string().trim().max(100).nullable().optional(),
         accession: z.string().trim().max(64).nullable().optional(),
+        // Explicit intent to CLEAR the accession. Without this, a blank/empty
+        // submitted accession is treated as "no change" and will NOT wipe an
+        // existing non-null lab_external_ref — a blank field in a bulk save
+        // used to null out a good accession (silent data loss / scrape feed
+        // drop-out, since open-cases gates on lab_external_ref IS NOT NULL).
+        clearAccession: z.boolean().optional(),
         collectionDate: z.string().trim().max(10).nullable().optional(),
       }),
     )
@@ -313,6 +319,7 @@ export async function bulkUpdatePatientCases(input: {
     caseId: string;
     trackingNumber?: string | null;
     accession?: string | null;
+    clearAccession?: boolean;
     collectionDate?: string | null;
   }>;
 }): Promise<ActionResult<{ updated: number }>> {
@@ -362,7 +369,14 @@ export async function bulkUpdatePatientCases(input: {
       changes.tracking_number = { from: cur.tracking_number, to: t };
     }
     const a = norm(u.accession);
-    if (a !== undefined && a !== cur.lab_external_ref) {
+    // NULL-OVERWRITE GUARD: a blank/empty submitted accession (a === null) must
+    // NOT wipe a good existing accession. Only write null over a non-null
+    // lab_external_ref when the caller passed explicit clearAccession intent.
+    // (a === undefined already means "field not touched".)
+    const wouldClearExisting = a === null && cur.lab_external_ref != null;
+    const skipAccession =
+      a === undefined || (wouldClearExisting && u.clearAccession !== true);
+    if (!skipAccession && a !== cur.lab_external_ref) {
       patch.lab_external_ref = a;
       changes.lab_external_ref = { from: cur.lab_external_ref, to: a };
     }

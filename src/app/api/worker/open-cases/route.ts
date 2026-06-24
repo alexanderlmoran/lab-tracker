@@ -162,5 +162,53 @@ export async function GET(request: Request) {
       dismissedRefs: c.dismissed_refs ?? [],
     }));
 
-  return NextResponse.json({ ok: true, cases });
+  // SURFACE the silent gap: results-ready cases (step2/step4) with a NULL
+  // accession are hard-gated OUT of the scrape feed above (the main query
+  // requires lab_external_ref IS NOT NULL). The only exception that DOES get
+  // scraped is the Vibrant+DOB path; everything else is invisible — staff
+  // could only find it via a CLI script. We DON'T change the gate (a missing
+  // accession genuinely can't be portal-matched for most labs); we just emit a
+  // count + list so the board / dry-run can show "N results-ready cases need
+  // an accession entered." Bounded to ~180d to avoid scanning dead history.
+  const buildableIds = new Set(cases.map((c) => c.caseId));
+  const noAccessionSince = new Date(Date.now() - 180 * 86_400_000).toISOString();
+  const { data: missingRows } = await db
+    .from("lab_cases")
+    .select(
+      "id, patient_name, patient_email, lab_name, step2_partial_received, step4_complete_received, collection_date, created_at",
+    )
+    .is("lab_external_ref", null)
+    .eq("step5_complete_uploaded", false)
+    .is("archived_at", null)
+    .is("deleted_at", null)
+    .or("step2_partial_received.eq.true,step4_complete_received.eq.true")
+    .gte("created_at", noAccessionSince);
+  const noAccession = ((missingRows ?? []) as Array<{
+    id: string;
+    patient_name: string;
+    patient_email: string | null;
+    lab_name: string;
+    step2_partial_received: boolean;
+    step4_complete_received: boolean;
+    collection_date: string | null;
+    created_at: string;
+  }>)
+    // Only this lab's feed, and only cases not already scraped via the Vibrant
+    // accession-less path (those aren't actually stuck).
+    .filter((c) => sameLab(c.lab_name, lab) && !buildableIds.has(c.id))
+    .map((c) => ({
+      caseId: c.id,
+      patientName: c.patient_name,
+      patientEmail: c.patient_email ?? "",
+      labName: c.lab_name,
+      resultsReady: c.step4_complete_received ? "complete" : "partial",
+      collectionDate: c.collection_date,
+    }));
+
+  return NextResponse.json({
+    ok: true,
+    cases,
+    noAccessionCount: noAccession.length,
+    noAccession,
+  });
 }

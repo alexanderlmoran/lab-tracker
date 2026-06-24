@@ -346,8 +346,9 @@ export async function disapproveWrongPdf(
   // accession. The reviewed card re-matches by name+DOB next poll.
   const { data: sibRows } = await db
     .from("lab_cases")
-    .select("id, dismissed_refs")
+    .select("id, lab_external_ref, dismissed_refs")
     .in("id", ids);
+  const recoveryEvents: Array<Record<string, unknown>> = [];
   for (const s of sibRows ?? []) {
     const isReviewed = (s.id as string) === parsed.data.caseId;
     const existing = (s.dismissed_refs as string[] | null) ?? [];
@@ -355,6 +356,24 @@ export async function disapproveWrongPdf(
       ? Array.from(new Set([...existing, rejectedRef]))
       : existing;
     const patch = isReviewed ? { lab_external_ref: null, dismissed_refs } : { dismissed_refs };
+    // PRESERVE on clear: blanking the reviewed card's accession is silent data
+    // loss otherwise (no prior_ref column). Snapshot the cleared value into a
+    // recoverable lab_events note so staff can recover it from the activity log
+    // if the disapprove was a mistake. (dismissed_refs also retains the value.)
+    const priorRef = (s.lab_external_ref as string | null) ?? null;
+    if (isReviewed && priorRef) {
+      recoveryEvents.push({
+        case_id: s.id as string,
+        kind: "case_edited",
+        actor: user.email ?? "staff",
+        meta: {
+          accession_cleared: true,
+          prior_lab_external_ref: priorRef,
+          reason: "disapprove_wrong_pdf",
+        },
+        note: `Accession ${priorRef} cleared on disapprove (Wrong PDF — keep searching). Recoverable: re-enter ${priorRef} to restore.`,
+      });
+    }
     const { error } = await db
       .from("lab_cases")
       .update(patch)
@@ -362,6 +381,7 @@ export async function disapproveWrongPdf(
     if (error) return { ok: false, error: error.message };
     revalidatePath(`/labs/${s.id}`);
   }
+  if (recoveryEvents.length) await db.from("lab_events").insert(recoveryEvents);
   revalidatePath("/labs");
   return { ok: true };
 }

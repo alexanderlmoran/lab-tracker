@@ -12,7 +12,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
-import { maybeFireNadiaAllReceived, notifyCompleteUpload } from "@/lib/workflow";
+import {
+  maybeFireCompleteUploadedEmail,
+  maybeFireNadiaAllReceived,
+  notifyCompleteUpload,
+} from "@/lib/workflow";
 import { accessionSiblingIds } from "@/lib/labs/siblings";
 
 export const dynamic = "force-dynamic";
@@ -101,8 +105,10 @@ export async function POST(request: Request) {
     // Cascade to same-accession sibling cards: the result is now on PB, so the
     // duplicate cards for this physical order are covered — advance them too
     // (without re-uploading) so they don't orphan in Pending Upload. Best-effort.
+    let cascadedSiblingIds: string[] = [];
     try {
       const sibIds = (await accessionSiblingIds(job.case_id)).filter((id) => id !== job.case_id);
+      cascadedSiblingIds = sibIds;
       if (sibIds.length) {
         const now = new Date().toISOString();
         await db
@@ -145,6 +151,19 @@ export async function POST(request: Request) {
       });
     } catch (err) {
       console.error("[pb-upload/result] complete-upload notify failed", err);
+    }
+
+    // GATED auto patient email (Email 3 — complete_uploaded). No-op unless the
+    // global kill-switch is explicitly on AND the case's auto_send_emails flag
+    // is true (both default to "no send" today). Fires for the uploaded case
+    // and every cascaded same-accession sibling now at step 5, each gated
+    // independently inside. Best-effort — never blocks the upload.
+    for (const id of [job.case_id, ...cascadedSiblingIds]) {
+      try {
+        await maybeFireCompleteUploadedEmail(id, "worker:pb-upload");
+      } catch (err) {
+        console.error("[pb-upload/result] auto patient email failed", err);
+      }
     }
 
     // If this case was posted from the inbox, flip its inbound row from the
