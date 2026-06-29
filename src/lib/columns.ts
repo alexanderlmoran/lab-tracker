@@ -7,7 +7,6 @@ export type ColumnKey =
   | "ready_to_ship"
   | "with_patient"
   | "sample_sent"
-  | "partial_results"
   | "complete_results"
   | "pending_upload"
   | "rof_scheduled"
@@ -21,17 +20,18 @@ export type ColumnKey =
 // LAB_BOARD_COLUMN_ORDER below to append it.
 // Order reflects the natural lifecycle of a card. Pending Upload sits right
 // after Sample Sent because that's the lane staff most need to monitor —
-// it's where human approval is owed. A card with both partial + complete
-// results passes through Pending Upload TWICE: once when partial arrives
-// (then → Partial Uploaded) and again when complete arrives (then →
-// Complete Uploaded). That intentional "back to Pending" surfaces the work.
+// it's where human approval is owed. A card with partial results cycles
+// through Pending Upload twice: when the partial arrives it lands here for
+// Approve, then once uploaded it drops back to Sample Sent to await the rest;
+// when the complete results arrive it returns to Pending Upload, then →
+// Upload Complete. That "back to Pending" is what surfaces the owed work.
+// (There is no standalone "Partial Uploaded" lane — see getColumnFor.)
 export const COLUMN_ORDER: ColumnKey[] = [
   "untouched",
   "ready_to_ship",
   "with_patient",
   "sample_sent",
   "pending_upload",
-  "partial_results",
   "complete_results",
   "rof_scheduled",
   "rof_done",
@@ -53,10 +53,9 @@ export const COLUMN_LABEL: Record<ColumnKey, string> = {
   // physically with the patient, sample not yet sent back.
   with_patient: "With Patient",
   sample_sent: "Sample Sent",
-  // "Uploaded" labels emphasize the PB-side outcome (not merely "we got the
-  // data back"). A card only lands in these lanes once the PDF actually
-  // landed on the patient's PB chart. Pre-upload states sit in Pending Upload.
-  partial_results: "Partial Uploaded",
+  // "Upload Complete" emphasizes the PB-side outcome (not merely "we got the
+  // data back"). A card only lands in this lane once the PDF actually landed
+  // on the patient's PB chart. Pre-upload states sit in Pending Upload.
   complete_results: "Upload Complete",
   pending_upload: "Pending Upload",
   rof_scheduled: "ROF Scheduled",
@@ -64,6 +63,42 @@ export const COLUMN_LABEL: Record<ColumnKey, string> = {
   closed: "Protocol received",
   completed: "Completed",
 };
+
+// Who owns the work in each lane (board column-owner banner). Contiguous lanes
+// with the same owner render as one spanning header above the columns.
+//   Alex            → To Do · Ready to Ship · With Patient · Sample Sent
+//   Catherine/Nadia → Pending Upload · Upload Complete
+//   Allison         → ROF Scheduled · ROF Done · Protocol received · Completed
+export type ColumnOwner = "Alex" | "Catherine / Nadia" | "Allison";
+
+export const COLUMN_OWNER: Record<ColumnKey, ColumnOwner> = {
+  untouched: "Alex",
+  ready_to_ship: "Alex",
+  with_patient: "Alex",
+  sample_sent: "Alex",
+  pending_upload: "Catherine / Nadia",
+  complete_results: "Catherine / Nadia",
+  rof_scheduled: "Allison",
+  rof_done: "Allison",
+  closed: "Allison",
+  completed: "Allison",
+};
+
+// Collapse the board's left-to-right column order into contiguous owner spans
+// (each span's width = how many adjacent lanes that owner covers), so the
+// banner aligns exactly with the columns below it.
+export function ownerColumnGroups(
+  order: ColumnKey[] = LAB_BOARD_COLUMN_ORDER,
+): { owner: ColumnOwner; span: number }[] {
+  const groups: { owner: ColumnOwner; span: number }[] = [];
+  for (const col of order) {
+    const owner = COLUMN_OWNER[col];
+    const last = groups[groups.length - 1];
+    if (last && last.owner === owner) last.span += 1;
+    else groups.push({ owner, span: 1 });
+  }
+  return groups;
+}
 
 // Each step is named after the BOARD COLUMN it moves the card into, so the
 // checklist reads like the lanes left-to-right (Alex, 2026-06-10). The column
@@ -74,7 +109,7 @@ export const COLUMN_LABEL: Record<ColumnKey, string> = {
 const STEP_LABELS: Record<StepNumber, string> = {
   1: "Sample Sent",
   2: "Pending Upload (partial received)",
-  3: "Partial Uploaded (Email 2)",
+  3: "Partial results uploaded to PB (Email 2) — card stays in Sample Sent",
   4: "Pending Upload (complete received)",
   5: "Complete Uploaded (Email 3 · Nadia alerted when all the patient's labs reach here)",
   6: "ROF Scheduled (in Zenoti)",
@@ -136,7 +171,7 @@ const PEPTIDES_STEP_LABELS: Partial<Record<StepNumber, string>> = {
  * `completed` (archived) is not part of either strip — it's a board-level
  * bucket, not a workflow step. */
 const WORKFLOW_COLUMNS: Record<CaseWorkflow, ColumnKey[]> = {
-  default: ["untouched", "ready_to_ship", "with_patient", "sample_sent", "partial_results", "complete_results", "pending_upload", "rof_scheduled", "rof_done", "closed"],
+  default: ["untouched", "ready_to_ship", "with_patient", "sample_sent", "complete_results", "pending_upload", "rof_scheduled", "rof_done", "closed"],
   // Peptides ship a product TO the patient — there's no return sample to stage,
   // so the ready-to-ship lane doesn't apply.
   peptides: ["untouched", "sample_sent", "closed"],
@@ -248,17 +283,21 @@ export function getColumnFor(
   if (c.step7_rof_completed) return "rof_done";
   if (c.step6_rof_scheduled) return "rof_scheduled";
 
-  // Column placement is now pure step-state. The lane names match the
-  // BOOLEAN they require, so a "Partial Uploaded" card has step3 truly
-  // flipped, not just "lab told us about it". Any intermediate state
-  // (received-but-not-yet-uploaded, scraper-hasn't-attached-PDF-yet,
-  // worker-in-flight) lives in Pending Upload until the relevant step
-  // boolean flips. The `attachment` arg is no longer consulted here —
-  // it remains for backwards compatibility with callers that still
-  // pass it.
+  // Column placement is pure step-state. The lane names match the BOOLEAN
+  // they require. Any intermediate state (received-but-not-yet-uploaded,
+  // scraper-hasn't-attached-PDF-yet, worker-in-flight) lives in Pending
+  // Upload until the relevant step boolean flips. The `attachment` arg is no
+  // longer consulted here — it remains for backwards compatibility with
+  // callers that still pass it.
   if (c.step5_complete_uploaded) return "complete_results";
   if (c.step4_complete_received) return "pending_upload"; // complete received, awaiting upload
-  if (c.step3_partial_uploaded) return "partial_results";
+  // Partial results uploaded to PB (step 3) but complete results not yet back:
+  // the sample is still out at the lab awaiting the rest, so the card rests in
+  // Sample Sent — Pending Upload is reserved for cards that owe a human Approve
+  // right now, and a partial-uploaded card owes nothing until complete arrives.
+  // There is no standalone "Partial Uploaded" lane (removed 2026-06-25). This
+  // check MUST precede the step2 check below: setting step3 cascades step2 = true.
+  if (c.step3_partial_uploaded) return "sample_sent";
   if (c.step2_partial_received) return "pending_upload"; // partial received, awaiting upload
   if (c.step1_sample_sent) return "sample_sent";
   // Staff marked the kit physically given to the patient (sample not yet sent).
@@ -326,7 +365,6 @@ const COL_TO_PATIENT_COL: Record<ColumnKey, PatientColumnKey> = {
   ready_to_ship: "p_new",
   with_patient: "p_new",
   sample_sent: "p_at_lab",
-  partial_results: "p_at_lab",
   complete_results: "p_results",
   pending_upload: "p_results",
   rof_scheduled: "p_results",

@@ -71,7 +71,7 @@ export function SchedulePickupButton({ cases }: { cases: LabCase[] }) {
       <button
         type="button"
         onClick={openDialog}
-        className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+        className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
         title="Book a FedEx pickup from the clinic for today's samples"
       >
         Schedule pickup{fedex.length ? ` (${fedex.length})` : ""}

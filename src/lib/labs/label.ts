@@ -30,3 +30,24 @@ export function labelForCase(c: LabelCase): string {
   const panel = panelFor(c);
   return panel ? `${c.lab_name} · ${panel}` : c.lab_name;
 }
+
+/** The label a case shows under in the board's TEST filter dropdown. Same as
+ *  panelFor() for ordinary labs, but every in-house peptide (BPC-157, Semax, …
+ *  — each stored as lab_name "Peptides" + the specific peptide in lab_panel)
+ *  collapses into one "Peptides" group. ONE source of truth: the dropdown's
+ *  options and the filter match both go through this, so they never disagree. */
+export function testGroupLabel(c: LabelCase): string {
+  const lab = (c.lab_name ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^labs\s*[·•\-]\s*/, "");
+  if (lab.startsWith("peptide")) return "Peptides";
+  return panelFor(c);
+}
+
+/** Canonical comparison key for a test/panel label. The test-filter dropdown
+ *  groups its options by this key AND the board filter matches by it, so the two
+ *  can never disagree on whitespace/case variants ("Total  Tox" vs "Total Tox"). */
+export function normalizeTestKey(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, " ");
+}

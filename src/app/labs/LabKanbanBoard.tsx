@@ -8,6 +8,8 @@ import {
   COLUMN_LABEL,
   LAB_BOARD_COLUMN_ORDER,
   type ColumnKey,
+  type ColumnOwner,
+  ownerColumnGroups,
   daysFromTodayIso,
   expectedCountdown,
   getCaseStaleness,
@@ -33,6 +35,38 @@ import {
 } from "./card-counts";
 import { useDismiss } from "./use-dismiss";
 import { isMergeMode, MERGE_STORAGE_KEY, type MergeMode } from "./MergeViewMenu";
+
+// Color band per work owner for the column-owner banner above the board.
+const OWNER_TINT: Record<ColumnOwner, string> = {
+  Alex: "border-sky-200 bg-sky-100 text-sky-800",
+  "Catherine / Nadia": "border-amber-200 bg-amber-100 text-amber-800",
+  Allison: "border-violet-200 bg-violet-100 text-violet-800",
+};
+
+/** Banner row above the columns assigning each owner their span of lanes. Uses
+ *  a CSS grid with one track per column so each owner's span aligns exactly with
+ *  the flex columns rendered below (same gap, same equal-width tracks). */
+function OwnerBanner() {
+  return (
+    <div
+      className="grid gap-1.5 pb-1.5"
+      style={{
+        gridTemplateColumns: `repeat(${LAB_BOARD_COLUMN_ORDER.length}, minmax(0, 1fr))`,
+      }}
+    >
+      {ownerColumnGroups().map((g, i) => (
+        <div
+          key={`${g.owner}:${i}`}
+          style={{ gridColumn: `span ${g.span}` }}
+          className={`truncate rounded-md border px-2 py-0.5 text-center text-[11px] font-semibold uppercase tracking-wide ${OWNER_TINT[g.owner]}`}
+          title={g.owner}
+        >
+          {g.owner}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function formatExpectedRange(min: string | null, max: string | null): string | null {
   if (!min && !max) return null;
@@ -568,11 +602,14 @@ function StaticColumn({
 }
 
 /** "06/18/2026" header for the TO DO date dividers, with a Today/Tomorrow/overdue
- *  hint. Undated cases get their own header (never hidden). */
-function todoDateHeader(iso: string | null): string {
+ *  hint. Undated cases get their own header (never hidden). `relative` adds the
+ *  Today/Tomorrow/overdue hint — turned off for terminal lanes (Protocol
+ *  received, Completed) where a draw date being "overdue" is meaningless. */
+function todoDateHeader(iso: string | null, relative = true): string {
   if (!iso) return "No collection date";
   const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
   const pretty = m ? `${m[2]}/${m[3]}/${m[1]}` : iso;
+  if (!relative) return pretty;
   const d = daysFromTodayIso(iso);
   if (d === 0) return `Today · ${pretty}`;
   if (d === 1) return `Tomorrow · ${pretty}`;
@@ -585,7 +622,10 @@ function todoDateHeader(iso: string | null): string {
  *  as clutter, but a day with even one lab gets its header. The lead card's date
  *  buckets each unit; stable, so the per-column sort still orders WITHIN a day.
  *  Undated cases group last. Nothing is hidden. */
-function groupByCollectionDate(units: LabCase[][]): { key: string; label: string; items: LabCase[][] }[] {
+function groupByCollectionDate(
+  units: LabCase[][],
+  relative = true,
+): { key: string; label: string; items: LabCase[][] }[] {
   const byDate = new Map<string, LabCase[][]>();
   for (const u of units) {
     const k = u[0].collection_date ?? "nodate";
@@ -596,7 +636,7 @@ function groupByCollectionDate(units: LabCase[][]): { key: string; label: string
   const dated = [...byDate.keys()].filter((k) => k !== "nodate").sort();
   const out: { key: string; label: string; items: LabCase[][] }[] = [];
   const push = (key: string, items: LabCase[][]) =>
-    out.push({ key, label: todoDateHeader(key === "nodate" ? null : key), items });
+    out.push({ key, label: todoDateHeader(key === "nodate" ? null : key, relative), items });
   for (const k of dated) push(k, byDate.get(k)!);
   if (byDate.has("nodate")) push("nodate", byDate.get("nodate")!);
   return out;
@@ -671,7 +711,6 @@ export function LabKanbanBoard({
     ready_to_ship: [],
     with_patient: [],
     sample_sent: [],
-    partial_results: [],
     complete_results: [],
     pending_upload: [],
     rof_scheduled: [],
@@ -969,6 +1008,7 @@ export function LabKanbanBoard({
 
   return (
     <div className="flex h-full flex-col">
+      <OwnerBanner />
       <div className="flex flex-row flex-nowrap gap-1.5 pb-2 lg:flex-1 lg:min-h-0">
         {LAB_BOARD_COLUMN_ORDER.map((col) => {
           // Units actually rendered here. With merge-dupes a group's cards
@@ -1010,7 +1050,7 @@ export function LabKanbanBoard({
               ) : !hideDateBreaks ? (
                 // Date sections by collection_date in EVERY column — only days that
                 // actually have labs. Toggle off via "Group by date" (?dates=off).
-                groupByCollectionDate(units).map((g) => (
+                groupByCollectionDate(units, col !== "closed" && col !== "completed").map((g) => (
                   <Fragment key={`todo:${g.key}`}>
                     <div className="sticky top-0 z-10 -mx-0.5 border-b border-orange-200 bg-orange-100/95 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-orange-700 backdrop-blur">
                       {g.label}{" "}

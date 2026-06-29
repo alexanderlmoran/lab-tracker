@@ -6,6 +6,7 @@ import { requireSignedIn } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { getAllPortalsForLab as getAllPortalsForLabDb } from "@/lib/lab-portals/server";
 import type { LabPortal } from "@/lib/inbound/detect-notification";
+import { testGroupLabel, normalizeTestKey } from "@/lib/labs/label";
 import type { ActionResult, LabCase, LabEvent, StepNumber } from "@/lib/types";
 
 export async function fetchPortalsForLab(
@@ -307,6 +308,10 @@ const BulkFieldUpdateInput = z.object({
         // used to null out a good accession (silent data loss / scrape feed
         // drop-out, since open-cases gates on lab_external_ref IS NOT NULL).
         clearAccession: z.boolean().optional(),
+        // Same explicit-intent guard for tracking (added 2026-06-25). A blank
+        // tracking box on a grid row that's only editing accession/collection
+        // used to silently null a good tracking_number.
+        clearTracking: z.boolean().optional(),
         collectionDate: z.string().trim().max(10).nullable().optional(),
       }),
     )
@@ -320,6 +325,7 @@ export async function bulkUpdatePatientCases(input: {
     trackingNumber?: string | null;
     accession?: string | null;
     clearAccession?: boolean;
+    clearTracking?: boolean;
     collectionDate?: string | null;
   }>;
 }): Promise<ActionResult<{ updated: number }>> {
@@ -364,7 +370,14 @@ export async function bulkUpdatePatientCases(input: {
     const patch: Record<string, unknown> = {};
     const changes: Record<string, { from: unknown; to: unknown }> = {};
     const t = norm(u.trackingNumber);
-    if (t !== undefined && t !== cur.tracking_number) {
+    // NULL-OVERWRITE GUARD (mirrors accession below): a blank submitted tracking
+    // # (t === null) must NOT wipe a good existing tracking_number. Only clear
+    // when the caller passes explicit clearTracking intent. (t === undefined
+    // already means "field not touched".)
+    const wouldClearTracking = t === null && cur.tracking_number != null;
+    const skipTracking =
+      t === undefined || (wouldClearTracking && u.clearTracking !== true);
+    if (!skipTracking && t !== cur.tracking_number) {
       patch.tracking_number = t;
       changes.tracking_number = { from: cur.tracking_number, to: t };
     }
@@ -429,6 +442,22 @@ export async function updateLabCase(
   for (const [k, v] of Object.entries(next)) {
     const prev = (current as Record<string, unknown>)[k];
     if (prev !== v) changes[k] = { from: prev, to: v };
+  }
+
+  // NULL-OVERWRITE GUARD: this is a full-payload diff, so a blank tracking #/
+  // accession in the form would write null over a good existing value (an
+  // un-hydrated form, a stale render, or an accidentally-cleared box — the
+  // recurring "I typed the accession and it vanished" bug, which also drops the
+  // case out of the scrape feed since open-cases gates on lab_external_ref).
+  // Treat blank as "no change" for these protected fields; changing them means
+  // typing a new value, and clearing is an explicit action (Wrong-PDF for
+  // accession).
+  for (const k of ["tracking_number", "lab_external_ref"] as const) {
+    const prev = (current as Record<string, unknown>)[k];
+    if (update[k] == null && prev != null) {
+      delete update[k];
+      delete changes[k];
+    }
   }
 
   // Entering a tracking # does NOT tick step 1 ("Sample sent") — it moves the
@@ -1383,10 +1412,14 @@ export async function getLabCase(caseId: string): Promise<LabCase | null> {
 export type LabCaseView = "active" | "archived" | "deleted";
 
 export type LabCaseFilters = {
-  /** Free-text query — matches patient_name, patient_email, tracking_number. */
+  /** Free-text query — matches patient_name, patient_email, tracking_number,
+   *  and the lab/test (lab_name, lab_panel, zenoti_service_name) so you can
+   *  search by a specific test like "eboo waste". */
   q?: string;
   /** Exact lab_name match. */
   lab?: string;
+  /** Exact test/panel match (the panelFor() label sent by the test dropdown). */
+  test?: string;
   /** Time window — restrict to cases whose collection (service) date falls within the last N days. */
   sinceDays?: number;
 };
@@ -1396,6 +1429,79 @@ function escapePostgrestPattern(s: string): string {
   // inject their own pattern, and escape commas/parens which terminate the
   // filter expression.
   return s.replace(/[*,()]/g, "");
+}
+
+// Columns the free-text `q` search matches — ONE list shared by every board's
+// search box (listLabCases + listRecordsCases) so a new searchable field can't
+// be added to one and forgotten on the other. lab_name/lab_panel/
+// zenoti_service_name make a specific test (e.g. "eboo waste") findable.
+const Q_SEARCH_COLUMNS = [
+  "patient_name",
+  "patient_email",
+  "tracking_number",
+  "lab_name",
+  "lab_panel",
+  "zenoti_service_name",
+] as const;
+
+function qSearchOr(pattern: string): string {
+  return Q_SEARCH_COLUMNS.map((c) => `${c}.ilike.${pattern}`).join(",");
+}
+
+// Distinct-label dedup shared by the lab and test dropdowns: collapse case/
+// format variants of a label under `keyOf`, and surface the spelling used by
+// the most cases (ties broken alphabetically). One source of truth for both
+// dropdowns so a normalization tweak can't drift between them.
+function mostCommonByKey<T>(
+  rows: T[],
+  pick: (r: T) => string | null | undefined,
+  keyOf: (label: string) => string,
+): string[] {
+  const groups = new Map<string, Map<string, number>>();
+  for (const r of rows) {
+    const label = pick(r)?.trim();
+    if (!label) continue;
+    const key = keyOf(label);
+    const counts = groups.get(key) ?? new Map<string, number>();
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+    groups.set(key, counts);
+  }
+  const labels: string[] = [];
+  for (const counts of groups.values()) {
+    const best = [...counts.entries()].sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+    )[0];
+    if (best) labels.push(best[0]);
+  }
+  return labels.sort((a, b) => a.localeCompare(b));
+}
+
+// The test/panel filter narrows server-side on a SAFE token (the panel's first
+// word) so we filter the whole table — not just the row-capped page — then the
+// caller refines in JS with testGroupLabel (the exact group can't be one
+// PostgREST clause: the panel may live in lab_panel OR be parsed from
+// zenoti_service_name, and all peptides fold into one group). The token match is
+// always a superset of the precise match, so the JS refine never loses a row.
+function narrowByTestToken<B extends { or(filters: string): B }>(
+  builder: B,
+  test: string,
+): B {
+  const token = escapePostgrestPattern(test.trim().split(/\s+/)[0] ?? "");
+  if (!token) return builder;
+  const pat = `*${token}*`;
+  return builder.or(
+    [
+      `lab_name.ilike.${pat}`,
+      `lab_panel.ilike.${pat}`,
+      `zenoti_service_name.ilike.${pat}`,
+    ].join(","),
+  );
+}
+
+function rowsMatchingTest(rows: LabCase[], test: string | undefined): LabCase[] {
+  const key = test?.trim() ? normalizeTestKey(test) : "";
+  if (!key) return rows;
+  return rows.filter((c) => normalizeTestKey(testGroupLabel(c)) === key);
 }
 
 export async function listLabCases(opts: {
@@ -1420,14 +1526,7 @@ export async function listLabCases(opts: {
 
   const q = opts.filters?.q?.trim();
   if (q) {
-    const pattern = `*${escapePostgrestPattern(q)}*`;
-    filtered = filtered.or(
-      [
-        `patient_name.ilike.${pattern}`,
-        `patient_email.ilike.${pattern}`,
-        `tracking_number.ilike.${pattern}`,
-      ].join(","),
-    );
+    filtered = filtered.or(qSearchOr(`*${escapePostgrestPattern(q)}*`));
   }
 
   const lab = opts.filters?.lab?.trim();
@@ -1438,6 +1537,9 @@ export async function listLabCases(opts: {
     const base = lab.split("·")[0].trim().replace(/[%_\\]/g, (m) => `\\${m}`);
     filtered = filtered.ilike("lab_name", `${base}%`);
   }
+
+  const test = opts.filters?.test?.trim();
+  if (test) filtered = narrowByTestToken(filtered, test);
 
   const sinceDays = opts.filters?.sinceDays;
   if (typeof sinceDays === "number" && sinceDays > 0) {
@@ -1453,7 +1555,10 @@ export async function listLabCases(opts: {
     ascending: false,
   });
   if (error) throw new Error(error.message);
-  return (data ?? []) as LabCase[];
+  // Precise test/panel match (the server-side narrowing above is only a coarse
+  // superset). normalizeTestKey keeps this in lock-step with the dropdown's
+  // option grouping so no whitespace/case variant is silently dropped.
+  return rowsMatchingTest((data ?? []) as LabCase[], test);
 }
 
 /**
@@ -1482,15 +1587,7 @@ export async function listRecordsCases(opts?: {
 
   const q = opts?.filters?.q?.trim();
   if (q) {
-    const pattern = `*${escapePostgrestPattern(q)}*`;
-    filtered = filtered.or(
-      [
-        `patient_name.ilike.${pattern}`,
-        `patient_email.ilike.${pattern}`,
-        `tracking_number.ilike.${pattern}`,
-        `lab_name.ilike.${pattern}`,
-      ].join(","),
-    );
+    filtered = filtered.or(qSearchOr(`*${escapePostgrestPattern(q)}*`));
   }
 
   const lab = opts?.filters?.lab?.trim();
@@ -1498,6 +1595,9 @@ export async function listRecordsCases(opts?: {
     const base = lab.split("·")[0].trim().replace(/[%_\\]/g, (m) => `\\${m}`);
     filtered = filtered.ilike("lab_name", `${base}%`);
   }
+
+  const test = opts?.filters?.test?.trim();
+  if (test) filtered = narrowByTestToken(filtered, test);
 
   const sinceDays = opts?.filters?.sinceDays;
   if (typeof sinceDays === "number" && sinceDays > 0) {
@@ -1514,7 +1614,8 @@ export async function listRecordsCases(opts?: {
     nullsFirst: false,
   });
   if (error) throw new Error(error.message);
-  return (data ?? []) as LabCase[];
+  // Precise test/panel match — shared with listLabCases (same source of truth).
+  return rowsMatchingTest((data ?? []) as LabCase[], test);
 }
 
 /** Distinct lab names across non-deleted cases — for the filter dropdown. */
@@ -1560,27 +1661,37 @@ export async function listDistinctLabNames(): Promise<string[]> {
     .is("deleted_at", null);
   if (error) throw new Error(error.message);
 
-  // Collapse case/format variants of the same lab so the filter dropdown shows
-  // ONE entry per lab. Group by labGroupKey; the spelling used by the most cases
-  // becomes the display label (ties broken alphabetically). The picker sends
-  // that label and listLabCases matches every variant of it (prefix ilike).
-  const groups = new Map<string, Map<string, number>>();
-  for (const row of (data ?? []) as Array<{ lab_name: string }>) {
-    const name = row.lab_name?.trim();
-    if (!name) continue;
-    const key = labGroupKey(name);
-    const counts = groups.get(key) ?? new Map<string, number>();
-    counts.set(name, (counts.get(name) ?? 0) + 1);
-    groups.set(key, counts);
-  }
-  const labels: string[] = [];
-  for (const counts of groups.values()) {
-    const best = [...counts.entries()].sort(
-      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
-    )[0];
-    if (best) labels.push(best[0]);
-  }
-  return labels.sort((a, b) => a.localeCompare(b));
+  // Collapse case/format variants of the same lab so the dropdown shows ONE
+  // entry per lab (most-common spelling wins). The picker sends that label and
+  // listLabCases matches every variant of it (prefix ilike).
+  return mostCommonByKey(
+    (data ?? []) as Array<{ lab_name: string }>,
+    (r) => r.lab_name,
+    labGroupKey,
+  );
+}
+
+/** Distinct test/panel labels for the test filter dropdown. Keys on the test
+ *  group (via testGroupLabel, which recovers the panel from lab_panel or the
+ *  Zenoti service string and folds all peptides into "Peptides"), normalized by
+ *  normalizeTestKey — the SAME key listLabCases matches on, so the option and
+ *  the cases it represents can never disagree. */
+export async function listDistinctPanels(): Promise<string[]> {
+  await requireSignedIn();
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("lab_cases")
+    .select("lab_name, lab_panel, zenoti_service_name")
+    .is("deleted_at", null);
+  if (error) throw new Error(error.message);
+
+  return mostCommonByKey(
+    (data ?? []) as Array<
+      Pick<LabCase, "lab_name" | "lab_panel" | "zenoti_service_name">
+    >,
+    (r) => testGroupLabel(r),
+    normalizeTestKey,
+  );
 }
 
 export type PatientSummary = {

@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useDismiss } from "./use-dismiss";
+import { ToolbarSelect } from "./ToolbarSelect";
 
 // Merge-view state shared with LabKanbanBoard: the menu (toolbar, left of the
 // search bar) WRITES ?merge= + localStorage; the board only READS. The URL
@@ -31,9 +31,6 @@ const OPTIONS: Array<{ mode: MergeMode; title: string }> = [
 export function MergeViewMenu() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-  useDismiss(wrapRef, open, () => setOpen(false));
 
   const param = searchParams.get("merge");
   const [stored, setStored] = useState<MergeMode>("dupes");
@@ -48,7 +45,6 @@ export function MergeViewMenu() {
   const mode: MergeMode = isMergeMode(param) ? param : stored;
 
   function pick(next: MergeMode) {
-    setOpen(false);
     setStored(next);
     try {
       window.localStorage.setItem(MERGE_STORAGE_KEY, next);
@@ -61,39 +57,18 @@ export function MergeViewMenu() {
   }
 
   return (
-    <div ref={wrapRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        title="How cards collapse together on the board"
-        className={`rounded-md border px-2.5 py-1.5 text-xs font-medium ${
-          mode !== "off"
-            ? "border-purple-300 bg-purple-50 text-purple-800 hover:bg-purple-100"
-            : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50"
-        }`}
-      >
-        Merge: {MERGE_LABEL[mode]} ▾
-      </button>
-      {open ? (
-        <div className="absolute left-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-md border border-zinc-200 bg-white py-0.5 shadow-lg">
-          {OPTIONS.map((o) => (
-            <button
-              key={o.mode}
-              type="button"
-              onClick={() => pick(o.mode)}
-              title={o.title}
-              className={`flex w-full items-center justify-between px-2.5 py-1.5 text-left text-xs ${
-                mode === o.mode
-                  ? "bg-purple-50 font-medium text-purple-800"
-                  : "text-zinc-700 hover:bg-zinc-50"
-              }`}
-            >
-              <span>{MERGE_LABEL[o.mode]}</span>
-              {mode === o.mode ? <span>✓</span> : null}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </div>
+    <ToolbarSelect
+      ariaLabel="Merge view"
+      prefix="Merge"
+      title="How cards collapse together on the board"
+      active={mode !== "off"}
+      value={mode}
+      options={OPTIONS.map((o) => ({
+        value: o.mode,
+        label: MERGE_LABEL[o.mode],
+        title: o.title,
+      }))}
+      onChange={(v) => pick(v as MergeMode)}
+    />
   );
 }

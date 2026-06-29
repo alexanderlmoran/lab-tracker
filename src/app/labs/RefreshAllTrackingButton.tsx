@@ -39,7 +39,7 @@ export function RefreshAllTrackingButton() {
         type="button"
         onClick={onClick}
         disabled={pending}
-        className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+        className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
       >
         {pending ? "Polling…" : "Refresh all tracking"}
       </button>

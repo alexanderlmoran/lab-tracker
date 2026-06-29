@@ -1,5 +1,10 @@
 import { requireUser } from "@/lib/auth-guard";
-import { listDistinctLabNames, listLabCases, listPatientCases } from "./actions";
+import {
+  listDistinctLabNames,
+  listDistinctPanels,
+  listLabCases,
+  listPatientCases,
+} from "./actions";
 import { listCaseIdsWithPendingPdf } from "./pdf-actions";
 import { getCardCountsForCases } from "./draw-actions";
 import { parseSinceKey, sinceDaysForKey } from "./time-range";
@@ -10,6 +15,7 @@ import { LabsTabs, type LabsTab } from "./LabsTabs";
 import { TimeRangeTabs } from "./TimeRangeTabs";
 import { SearchBar } from "./SearchBar";
 import { LabFilterSelect } from "./LabFilterSelect";
+import { TestFilterSelect } from "./TestFilterSelect";
 import { DateGroupToggle } from "./DateGroupToggle";
 import { MergeViewMenu } from "./MergeViewMenu";
 import { KanbanFilterChips } from "./KanbanFilterChips";
@@ -37,13 +43,14 @@ export default async function LabsPage({
   const sp = await searchParams;
   const q = firstString(sp.q);
   const lab = firstString(sp.lab);
+  const test = firstString(sp.test);
   const tabParam = firstString(sp.tab);
   const tab: LabsTab =
     tabParam === "patients" || tabParam === "tracking" ? tabParam : "labs";
   const sinceParam = firstString(sp.since);
   const since = parseSinceKey(sinceParam);
   const sinceDays = sinceDaysForKey(since);
-  const hasFilters = Boolean(q || lab || sinceDays);
+  const hasFilters = Boolean(q || lab || test || sinceDays);
   const focusedPatient = tab === "patients" ? firstString(sp.patient) ?? null : null;
 
   // Patient-focus mode pulls a single patient's full history (active +
@@ -53,22 +60,26 @@ export default async function LabsPage({
   // Archived cases populate the "Completed" lane on the By-Lab board.
   // We honor the same time-window filter so the lane doesn't unbound
   // ("All time" still shows them all).
-  const [activeCases, archivedCases, labNames, focusedCases] = await Promise.all([
-    focusedPatient
-      ? Promise.resolve([])
-      : listLabCases({
-          view: "active",
-          filters: { q, lab, sinceDays: sinceDays ?? undefined },
-        }),
-    focusedPatient
-      ? Promise.resolve([])
-      : listLabCases({
-          view: "archived",
-          filters: { q, lab, sinceDays: sinceDays ?? undefined },
-        }),
-    listDistinctLabNames(),
-    focusedPatient ? listPatientCases(focusedPatient) : Promise.resolve([]),
-  ]);
+  const [activeCases, archivedCases, labNames, panelNames, focusedCases] =
+    await Promise.all([
+      focusedPatient
+        ? Promise.resolve([])
+        : listLabCases({
+            view: "active",
+            filters: { q, lab, test, sinceDays: sinceDays ?? undefined },
+          }),
+      focusedPatient
+        ? Promise.resolve([])
+        : listLabCases({
+            view: "archived",
+            filters: { q, lab, test, sinceDays: sinceDays ?? undefined },
+          }),
+      // The lab/test dropdowns only render off the patients tab — skip the two
+      // full-table scans that feed them when they won't be shown.
+      tab === "patients" ? Promise.resolve([]) : listDistinctLabNames(),
+      tab === "patients" ? Promise.resolve([]) : listDistinctPanels(),
+      focusedPatient ? listPatientCases(focusedPatient) : Promise.resolve([]),
+    ]);
   // By-Lab board includes archived (they sit in the "Completed" lane).
   // Tracking board only cares about active shipments — archived would
   // clutter it. HudPulse and the count chip reflect active-only.
@@ -105,21 +116,22 @@ export default async function LabsPage({
 
       <main className="mx-auto flex w-full max-w-screen-2xl flex-1 flex-col px-4 pb-16 pt-3 lg:min-h-0 lg:pb-4">
         <InboxNotice count={unreadInbox} />
-        <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+        <div className="mb-3 flex flex-wrap items-center gap-x-1.5 gap-y-1.5">
           <CaseDialog
             mode="create"
             triggerLabel="+ New case"
-            triggerClassName="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-zinc-800"
+            triggerClassName="rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-zinc-800"
           />
           <LabsTabs tab={tab} />
           {!isPatientFocus ? (
             <>
               {tab === "labs" ? <MergeViewMenu /> : null}
               {tab === "labs" ? <DateGroupToggle /> : null}
-              <div className="min-w-[180px] max-w-md flex-1">
+              <div className="min-w-[160px] max-w-xs flex-1">
                 <SearchBar />
               </div>
               <LabFilterSelect labNames={labNames} />
+              <TestFilterSelect panels={panelNames} />
               <TimeRangeTabs since={since} />
               {tab === "labs" ? <KanbanFilterChips /> : null}
               <RefreshAllTrackingButton />

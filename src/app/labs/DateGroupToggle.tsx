@@ -26,7 +26,7 @@ export function DateGroupToggle() {
     <button
       type="button"
       onClick={toggle}
-      className={`shrink-0 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+      className={`shrink-0 rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
         off
           ? "border-zinc-300 bg-white text-zinc-400 line-through hover:bg-zinc-50"
           : "border-orange-300 bg-orange-50 text-orange-800"

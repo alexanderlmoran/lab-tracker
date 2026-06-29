@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
+import { ToolbarSelect } from "./ToolbarSelect";
 
 export type LabsTab = "patients" | "labs" | "tracking";
 
@@ -35,9 +36,10 @@ export function LabsTabs({ tab }: { tab: LabsTab }) {
     if (next !== "patients") {
       params.delete("patient");
     } else {
-      // Free-text q/lab filters don't apply to single-patient focus.
+      // Free-text q / lab / test filters don't apply to single-patient focus.
       params.delete("q");
       params.delete("lab");
+      params.delete("test");
     }
     const qs = params.toString();
     startTransition(() => {
@@ -45,28 +47,15 @@ export function LabsTabs({ tab }: { tab: LabsTab }) {
     });
   }
 
+  // Collapsed into a single dropdown (was a 3-button pill group) to keep the
+  // whole toolbar on one row — shares the ToolbarSelect look with every other
+  // toolbar dropdown.
   return (
-    <div
-      role="tablist"
-      aria-label="View"
-      className="inline-flex rounded-md border border-zinc-200 bg-white p-0.5"
-    >
-      {TABS.map((t) => (
-        <button
-          key={t.key}
-          type="button"
-          role="tab"
-          aria-selected={t.key === tab}
-          onClick={() => select(t.key)}
-          className={`rounded-[5px] px-3 py-1 text-xs font-medium transition-colors ${
-            t.key === tab
-              ? "bg-zinc-900 text-white"
-              : "text-zinc-600 hover:bg-zinc-100"
-          }`}
-        >
-          {t.label}
-        </button>
-      ))}
-    </div>
+    <ToolbarSelect
+      ariaLabel="View"
+      value={tab}
+      options={TABS.map((t) => ({ value: t.key, label: t.label }))}
+      onChange={(v) => select(v as LabsTab)}
+    />
   );
 }

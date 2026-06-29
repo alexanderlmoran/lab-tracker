@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
+import { ToolbarSelect } from "./ToolbarSelect";
 
 /**
  * "All labs" lab-name filter — URL-driven (?lab=). Split out of SearchBar so it
@@ -23,18 +24,15 @@ export function LabFilterSelect({ labNames }: { labNames: string[] }) {
   }
 
   return (
-    <select
+    <ToolbarSelect
+      ariaLabel="Lab filter"
+      active={!!lab}
       value={lab}
-      onChange={(e) => onChange(e.target.value)}
-      aria-label="Lab filter"
-      className="shrink-0 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 focus:border-zinc-500 focus:outline-none"
-    >
-      <option value="">All labs</option>
-      {labNames.map((name) => (
-        <option key={name} value={name}>
-          {name}
-        </option>
-      ))}
-    </select>
+      options={[
+        { value: "", label: "All labs" },
+        ...labNames.map((name) => ({ value: name, label: name })),
+      ]}
+      onChange={onChange}
+    />
   );
 }

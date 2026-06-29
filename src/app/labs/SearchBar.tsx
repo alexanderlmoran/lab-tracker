@@ -29,31 +29,42 @@ export function SearchBar() {
 
   function onClear() {
     setQ("");
+    // Clear only the search-related filters (text + lab + test); leave the time
+    // range, merge view, date grouping and tab intact so the board doesn't
+    // silently snap back to defaults the user didn't touch.
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("q");
+    params.delete("lab");
+    params.delete("test");
+    const next = params.toString();
     startTransition(() => {
-      router.replace("/labs");
+      router.replace(next ? `/labs?${next}` : "/labs");
     });
   }
 
-  // Show Clear when the search text OR the (now-separate) lab filter is active —
-  // Clear still resets everything.
-  const hasFilters = q.length > 0 || !!searchParams.get("lab");
+  // Show the clear-X when the search text OR the (now-separate) lab / test
+  // filters are active — clearing still resets everything.
+  const hasFilters =
+    q.length > 0 || !!searchParams.get("lab") || !!searchParams.get("test");
 
   return (
-    <div className="flex w-full flex-wrap items-center gap-2">
+    <div className="relative flex w-full items-center">
       <input
-        type="search"
+        type="text"
         value={q}
         onChange={(e) => setQ(e.target.value)}
-        placeholder="Search patient name, email, or tracking #"
-        className="min-w-[200px] flex-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none"
+        placeholder="Search name, email, test, or tracking #"
+        className="w-full min-w-[180px] rounded-md border border-zinc-300 bg-white py-1.5 pl-2.5 pr-8 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none"
       />
       {hasFilters ? (
         <button
           type="button"
           onClick={onClear}
-          className="rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50"
+          aria-label="Clear search"
+          title="Clear search"
+          className="absolute right-1.5 flex h-5 w-5 items-center justify-center rounded text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
         >
-          Clear
+          ✕
         </button>
       ) : null}
     </div>
