@@ -20,7 +20,6 @@ const COLUMN_DEFINING_STEPS: Record<ColumnKey, StepNumber[]> = {
   // step-based column jump. No defining step ⇒ not offered in the move menu.
   with_patient: [],
   sample_sent: [1],
-  partial_results: [3],
   complete_results: [5],
   // pending_upload is a derived state (PDF attached, awaiting Approve click);
   // it's not a drag-and-drop target — staff resolves it via the approval modal.
@@ -71,7 +70,6 @@ export function isForwardJump(from: ColumnKey, to: ColumnKey): boolean {
     "ready_to_ship",
     "with_patient",
     "sample_sent",
-    "partial_results",
     "complete_results",
     "rof_scheduled",
     "rof_done",
