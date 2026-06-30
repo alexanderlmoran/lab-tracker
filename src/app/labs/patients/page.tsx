@@ -3,9 +3,38 @@ import { requireUser } from "@/lib/auth-guard";
 import { listPatients } from "../actions";
 import { formatPersonName } from "@/lib/format";
 import { PatientSearch } from "./PatientSearch";
+import { PatientSortHeader } from "./PatientSortHeader";
 import { HudPulse } from "../HudPulse";
 
 export const dynamic = "force-dynamic";
+
+type PatientRow = Awaited<ReturnType<typeof listPatients>>[number];
+
+/** last|first, normalized — the dupe-detection key. */
+function nameKey(name: string): string {
+  const n = name.toLowerCase().replace(/[^a-z,\s]/g, " ").replace(/\s+/g, " ").trim();
+  if (!n) return "";
+  if (n.includes(",")) {
+    const [last, rest = ""] = n.split(",");
+    return `${last.trim()}|${(rest.trim().split(/\s+/)[0] ?? "")}`;
+  }
+  const toks = n.split(/\s+/);
+  return `${toks[toks.length - 1]}|${toks[0] ?? ""}`;
+}
+
+/** Groups of patients that share a name but have DIFFERENT emails — likely the
+ *  same person split across logins/typos. Read-only surface for human review. */
+function potentialDuplicates(patients: PatientRow[]): PatientRow[][] {
+  const groups = new Map<string, PatientRow[]>();
+  for (const p of patients) {
+    const k = nameKey(p.patient_name);
+    if (!k || !k.includes("|") || k.split("|").some((x) => !x)) continue;
+    (groups.get(k) ?? groups.set(k, []).get(k)!).push(p);
+  }
+  return [...groups.values()]
+    .filter((g) => new Set(g.map((p) => p.patient_email.toLowerCase())).size > 1)
+    .sort((a, b) => b.length - a.length);
+}
 
 function firstString(v: string | string[] | undefined): string | undefined {
   if (Array.isArray(v)) return v[0];
@@ -30,6 +59,19 @@ export default async function PatientsPage({
   const q = firstString(sp.q);
   const patients = await listPatients({ q });
 
+  // Sort (URL-driven; default activity-desc).
+  const psort = firstString(sp.psort) ?? "activity";
+  const pdir = firstString(sp.pdir) === "asc" ? 1 : -1;
+  const sorted = [...patients].sort((a, b) => {
+    let c = 0;
+    if (psort === "name") c = formatPersonName(a.patient_name).localeCompare(formatPersonName(b.patient_name));
+    else if (psort === "cases") c = a.case_count - b.case_count;
+    else c = a.last_activity_at.localeCompare(b.last_activity_at);
+    return c === 0 ? 0 : c * pdir;
+  });
+
+  const dupes = potentialDuplicates(patients);
+
   return (
     <div className="min-h-dvh bg-zinc-50">
       <HudPulse user={user} />
@@ -47,6 +89,35 @@ export default async function PatientsPage({
           <PatientSearch />
         </div>
 
+        {dupes.length > 0 ? (
+          <details className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <summary className="cursor-pointer text-xs font-semibold text-amber-900">
+              {dupes.length} potential duplicate{dupes.length === 1 ? "" : "s"} — same name, different emails (review &amp; merge)
+            </summary>
+            <ul className="mt-2 space-y-2">
+              {dupes.map((group) => (
+                <li key={nameKey(group[0].patient_name)} className="rounded-md border border-amber-200 bg-white p-2">
+                  <div className="text-xs font-semibold text-zinc-900">{formatPersonName(group[0].patient_name)}</div>
+                  <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-zinc-600">
+                    {group.map((p) => (
+                      <Link
+                        key={p.patient_email.toLowerCase()}
+                        href={`/labs/patients/${encodeURIComponent(p.patient_email.toLowerCase())}`}
+                        className="hover:underline"
+                      >
+                        {p.patient_email} <span className="text-zinc-400">({p.case_count} case{p.case_count === 1 ? "" : "s"})</span>
+                      </Link>
+                    ))}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-[11px] text-amber-700">
+              Merge isn&rsquo;t wired yet — this just surfaces likely dupes for a human to confirm. (Merge action coming next.)
+            </p>
+          </details>
+        ) : null}
+
         {patients.length === 0 ? (
           <div className="rounded-lg border border-dashed border-zinc-300 bg-white p-12 text-center">
             <p className="text-sm text-zinc-600">No patients match.</p>
@@ -56,17 +127,15 @@ export default async function PatientsPage({
             <table className="w-full text-sm">
               <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase tracking-wide text-zinc-600">
                 <tr>
-                  <th className="px-4 py-2 text-left font-semibold">Patient</th>
+                  <PatientSortHeader field="name" label="Patient" />
                   <th className="px-4 py-2 text-left font-semibold">Email</th>
                   <th className="px-4 py-2 text-left font-semibold">Phone</th>
-                  <th className="px-4 py-2 text-right font-semibold">Cases</th>
-                  <th className="px-4 py-2 text-left font-semibold">
-                    Last activity
-                  </th>
+                  <PatientSortHeader field="cases" label="Cases" align="right" />
+                  <PatientSortHeader field="activity" label="Last activity" />
                 </tr>
               </thead>
               <tbody>
-                {patients.map((p) => (
+                {sorted.map((p) => (
                   <tr
                     key={p.patient_email.toLowerCase()}
                     className="border-b border-zinc-100 last:border-b-0 hover:bg-zinc-50"
