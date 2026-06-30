@@ -339,7 +339,7 @@
      truncating — the dot tops-aligns beside line one. */
   align-items: flex-start;
   line-height: 1.2;
-  gap: 7px;
+  gap: 5px;
 }
 /* Count-in-dot — the lane count lives INSIDE the accent dot (the separate
    right-side count chip is gone). Tinted bg + dark colored numeral so even
@@ -348,16 +348,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 19px;
-  height: 17px;
-  padding: 0 5px;
+  min-width: 15px;
+  height: 14px;
+  padding: 0 4px;
   border-radius: 999px;
   background: color-mix(in oklab, var(--col-c) 28%, #ffffff);
   color: color-mix(in oklab, var(--col-c) 55%, #0a0a0b);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0;
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--col-c) 20%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--col-c) 20%, transparent);
   flex-shrink: 0;
 }
 .kanban-col .col-count-dot--alert {

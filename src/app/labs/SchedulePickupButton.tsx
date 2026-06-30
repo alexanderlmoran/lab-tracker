@@ -6,6 +6,7 @@ import { carrierForCase } from "@/lib/labs/carrier";
 import { awaitingPickup } from "@/lib/labs/pickup";
 import { formatPersonName } from "@/lib/format";
 import { scheduleFedexPickup } from "./tracking-actions";
+import { toolbarBtn } from "./toolbar-styles";
 
 // Board-level "Schedule pickup" — books ONE FedEx pickup (one API call per
 // Book click) from the clinic for the day's outbound lab samples and STAMPS
@@ -71,7 +72,7 @@ export function SchedulePickupButton({ cases }: { cases: LabCase[] }) {
       <button
         type="button"
         onClick={openDialog}
-        className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+        className={toolbarBtn()}
         title="Book a FedEx pickup from the clinic for today's samples"
       >
         Schedule pickup{fedex.length ? ` (${fedex.length})` : ""}

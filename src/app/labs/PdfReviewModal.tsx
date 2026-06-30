@@ -14,6 +14,10 @@ export type PdfReviewModalProps = {
   pdf: PendingPdf;
   /** Optional patient label for the modal header. */
   patientName?: string;
+  /** Read-only viewer (no approve/disapprove) — used to re-view an already-
+   *  uploaded result in the lanes right of Pending Upload. Hides the review
+   *  controls, mismatch banners and reference panel; just shows + downloads. */
+  readOnly?: boolean;
   onClose: (result: {
     actionTaken: "approved" | "wrong_pdf" | "already_uploaded" | "retry" | "cancel";
   }) => void;
@@ -21,7 +25,14 @@ export type PdfReviewModalProps = {
 
 type PendingAction = "approve" | "wrong_pdf" | "already_uploaded" | "retry" | null;
 
-export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProps) {
+// Supabase signed URLs honor a `&download=` param → Content-Disposition
+// attachment, so the browser saves the file (cross-origin `download` attrs are
+// ignored). The signed URL already carries `?token=`, so append with `&`.
+function downloadHref(pdf: PendingPdf): string {
+  return `${pdf.signedUrl}&download=${encodeURIComponent(pdf.filename ?? "result.pdf")}`;
+}
+
+export function PdfReviewModal({ pdf, patientName, readOnly = false, onClose }: PdfReviewModalProps) {
   const [error, setError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [notesOpen, setNotesOpen] = useState(false);
@@ -138,32 +149,42 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
         <div className="flex items-start justify-between gap-3 border-b border-zinc-200 bg-zinc-50 px-4 py-3">
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold text-zinc-900">
-              Review lab result{patientName ? ` — ${patientName}` : ""}
+              {readOnly ? "Result PDF" : "Review lab result"}
+              {patientName ? ` — ${patientName}` : ""}
             </h2>
             <p className="mt-0.5 truncate text-[11px] text-zinc-500">{headerSubtitle}</p>
-            {pdf.hadUploadFailure && pdf.lastUploadError ? (
+            {!readOnly && pdf.hadUploadFailure && pdf.lastUploadError ? (
               <p className="mt-1 truncate rounded border border-red-200 bg-red-50 px-2 py-0.5 text-[10.5px] text-red-700">
                 Last PB upload failed: {pdf.lastUploadError}
               </p>
             ) : null}
           </div>
-          <button
-            ref={closeBtnRef}
-            type="button"
-            className="shrink-0 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11px] text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
-            disabled={isPending}
-            onClick={() => onClose({ actionTaken: "cancel" })}
-            aria-label="Close"
-          >
-            Close
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <a
+              href={downloadHref(pdf)}
+              className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50"
+              title="Download this PDF"
+            >
+              ⬇ Download
+            </a>
+            <button
+              ref={closeBtnRef}
+              type="button"
+              className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11px] text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+              disabled={isPending}
+              onClick={() => onClose({ actionTaken: "cancel" })}
+              aria-label="Close"
+            >
+              Close
+            </button>
+          </div>
         </div>
 
         {/* ── RED: wrong-patient guard (the incident this screen prevents) ──
          *  The report's patient differs from the case patient. Approve is
          *  disabled; the only way through is to retype the case patient's name
          *  (an explicit "I verified this really is them" override). */}
-        {patientMismatch ? (
+        {!readOnly && patientMismatch ? (
           <div className="border-b border-red-400 bg-red-100 px-4 py-2.5 text-red-900">
             <div className="flex items-start gap-2 text-[12.5px] font-semibold">
               <span aria-hidden className="text-base leading-none">⚠</span>
@@ -193,7 +214,7 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
               ) : null}
             </div>
           </div>
-        ) : accMismatch ? (
+        ) : !readOnly && accMismatch ? (
           /* ── AMBER: names match but the accession differs (legit stale
            *  accession). Names matching = same patient, so this is a one-click
            *  confirm, not a name-typing gate. Approve stays enabled. */
@@ -211,7 +232,9 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
 
         {/* ── Body: reference panel + PDF, side by side ─────────────── */}
         <div className="flex min-h-0 flex-1 overflow-hidden">
-          {/* Left: what the tracker says this case should be. */}
+          {/* Left: what the tracker says this case should be. Hidden in the
+           *  read-only viewer — the PDF was already verified at approve time. */}
+          {!readOnly ? (
           <aside className="w-64 shrink-0 overflow-y-auto border-r border-zinc-200 bg-white px-4 py-3">
             <h3 className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
               Tracker says
@@ -300,6 +323,7 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
               </div>
             </dl>
           </aside>
+          ) : null}
 
           {/* Right: the PDF itself. */}
           <div className="flex-1 overflow-hidden bg-zinc-100">
@@ -312,6 +336,7 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
         </div>
 
         {/* ── Optional notes field ────────────────────────────────── */}
+        {!readOnly ? (
         <div className="border-t border-zinc-200 bg-white px-4 py-2">
           {notesOpen ? (
             <textarea
@@ -333,8 +358,10 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
             </button>
           )}
         </div>
+        ) : null}
 
-        {/* ── Action bar ───────────────────────────────────────────── */}
+        {/* ── Action bar — review actions only; hidden in read-only viewer ── */}
+        {!readOnly ? (
         <div className="flex items-center justify-between gap-3 border-t border-zinc-200 bg-zinc-50 px-4 py-3">
           <div className="text-[11px] text-zinc-500">
             {error ? (
@@ -392,6 +419,7 @@ export function PdfReviewModal({ pdf, patientName, onClose }: PdfReviewModalProp
             </button>
           </div>
         </div>
+        ) : null}
       </div>
     </div>
   );

@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useDismiss } from "./use-dismiss";
+import { toolbarBtn } from "./toolbar-styles";
 
 export type ToolbarOption = {
   value: string;
@@ -55,20 +56,19 @@ export function ToolbarSelect({
         aria-expanded={open}
         title={title}
         onClick={() => setOpen((v) => !v)}
-        className={`flex items-center gap-1 rounded-md border bg-zinc-900 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-zinc-800 ${
-          active ? "border-amber-400 ring-1 ring-amber-400" : "border-zinc-700"
-        } ${buttonClassName}`}
+        className={`flex items-center gap-1 ${toolbarBtn(active || open)} ${buttonClassName}`}
       >
         <span className="truncate">
           {prefix ? `${prefix}: ` : ""}
           {current?.label ?? ""}
         </span>
-        <span className="shrink-0 text-[10px] text-zinc-400">▾</span>
+        <span className="shrink-0 text-[10px] text-zinc-500">▾</span>
       </button>
       {open ? (
+        // Light CSS — the dark-theme inversion renders this as a dark menu.
         <div
           role="listbox"
-          className="absolute left-0 top-full z-30 mt-1 max-h-[60vh] w-max min-w-full max-w-[16rem] overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 py-0.5 text-xs shadow-lg"
+          className="absolute left-0 top-full z-30 mt-1 max-h-[60vh] w-max min-w-full max-w-[16rem] overflow-y-auto rounded-md border border-zinc-200 bg-white py-0.5 text-xs text-zinc-700 shadow-lg"
         >
           {options.map((o) => (
             <button
@@ -83,13 +83,13 @@ export function ToolbarSelect({
               }}
               className={`flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left ${
                 o.value === value
-                  ? "bg-zinc-700 font-medium text-white"
-                  : "text-zinc-200 hover:bg-zinc-800"
+                  ? "bg-zinc-100 font-medium text-zinc-900"
+                  : "text-zinc-700 hover:bg-zinc-50"
               }`}
             >
               <span className="truncate">{o.label}</span>
               {o.value === value ? (
-                <span className="shrink-0 text-emerald-400">✓</span>
+                <span className="shrink-0 text-emerald-600">✓</span>
               ) : null}
             </button>
           ))}

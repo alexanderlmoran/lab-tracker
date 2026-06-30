@@ -1,7 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { LabCase, StepNumber } from "@/lib/types";
 import {
@@ -49,7 +57,7 @@ const OWNER_TINT: Record<ColumnOwner, string> = {
 function OwnerBanner() {
   return (
     <div
-      className="grid gap-1.5 pb-1.5"
+      className="grid gap-1.5 -mt-[5px] pb-3"
       style={{
         gridTemplateColumns: `repeat(${LAB_BOARD_COLUMN_ORDER.length}, minmax(0, 1fr))`,
       }}
@@ -574,19 +582,24 @@ function StaticColumn({
       }`}
       data-col={col}
     >
-      {/* Full titles wrap to a second line in the narrow lanes — truncating to
-          "COMPLETE UPLO…" hid which lane was which. flex-wrap lets the
-          sort/count controls drop below the title when both can't fit (e.g.
-          an active sort pill on a long-titled column). */}
-      <header className="flex flex-wrap items-start justify-between gap-x-1 gap-y-0.5 px-1.5 py-1">
+      {/* Uniform header across all lanes: shrunk count-dot + centred title, with
+          the sort control pinned on the right (no flex-wrap, so it never drops
+          to a second line). Long titles wrap internally instead of pushing the
+          arrows down. */}
+      <header className="flex items-start gap-1 px-1.5 pb-1.5 pt-1">
         {/* Count lives INSIDE the accent dot (replaces the old right-side
             count chip — Alex, 2026-06-11). Amber when Pending Upload owes a
-            human action. */}
-        <h3 className={`col-head-title min-w-0 ${needsAction ? "text-amber-800" : ""}`}>
+            human action. flex-1 + justify-center centres the wording. */}
+        <h3
+          className={`col-head-title min-w-0 flex-1 ${needsAction ? "text-amber-800" : ""}`}
+        >
           <span className={`col-count-dot${needsAction ? " col-count-dot--alert" : ""}`}>
             {count}
           </span>
-          {COLUMN_LABEL[col]}
+          {/* Count-dot pinned left (same x in every lane); the wording centres in
+              the remaining space — so a short single-line title like "TO DO" lines
+              up with the wrapped ones (Ready to Ship / With Patient). */}
+          <span className="min-w-0 flex-1 text-center">{COLUMN_LABEL[col]}</span>
         </h3>
         <div className="flex shrink-0 items-center gap-1">
           {onSortChange ? (
@@ -594,7 +607,9 @@ function StaticColumn({
           ) : null}
         </div>
       </header>
-      <div className="flex min-h-[40px] flex-col gap-1.5 p-0.5 lg:flex-1 lg:overflow-y-auto">
+      {/* mt-1.5 buffers the column title off the first card/date-header so the
+          lane doesn't look cramped under its name. */}
+      <div className="mt-1.5 flex min-h-[40px] flex-col gap-1.5 p-0.5 lg:flex-1 lg:overflow-y-auto">
         {children}
       </div>
     </section>
@@ -737,6 +752,30 @@ export function LabKanbanBoard({
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [activeRow, setActiveRow] = useState<LabCase | null>(null);
   const [autoReview, setAutoReview] = useState(false);
+
+  // Draggable card popup (Alex, 2026-06-29). The dialog is a modal <dialog>;
+  // `dialogPos` is a translate offset from its centered home. Collapse minimizes
+  // the card to a chip docked bottom-right (`minimized`), so several can sit
+  // there and reopen on click — like minimized windows.
+  const [dialogPos, setDialogPos] = useState({ x: 0, y: 0 });
+  const [minimized, setMinimized] = useState<LabCase[]>([]);
+  const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
+  function onHeaderPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    // Let the buttons/links in the title bar work — only bare-header drags.
+    if ((e.target as HTMLElement).closest("button, a")) return;
+    dragRef.current = { sx: e.clientX, sy: e.clientY, ox: dialogPos.x, oy: dialogPos.y };
+    const onMove = (ev: PointerEvent) => {
+      const d = dragRef.current;
+      if (d) setDialogPos({ x: d.ox + (ev.clientX - d.sx), y: d.oy + (ev.clientY - d.sy) });
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
   const router = useRouter();
   const [, startMove] = useTransition();
   const [dragOverCol, setDragOverCol] = useState<ColumnKey | null>(null);
@@ -979,11 +1018,28 @@ export function LabKanbanBoard({
   function openLabDetail(row: LabCase, review = false) {
     setActiveRow(row);
     setAutoReview(review);
+    setDialogPos({ x: 0, y: 0 });
+    setMinimized((prev) => prev.filter((m) => m.id !== row.id));
     queueMicrotask(() => dialogRef.current?.showModal());
   }
   function closeDialog() {
     dialogRef.current?.close();
     setActiveRow(null);
+  }
+  // Collapse → dock the open card as a chip bottom-right (newest to the left of
+  // the previous one), and free the modal so another card can open.
+  function minimizeDialog() {
+    if (activeRow) {
+      const row = activeRow;
+      setMinimized((prev) =>
+        prev.some((m) => m.id === row.id) ? prev : [...prev, row],
+      );
+    }
+    dialogRef.current?.close();
+    setActiveRow(null);
+  }
+  function dismissMinimized(id: string) {
+    setMinimized((prev) => prev.filter((m) => m.id !== id));
   }
 
   useEffect(() => {
@@ -1009,7 +1065,10 @@ export function LabKanbanBoard({
   return (
     <div className="flex h-full flex-col">
       <OwnerBanner />
-      <div className="flex flex-row flex-nowrap gap-1.5 pb-2 lg:flex-1 lg:min-h-0">
+      {/* Permanent bottom gutter (no animated jump) — leaves just enough room for
+          the minimized-cards dock without a big gap above it (pb-8 ≈ dock height,
+          was pb-12 which left ~15px of dead space below the lanes). */}
+      <div className="flex flex-row flex-nowrap gap-1.5 pb-8 lg:flex-1 lg:min-h-0">
         {LAB_BOARD_COLUMN_ORDER.map((col) => {
           // Units actually rendered here. With merge-dupes a group's cards
           // collapse into one merged card in the group's lead column, so the
@@ -1046,7 +1105,9 @@ export function LabKanbanBoard({
               onSortChange={(s) => setColumnSort(col, s)}
             >
               {units.length === 0 ? (
-                <p className="px-2 py-3 text-[11px] text-zinc-400">—</p>
+                // Empty lane = a seamless void (the count dot in the header already
+                // shows 0). No "—" highlighted-nothing footprint.
+                null
               ) : !hideDateBreaks ? (
                 // Date sections by collection_date in EVERY column — only days that
                 // actually have labs. Toggle off via "Group by date" (?dates=off).
@@ -1075,11 +1136,17 @@ export function LabKanbanBoard({
           // a different target, so they don't close it.
           if (e.target === e.currentTarget) closeDialog();
         }}
-        className="w-full max-w-3xl rounded-lg border border-zinc-200 bg-white p-0 shadow-xl backdrop:bg-zinc-900/40"
+        style={{ transform: `translate(${dialogPos.x}px, ${dialogPos.y}px)` }}
+        className="w-full max-w-6xl rounded-lg border border-zinc-200 bg-white p-0 shadow-xl backdrop:bg-zinc-900/40"
       >
         {activeRow ? (
           <div className="flex max-h-[88dvh] flex-col">
-            <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-4">
+            {/* Title bar = drag handle. Grab anywhere on it (not the buttons) to
+                reposition the popup; the −/+ button collapses it to just this bar. */}
+            <div
+              onPointerDown={onHeaderPointerDown}
+              className="flex cursor-move touch-none select-none items-center justify-between border-b border-zinc-200 px-6 py-4"
+            >
               <div>
                 <h2 className="text-base font-semibold text-zinc-900">
                   {formatPersonName(activeRow.patient_name)}
@@ -1090,14 +1157,25 @@ export function LabKanbanBoard({
                   {COLUMN_LABEL[getColumnFor(activeRow)]}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={closeDialog}
-                aria-label="Close"
-                className="rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
-              >
-                ×
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={minimizeDialog}
+                  aria-label="Collapse to dock"
+                  title="Collapse (docks bottom-right — reopen anytime)"
+                  className="rounded px-1.5 py-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
+                >
+                  −
+                </button>
+                <button
+                  type="button"
+                  onClick={closeDialog}
+                  aria-label="Close"
+                  className="rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
+                >
+                  ×
+                </button>
+              </div>
             </div>
             <div className="overflow-y-auto px-6 py-5">
               <CaseDetail
@@ -1107,6 +1185,7 @@ export function LabKanbanBoard({
                 row={rows.find((r) => r.id === activeRow.id) ?? activeRow}
                 initialOpenAttempts={counts?.[activeRow.id]?.openAttempts ?? 0}
                 autoReview={autoReview}
+                hasPendingPdf={pendingPdfSet.has(activeRow.id)}
                 dupSiblings={dupByCaseId.get(activeRow.id)}
               />
             </div>
@@ -1128,6 +1207,37 @@ export function LabKanbanBoard({
           </div>
         ) : null}
       </dialog>
+
+      {/* Minimized cards dock — chips collect in the bottom-right corner, each
+          new one to the LEFT of the previous (flex-row-reverse). Click a chip to
+          reopen the card; × dismisses it. Light css → reads dark in dark theme. */}
+      {minimized.length ? (
+        <div className="fixed bottom-3 right-3 z-40 flex flex-row-reverse gap-2">
+          {minimized.map((m) => (
+            <div
+              key={m.id}
+              className="flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white py-1 pl-2.5 pr-1.5 text-xs shadow-lg"
+            >
+              <button
+                type="button"
+                onClick={() => openLabDetail(m)}
+                title={`Reopen ${formatPersonName(m.patient_name)}`}
+                className="max-w-[150px] truncate font-medium text-zinc-800 hover:text-zinc-950"
+              >
+                {formatPersonName(m.patient_name)}
+              </button>
+              <button
+                type="button"
+                onClick={() => dismissMinimized(m.id)}
+                aria-label="Dismiss"
+                className="rounded px-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

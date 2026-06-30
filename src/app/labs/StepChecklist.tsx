@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import type { EmailKind, LabCase, StepNumber } from "@/lib/types";
 import {
   getCaseWorkflow,
@@ -30,12 +30,16 @@ const DB_COL: Record<StepNumber, keyof LabCase> = {
 export function StepChecklist({
   initial,
   siblingCount = 0,
+  moveSiblings = true,
 }: {
   initial: LabCase;
   /** Number of same-accession sibling cards (one physical order split across
    *  cards), excluding this one. When >0, staff can opt to move the whole
    *  group together so a step toggle doesn't orphan a sibling. */
   siblingCount?: number;
+  /** Whether step toggles cascade across same-order siblings. Owned by
+   *  CaseDetail now — the checkbox moved into the Same-order panel. */
+  moveSiblings?: boolean;
 }) {
   const [c, setC] = useState<LabCase>(initial);
   const [pendingStep, setPendingStep] = useState<StepNumber | null>(null);
@@ -43,9 +47,6 @@ export function StepChecklist({
   const [wpPending, setWpPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
-  // Default ON: same-accession siblings are one order, so the common intent is
-  // to move them together (backlog #3 — moving one card left the others behind).
-  const [moveSiblings, setMoveSiblings] = useState(true);
   const emailDialogRef = useRef<EmailConfirmHandle | null>(null);
   const workflow = getCaseWorkflow(c);
   const stepsToShow = getWorkflowSteps(workflow);
@@ -174,6 +175,9 @@ export function StepChecklist({
   // status DOT + italic label + tag, so they read as state, not tickable steps.
   // "Ready to ship" is read-only (`auto` — happens when a tracking # is added);
   // "Completed" is a clickable row that archives/unarchives (`stage`).
+  // Compact rung for the 3 owner columns: checkbox + label on one tight line,
+  // and the hint (when present) on its OWN line below — small + muted — so a
+  // long hint ("tap when with the patient") never truncates into "tap…".
   function StageRow({
     label,
     hint,
@@ -190,48 +194,40 @@ export function StepChecklist({
     onChange?: (next: boolean) => void;
   }) {
     const interactive = Boolean(onChange);
-    // Render exactly like the numbered steps (checkbox + label) so Ready to ship
-    // and Completed read as real rungs of the ladder — not "auto" asides. Ready
-    // to ship is a disabled (auto) checkbox; Completed is a live archive toggle.
     return (
-      <div className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-zinc-50">
-        <label
-          className={`flex min-w-0 flex-1 items-center gap-2 ${interactive ? "cursor-pointer" : ""}`}
-        >
+      <div className="rounded-md px-1 py-1 hover:bg-zinc-50">
+        <label className={`flex min-w-0 items-center gap-1.5 ${interactive ? "cursor-pointer" : ""}`}>
           <input
             type="checkbox"
-            className="h-4 w-4 shrink-0 rounded border-zinc-300"
+            className="h-3.5 w-3.5 shrink-0 rounded border-zinc-300"
             checked={checked}
             disabled={!interactive || pending}
             onChange={(e) => onChange?.(e.target.checked)}
           />
           <span
-            className={`min-w-0 flex-1 truncate text-[13px] text-zinc-900 ${
+            className={`min-w-0 flex-1 truncate text-[11px] text-zinc-900 ${
               checked ? "line-through decoration-zinc-400" : ""
             }`}
             title={label}
           >
             {label}
-            {hint ? <span className="ml-1 text-[10px] text-zinc-500">{hint}</span> : null}
           </span>
         </label>
+        {hint ? (
+          <span className="ml-5 block text-[10px] leading-tight text-zinc-500">{hint}</span>
+        ) : null}
       </div>
     );
   }
 
-  // Split into two columns: first half (1-5) left, second half (6+) right.
-  // Indexes are 0-based here; idx + 1 stays the visible step number.
-  const midpoint = Math.ceil(stepsToShow.length / 2);
-
-  function renderStep(step: StepNumber, idx: number) {
-    const displayNum = idx + 1;
+  // A single step rung (checkbox + label + optional Send-email button). Shared
+  // by the owner columns (default) and the peptides fallback.
+  function StepRow({ step, label, hint }: { step: StepNumber; label: string; hint?: string }) {
     const checked = stepIsComplete(c, step);
-    // Step 4 is not normally an email step, but in the peptides workflow it
-    // stands in for "package received" — closure, no email. Only step 1
-    // ever fires an email there.
+    // Step 4 isn't normally an email step, but in peptides it stands in for
+    // "package received" — closure, no email. Only step 1 emails there.
     const isEmail = isEmailStep(step) && (workflow !== "peptides" || step === 1);
     const isPending = pendingStep === step;
-    const isOptional = workflow === "default" && (step === 2 || step === 3);
     const kind = isEmail ? emailKindForStep(step) : null;
     const sentAt = kind ? lastSentAt[kind] : undefined;
     const hasSent = Boolean(sentAt);
@@ -243,96 +239,134 @@ export function StepChecklist({
           minute: "2-digit",
         })}`
       : "No email sent yet — opens the confirmation dialog";
-
     return (
-      <div
-        key={step}
-        className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-zinc-50"
-      >
-        <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
-          <input
-            type="checkbox"
-            className="h-4 w-4 shrink-0 rounded border-zinc-300"
-            checked={checked}
-            disabled={isPending}
-            onChange={(e) => {
-              onToggle(step, e.target.checked);
-            }}
-          />
-          <span
-            className={`min-w-0 flex-1 truncate text-[13px] text-zinc-900 ${
-              checked ? "line-through decoration-zinc-400" : ""
-            }`}
-            title={stepLabelForWorkflow(workflow, step)}
-          >
-            {displayNum}. {stepLabelForWorkflow(workflow, step)}
-            {isOptional && !checked ? (
-              <span className="ml-1 text-[10px] text-zinc-500">(opt)</span>
-            ) : null}
-          </span>
-        </label>
-        {isEmail ? (
-          <button
-            type="button"
-            onClick={() => void onSendEmail(step)}
-            disabled={isPending}
-            className="shrink-0 rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
-            title={tooltip}
-          >
-            {hasSent ? "Resend" : "Send"}
-          </button>
+      <div className="rounded-md px-1 py-1 hover:bg-zinc-50">
+        <div className="flex items-center gap-1.5">
+          <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5">
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 shrink-0 rounded border-zinc-300"
+              checked={checked}
+              disabled={isPending}
+              onChange={(e) => onToggle(step, e.target.checked)}
+            />
+            <span
+              className={`min-w-0 flex-1 truncate text-[11px] text-zinc-900 ${
+                checked ? "line-through decoration-zinc-400" : ""
+              }`}
+              title={label}
+            >
+              {label}
+            </span>
+          </label>
+          {isEmail ? (
+            <button
+              type="button"
+              onClick={() => void onSendEmail(step)}
+              disabled={isPending}
+              className="shrink-0 rounded border border-amber-300 bg-amber-50 px-1 py-0.5 text-[10px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+              title={tooltip}
+            >
+              {hasSent ? "Resend" : "Send"}
+            </button>
+          ) : null}
+        </div>
+        {hint ? (
+          <span className="ml-5 block text-[10px] leading-tight text-zinc-500">{hint}</span>
         ) : null}
       </div>
     );
   }
 
-  return (
-    <>
-      {workflow === "default" ? (
+  // Default workflow: lay the lanes out in the SAME three owner columns as the
+  // board (Alex · Catherine/Nadia · Allison), each rung = a board lane, so the
+  // checklist mirrors the kanban exactly. Tints match the board's owner banner.
+  const ownerColumns: { owner: string; tint: string; rows: ReactNode[] }[] = [
+    {
+      owner: "Alex",
+      tint: "border-sky-200 bg-sky-100 text-sky-800",
+      rows: [
         <StageRow
+          key="rts"
           label="Ready to Ship"
-          hint={c.tracking_number ? "(auto · tracking # attached)" : "(auto · add a tracking #)"}
+          hint={c.tracking_number ? "tracking # attached" : "add a tracking #"}
           checked={Boolean(c.tracking_number)}
-        />
-      ) : null}
-      {workflow === "default" && !c.step1_sample_sent ? (
+        />,
         <StageRow
+          key="wp"
           label="With Patient"
-          hint={c.with_patient_at ? "(given to patient)" : "(tap when the kit is with the patient)"}
+          hint={c.with_patient_at ? "given to patient" : "tap when with the patient"}
           checked={Boolean(c.with_patient_at)}
           pending={wpPending}
           onChange={onToggleWithPatient}
-        />
-      ) : null}
-      <div className="grid gap-x-4 gap-y-0 lg:grid-cols-2">
-        <div className="flex flex-col">
-          {stepsToShow.slice(0, midpoint).map((step, i) => renderStep(step, i))}
-        </div>
-        <div className="flex flex-col">
-          {stepsToShow.slice(midpoint).map((step, i) =>
-            renderStep(step, i + midpoint),
-          )}
-          {/* Step 10 sits at the bottom of the right column, right after step 9. */}
+        />,
+        <StepRow key="s1" step={1} label="Sample Sent" />,
+      ],
+    },
+    {
+      owner: "Catherine / Nadia",
+      tint: "border-amber-200 bg-amber-100 text-amber-800",
+      rows: [
+        <StepRow key="s4" step={4} label="Pending Upload" />,
+        <StepRow key="s5" step={5} label="Upload Complete" />,
+      ],
+    },
+    {
+      owner: "Allison",
+      tint: "border-violet-200 bg-violet-100 text-violet-800",
+      rows: [
+        <StepRow key="s6" step={6} label="ROF Scheduled" />,
+        <StepRow key="s7" step={7} label="ROF Done" />,
+        <StepRow key="s8" step={8} label="Protocol received" />,
+        <StageRow
+          key="done"
+          label="Completed"
+          hint={c.archived_at ? "archived — click to restore" : "archive"}
+          checked={Boolean(c.archived_at)}
+          pending={archiving}
+          onChange={onToggleCompleted}
+        />,
+      ],
+    },
+  ];
+
+  return (
+    <>
+      {workflow === "peptides" ? (
+        // Peptides: shipped → received, no owner split.
+        <div className="flex max-w-sm flex-col">
+          {stepsToShow.map((step, i) => (
+            <StepRow
+              key={step}
+              step={step}
+              label={`${i + 1}. ${stepLabelForWorkflow(workflow, step)}`}
+            />
+          ))}
           <StageRow
-            label="10. Completed"
-            hint={c.archived_at ? "(archived — click to restore)" : "(archive to the Completed lane)"}
+            label="Completed"
+            hint={c.archived_at ? "archived — click to restore" : "archive"}
             checked={Boolean(c.archived_at)}
             pending={archiving}
             onChange={onToggleCompleted}
           />
         </div>
-      </div>
-      {siblingCount > 0 ? (
-        <label className="mt-1 flex items-center gap-2 px-2 text-[11px] text-purple-800">
-          <input
-            type="checkbox"
-            className="h-3.5 w-3.5 rounded border-purple-300"
-            checked={moveSiblings}
-            onChange={(e) => setMoveSiblings(e.target.checked)}
-          />
-          Move all {siblingCount + 1} same-order cards together
-        </label>
-      ) : null}
+      ) : (
+        // Three owner columns mirroring the board lanes (Alex · Catherine/Nadia ·
+        // Allison). Tight gaps maximise per-column width; compact rungs (small
+        // font, hint-on-own-line, shrunk Send buttons) keep text from clipping.
+        <div className="grid gap-x-2 gap-y-2 sm:grid-cols-3">
+          {ownerColumns.map((g) => (
+            <div key={g.owner} className="flex min-w-0 flex-col">
+              <div
+                className={`mb-2.5 rounded-md border px-1.5 py-0.5 text-center text-[10px] font-semibold uppercase tracking-wide ${g.tint}`}
+              >
+                {g.owner}
+              </div>
+              <div className="flex flex-col gap-y-0.5">{g.rows}</div>
+            </div>
+          ))}
+        </div>
+      )}
       {error ? (
         <p className="mt-1 px-2 text-xs text-red-600" role="alert">
           {error}

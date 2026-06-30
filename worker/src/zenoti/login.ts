@@ -32,8 +32,21 @@ export async function zenotiLogin(outPath: string): Promise<number> {
     await page.goto(tenant, { waitUntil: "domcontentloaded", timeout: 60_000 });
     await page.getByRole("textbox", { name: "Username" }).fill(username);
     await page.getByRole("textbox", { name: "Password" }).fill(password);
-    await page.getByRole("button", { name: "Login" }).click();
-    await page.waitForSelector("#menuLinkapptBook", { timeout: 60_000 });
+    // Submit via Enter — robust to the login button's label. The old
+    // getByRole("button", { name: "Login" }) started timing out every cycle on
+    // 2026-06-29 (Zenoti renamed/restyled it), wedging the auto-loop in a
+    // re-login retry storm. Fall back to clicking any login/sign-in/continue/
+    // submit button if Enter doesn't post the form.
+    await page.getByRole("textbox", { name: "Password" }).press("Enter");
+    try {
+      await page.waitForSelector("#menuLinkapptBook", { timeout: 25_000 });
+    } catch {
+      await page
+        .getByRole("button", { name: /log\s*in|sign\s*in|continue|submit/i })
+        .first()
+        .click({ timeout: 15_000 });
+      await page.waitForSelector("#menuLinkapptBook", { timeout: 60_000 });
+    }
     const state = await ctx.storageState();
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, JSON.stringify(state));

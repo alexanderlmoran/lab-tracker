@@ -195,6 +195,68 @@ export async function getPendingPdfForCase(
   };
 }
 
+/**
+ * The successfully-uploaded result PDF for a case, signed for viewing — powers
+ * the "View result PDF" affordance shown in every lane RIGHT of Pending Upload.
+ * Gated on `step5_complete_uploaded` = the authoritative "approved + patient-
+ * verified + PB-confirmed" signal (set by the pb-upload result route on success;
+ * patient accuracy is enforced at approve-time by the wrong-patient guard). So a
+ * PDF only becomes viewable here once it was the accurate, posted result.
+ * Returns null before that, or when the PDF row was superseded (e.g. an
+ * Already-on-PB mark with no stored file).
+ */
+export async function getResultPdfForCase(
+  caseId: string,
+): Promise<PendingPdf | null> {
+  await requireSignedIn();
+  const db = getSupabaseAdmin();
+
+  const { data: kase, error: caseErr } = await db
+    .from("lab_cases")
+    .select(
+      "patient_name, patient_dob, collection_date, lab_name, lab_external_ref, step5_complete_uploaded",
+    )
+    .eq("id", caseId)
+    .single();
+  if (caseErr || !kase) return null;
+  if (!kase.step5_complete_uploaded) return null;
+
+  const { data: pdf, error: pdfErr } = await db
+    .from("lab_case_pdfs")
+    .select("*")
+    .eq("case_id", caseId)
+    .is("superseded_at", null)
+    .order("attached_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (pdfErr) throw new Error(pdfErr.message);
+  if (!pdf) return null;
+
+  const signedUrl = await getSignedUrl(pdf.storage_path as string);
+  return {
+    id: pdf.id as string,
+    caseId: pdf.case_id as string,
+    storagePath: pdf.storage_path as string,
+    filename: (pdf.filename as string | null) ?? null,
+    externalRef: (pdf.external_ref as string | null) ?? null,
+    isPartial: Boolean(pdf.is_partial),
+    resultIssuedAt: (pdf.result_issued_at as string | null) ?? null,
+    attachedAt: pdf.attached_at as string,
+    attachedBy: pdf.attached_by as string,
+    reportPatientName: (pdf.report_patient_name as string | null) ?? null,
+    signedUrl,
+    hadUploadFailure: false,
+    lastUploadError: null,
+    caseRef: {
+      patientName: kase.patient_name as string,
+      patientDob: (kase.patient_dob as string | null) ?? null,
+      collectionDate: (kase.collection_date as string | null) ?? null,
+      labName: kase.lab_name as string,
+      caseExternalRef: (kase.lab_external_ref as string | null) ?? null,
+    },
+  };
+}
+
 // ── Writes (audit-row–producing actions) ──────────────────────────────
 
 const ApproveInput = z.object({

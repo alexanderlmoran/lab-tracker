@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
+import { toolbarBtn } from "./toolbar-styles";
 
 /**
  * Toggle the by-collection-date section headers across ALL board columns. On by
@@ -26,11 +27,7 @@ export function DateGroupToggle() {
     <button
       type="button"
       onClick={toggle}
-      className={`shrink-0 rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
-        off
-          ? "border-zinc-300 bg-white text-zinc-400 line-through hover:bg-zinc-50"
-          : "border-orange-300 bg-orange-50 text-orange-800"
-      }`}
+      className={`shrink-0 ${toolbarBtn(false)} ${off ? "!text-zinc-500 line-through" : ""}`}
       title="Group every column into date sections by collection date — click to hide"
     >
       Group by date

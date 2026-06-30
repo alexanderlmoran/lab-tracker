@@ -120,7 +120,7 @@ export default async function LabsPage({
           <CaseDialog
             mode="create"
             triggerLabel="+ New case"
-            triggerClassName="rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-zinc-800"
+            triggerClassName="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-900 transition-colors hover:bg-zinc-100"
           />
           <LabsTabs tab={tab} />
           {!isPatientFocus ? (

@@ -15,7 +15,7 @@ import { EmailLogPanel } from "./EmailLogPanel";
 import { BarcodeScanner } from "./BarcodeScanner";
 import { CaseDialog } from "./CaseDialog";
 import { PdfReviewModal } from "./PdfReviewModal";
-import { getPendingPdfForCase, type PendingPdf } from "./pdf-actions";
+import { getPendingPdfForCase, getResultPdfForCase, type PendingPdf } from "./pdf-actions";
 import { LabPortalLinks } from "./LabPortalLinks";
 import { FindResultButton } from "./FindResultButton";
 import { ManageLabsButton } from "./PatientLabManager";
@@ -31,9 +31,11 @@ import {
 } from "./actions";
 import {
   getDrawNote,
+  listContactAttempts,
   markPatientReached,
   recordContactAttempt,
   updateDrawNote,
+  type ContactEvent,
 } from "./draw-actions";
 import { useRouter } from "next/navigation";
 import { getLabDestination, trackingDestinationWarning } from "@/lib/labs/catalog";
@@ -379,7 +381,7 @@ function ScanKitButton({
         type="button"
         onClick={() => setOpen(true)}
         disabled={pending}
-        className="rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+        className="whitespace-nowrap rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
         title={
           step1Done && hasTracking
             ? "Re-scan to attach a new tracking number"
@@ -458,12 +460,17 @@ function DrawNoteEditor({ row }: { row: LabCase }) {
 
   if (!hasDraw) {
     return (
-      <div className="space-y-1">
-        <p className="text-[11px] text-zinc-500">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            Notes
+          </h3>
+        </div>
+        <p className="mb-1 text-[11px] text-zinc-500">
           Per-case note (no collection date set — shared notes require a draw
           date to group siblings).
         </p>
-        <p className="rounded-md border border-zinc-200 bg-zinc-50 px-2.5 py-2 text-xs text-zinc-700">
+        <p className="min-h-[120px] flex-1 rounded-md border border-zinc-200 bg-zinc-50 px-2.5 py-2 text-xs text-zinc-700">
           {row.notes || <span className="text-zinc-400">—</span>}
         </p>
       </div>
@@ -471,20 +478,39 @@ function DrawNoteEditor({ row }: { row: LabCase }) {
   }
 
   return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between">
-        <p className="text-[11px] text-zinc-500">
-          Shared across every lab drawn on {row.collection_date} for this patient.
-          {siblingCount && siblingCount > 1 ? (
-            <span className="ml-1 text-zinc-700">
-              · applies to {siblingCount} cards
-            </span>
-          ) : null}
-        </p>
-        {savedAt ? (
-          <span className="text-[11px] text-emerald-700">Saved {savedAt}</span>
-        ) : null}
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* Header: title left, Save/Saved status top-right (aligned with the
+          other cards' header actions). The old bottom button row is gone, so
+          the textarea owns all the vertical space below. */}
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+          Notes
+        </h3>
+        <div className="flex items-center gap-2">
+          {error ? <span className="text-[11px] text-red-600">{error}</span> : null}
+          <button
+            type="button"
+            onClick={save}
+            disabled={!dirty || saving}
+            title={savedAt ? `Last saved ${savedAt}` : undefined}
+            className={`rounded-md border px-2.5 py-0.5 text-[11px] disabled:cursor-default disabled:opacity-100 ${
+              dirty
+                ? "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50"
+                : savedAt
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-zinc-200 bg-white text-zinc-400"
+            }`}
+          >
+            {saving ? "Saving…" : dirty ? "Save" : savedAt ? `Saved ${savedAt}` : "Saved"}
+          </button>
+        </div>
       </div>
+      <p className="mb-1 text-[11px] text-zinc-500">
+        Shared across every lab drawn on {row.collection_date} for this patient.
+        {siblingCount && siblingCount > 1 ? (
+          <span className="ml-1 text-zinc-700">· applies to {siblingCount} cards</span>
+        ) : null}
+      </p>
       <textarea
         value={body}
         onChange={(e) => {
@@ -492,21 +518,9 @@ function DrawNoteEditor({ row }: { row: LabCase }) {
           setDirty(true);
         }}
         onBlur={save}
-        rows={3}
         placeholder="Add a note shared across this patient's draw…"
-        className="w-full rounded-md border border-zinc-300 bg-white px-2.5 py-2 text-xs text-zinc-900 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+        className="min-h-[120px] w-full flex-1 resize-none rounded-md border border-zinc-300 bg-white px-2.5 py-2 text-xs text-zinc-900 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500"
       />
-      <div className="flex items-center justify-end gap-2">
-        {error ? <span className="text-[11px] text-red-600">{error}</span> : null}
-        <button
-          type="button"
-          onClick={save}
-          disabled={!dirty || saving}
-          className="rounded-md border border-zinc-300 bg-white px-2.5 py-0.5 text-[11px] text-zinc-700 hover:bg-zinc-50 disabled:opacity-40"
-        >
-          {saving ? "Saving…" : dirty ? "Save" : "Saved"}
-        </button>
-      </div>
     </div>
   );
 }
@@ -532,14 +546,66 @@ function Field({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-baseline gap-2 text-sm">
-      <span className="w-20 shrink-0 text-[11px] uppercase tracking-wide text-zinc-500">
+    <div className="flex items-baseline gap-2 text-[13px]">
+      <span className="w-16 shrink-0 text-[10.5px] uppercase tracking-wide text-zinc-500">
         {label}
       </span>
-      <span className="min-w-0 flex-1 text-zinc-900">
+      <span
+        className={`min-w-0 flex-1 text-zinc-900 ${children ? "" : "truncate"}`}
+        title={!children && typeof value === "string" ? value : undefined}
+      >
         {children ?? (value ? value : <span className="text-zinc-400">—</span>)}
       </span>
     </div>
+  );
+}
+
+/** Compact calls/texts log for the Communications card — contact attempts +
+ *  "reached" events, newest first. */
+function CallsLog({ caseId }: { caseId: string }) {
+  const [events, setEvents] = useState<ContactEvent[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    listContactAttempts(caseId)
+      .then((e) => !cancelled && setEvents(e))
+      .catch(() => !cancelled && setEvents([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [caseId]);
+  if (events === null) {
+    return <p className="text-[11px] text-zinc-400">Loading…</p>;
+  }
+  if (events.length === 0) {
+    return <p className="text-[11px] text-zinc-500">No calls or texts logged.</p>;
+  }
+  return (
+    <ul className="flex flex-col gap-1">
+      {events.slice(0, 6).map((e) => (
+        <li key={e.id} className="flex items-start gap-2 text-[11.5px] leading-snug">
+          <span
+            className={`mt-px shrink-0 rounded px-1 text-[10px] font-medium ${
+              e.kind === "contact_reached"
+                ? "bg-emerald-100 text-emerald-800"
+                : "bg-amber-100 text-amber-800"
+            }`}
+          >
+            {e.kind === "contact_reached" ? "Reached" : "Attempt"}
+          </span>
+          <span className="min-w-0 flex-1 text-zinc-700">
+            {e.note ? `${e.note} · ` : ""}
+            <span className="text-zinc-400">
+              {new Date(e.created_at).toLocaleString(undefined, {
+                month: "short",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+              })}
+            </span>
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -547,6 +613,7 @@ export function CaseDetail({
   row,
   initialOpenAttempts = 0,
   autoReview = false,
+  hasPendingPdf = false,
   dupSiblings,
 }: {
   row: LabCase;
@@ -557,6 +624,10 @@ export function CaseDetail({
    *  auto-open the PDF review modal as soon as the pending PDF loads — saves
    *  the open-dialog → find-banner → click-Review steps. */
   autoReview?: boolean;
+  /** The board already knows (from `pendingPdfCaseIds`) whether this case has a
+   *  PDF awaiting review. Passing it lets the PDF-review card spawn IMMEDIATELY
+   *  on open (shell while the full detail loads) instead of after the probe. */
+  hasPendingPdf?: boolean;
   /** Other cards sharing this card's accession (same physical order split across
    *  cards). When present, the dialog shows the merged order: every sibling's
    *  lab + tracking #, and review actions cascade across the group. */
@@ -586,7 +657,38 @@ export function CaseDetail({
   const [pendingPdf, setPendingPdf] = useState<PendingPdf | null>(null);
   const [pendingPdfError, setPendingPdfError] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
-  const [reviewLoading, setReviewLoading] = useState(false);
+  // Start TRUE: loadPendingPdf fires on mount, so the very first paint is already
+  // "checking" — this stops the "No result staged yet" staged card from flashing
+  // for one frame before the PDF-review card resolves.
+  const [reviewLoading, setReviewLoading] = useState(true);
+
+  // Already-uploaded result PDF — viewable in every lane right of Pending
+  // Upload once the result was successfully posted (step5_complete_uploaded).
+  // Loaded lazily on click so opening a card doesn't sign a URL it won't use.
+  const [resultPdf, setResultPdf] = useState<PendingPdf | null>(null);
+  const [resultOpen, setResultOpen] = useState(false);
+  const [resultLoading, setResultLoading] = useState(false);
+  const [resultError, setResultError] = useState<string | null>(null);
+  // "Move same-order cards together" lives up here so its checkbox can sit in
+  // the Same-order panel (its natural home) while StepChecklist still reads it.
+  const [moveSiblings, setMoveSiblings] = useState(true);
+  function openResultPdf() {
+    setResultError(null);
+    setResultLoading(true);
+    getResultPdfForCase(row.id)
+      .then((p) => {
+        if (!p) {
+          setResultError("No stored PDF on file for this result.");
+          return;
+        }
+        setResultPdf(p);
+        setResultOpen(true);
+      })
+      .catch((e: unknown) =>
+        setResultError(e instanceof Error ? e.message : "Failed to load PDF"),
+      )
+      .finally(() => setResultLoading(false));
+  }
 
   // Load (or reload) the case's pending PDF. Always fetch — getPendingPdfForCase
   // returns null when there's no non-superseded, non-approved PDF, so it self-
@@ -619,13 +721,276 @@ export function CaseDetail({
   );
   useEffect(() => loadPendingPdf(), [loadPendingPdf]);
 
+  // ── Mid-section cards ──────────────────────────────────────────────────────
+  // Notes, Same-order, and the PDF-review / no-result-staged cards are all
+  // bordered sub-cards following the same header pattern (title/status left,
+  // primary action top-right). They lock into a strict 2-up grid below — never
+  // loose full-width banners.
+  const hasSiblings = Boolean(dupSiblings && dupSiblings.length > 0);
+  const pdfMismatch = pendingPdf
+    ? isLastNameMismatch(pendingPdf.reportPatientName, row.patient_name)
+    : false;
+  // Stuck Pending/Sample card with no PDF staged yet — manual probe / upload.
+  const showStaged =
+    (currentCol === "pending_upload" || currentCol === "sample_sent") &&
+    !pendingPdf &&
+    !reviewLoading;
+  const hasScraper = showStaged ? Boolean(probeKeyForLab(row.lab_name)) : false;
+
+  const notesCard = (
+    <section key="notes" className="flex flex-1 flex-col rounded-lg border border-zinc-200 p-4">
+      <DrawNoteEditor row={row} />
+    </section>
+  );
+
+  const sameOrderCard = hasSiblings ? (
+    <section key="siblings" className="flex flex-col rounded-lg border border-purple-200 bg-purple-50/40 p-4">
+      <div className="flex items-start justify-between gap-2">
+        <h3 className="min-w-0 text-xs font-semibold uppercase tracking-wide text-purple-800">
+          Same order — {dupSiblings!.length + 1} cards
+          {row.lab_external_ref ? (
+            <span className="font-mono normal-case text-purple-600"> · ACC# {row.lab_external_ref}</span>
+          ) : null}
+        </h3>
+        <button
+          type="button"
+          onClick={() => setMoveSiblings((v) => !v)}
+          title={`When on, ticking a step moves all ${dupSiblings!.length + 1} cards in this order together.`}
+          aria-pressed={moveSiblings}
+          className={`shrink-0 rounded-md border px-2 py-0.5 text-[11px] font-medium ${
+            moveSiblings
+              ? "border-purple-300 bg-purple-100 text-purple-800"
+              : "border-zinc-300 bg-white text-zinc-500 hover:bg-zinc-50"
+          }`}
+        >
+          {moveSiblings ? "✓ Grouped" : "Grouped"}
+        </button>
+      </div>
+      <p className="mt-0.5 text-[10.5px] leading-snug text-purple-700">
+        One order split across cards. Approve / Already-on-PB / Disapprove applies to all.
+      </p>
+      <div className="mt-1.5 divide-y divide-purple-100 overflow-hidden rounded border border-purple-100 bg-white">
+        {[row, ...dupSiblings!].map((c) => (
+          <div
+            key={c.id}
+            className="flex items-center justify-between gap-3 px-2 py-0.5 text-[11.5px]"
+          >
+            <span className="truncate text-zinc-900">{labelForCase(c)}</span>
+            <span className="shrink-0 font-mono text-[10.5px] text-zinc-600">
+              {c.tracking_number ? `TRK ${c.tracking_number}` : "— no tracking —"}
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  ) : null;
+
+  // PDF awaiting review — bordered sub-card (header pattern): title/status left,
+  // [Review PDF] top-right. A wrong-patient mismatch reds out the whole card.
+  // Spawns IMMEDIATELY on open when the parent's `hasPendingPdf` hint is set
+  // (known instantly) — the shell renders while the full PDF detail loads, so
+  // there's no skeleton→card flash. If the hint turns out stale (probe returns
+  // no PDF) the card drops once loading finishes.
+  // Spawn the PDF-review card immediately on open while the detail loads, for
+  // any case we expect to have one: the parent's hint OR simply being in the
+  // Pending Upload lane (its whole purpose is a PDF awaiting Approve). If the
+  // probe then finds none, it falls back to the staged card — no skeleton, and
+  // no wrong "No result staged" flash on a card that does have a PDF.
+  const showReview =
+    Boolean(pendingPdf) ||
+    ((hasPendingPdf || currentCol === "pending_upload") && reviewLoading);
+  const reviewCard = showReview ? (
+    <section
+      key="review"
+      className={`flex flex-1 flex-col rounded-lg border p-4 ${
+        pdfMismatch ? "border-red-400 bg-red-50" : "border-amber-200 bg-amber-50"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <h3
+          className={`min-w-0 text-xs font-semibold uppercase tracking-wide ${
+            pdfMismatch ? "text-red-900" : "text-amber-900"
+          }`}
+        >
+          {pdfMismatch ? "⚠ Patient mismatch" : "PDF awaiting review"}
+        </h3>
+        <button
+          type="button"
+          className={`shrink-0 whitespace-nowrap rounded-md px-2.5 py-0.5 text-[11px] font-medium text-white disabled:opacity-50 ${
+            pdfMismatch ? "bg-red-600 hover:bg-red-700" : "bg-amber-600 hover:bg-amber-700"
+          }`}
+          disabled={reviewLoading || !pendingPdf}
+          onClick={() => setReviewOpen(true)}
+        >
+          {reviewLoading ? "Loading…" : "Review PDF"}
+        </button>
+      </div>
+      {pdfMismatch ? (
+        <p className="mt-1 text-[11.5px] font-medium leading-snug text-red-800">
+          Staged report is for{" "}
+          <span className="font-mono">{pendingPdf?.reportPatientName}</span>, but this case is{" "}
+          <span className="font-mono">{row.patient_name}</span>. Do NOT upload until you confirm
+          the patient — open Review.
+        </p>
+      ) : pendingPdf ? (
+        <p className="mt-1 text-[11.5px] leading-snug text-amber-800">
+          A result PDF was attached by{" "}
+          <span className="font-mono">{pendingPdf.attachedBy ?? "scraper"}</span>
+          {pendingPdf.externalRef ? (
+            <>
+              {" "}with accession <span className="font-mono">{pendingPdf.externalRef}</span>
+            </>
+          ) : null}
+          . Verify the patient + accession + collection date before approving — Approve uploads
+          to PracticeBetter.
+        </p>
+      ) : (
+        <p className="mt-1 text-[11.5px] leading-snug text-amber-800">
+          A result PDF is attached and awaiting review — open Review to verify the patient,
+          accession, and collection date before approving.
+        </p>
+      )}
+      {pendingPdfError ? (
+        <p className="mt-1 text-[11px] text-red-700">{pendingPdfError}</p>
+      ) : null}
+    </section>
+  ) : null;
+
+  // No result staged yet — bordered sub-card (header pattern): primary probe in
+  // the top-right header, manual upload as the secondary action in the body.
+  const stagedCard = showStaged ? (
+    <section
+      key="staged"
+      className={`flex flex-1 flex-col rounded-lg border p-4 ${
+        hasScraper ? "border-indigo-200 bg-indigo-50" : "border-zinc-200 bg-zinc-50"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <h3
+          className={`min-w-0 text-xs font-semibold uppercase tracking-wide ${
+            hasScraper ? "text-indigo-900" : "text-zinc-700"
+          }`}
+        >
+          {hasScraper ? "No result staged yet" : "No auto-scraper"}
+        </h3>
+        {hasScraper ? (
+          <FindResultButton
+            caseId={row.id}
+            labName={row.lab_name}
+            idleLabel="Search portal"
+            busyLabel="Searching…"
+            stageOnFind
+            onStaged={() => loadPendingPdf(true)}
+          />
+        ) : (
+          <ManualUploadButton
+            caseId={row.id}
+            onUploaded={() => loadPendingPdf(true)}
+            label="Upload PDF"
+          />
+        )}
+      </div>
+      <p className={`mt-1 text-[11.5px] leading-snug ${hasScraper ? "text-indigo-800" : "text-zinc-600"}`}>
+        {!hasScraper
+          ? `${row.lab_name} has no portal scraper — its result can't be auto-pulled. Post it manually (from the lab's email/portal) once it's in.`
+          : currentCol === "sample_sent"
+            ? "Sample's at the lab — if the portal already has a result, pull it now to review (early results land before the predicted window)."
+            : "The worker hasn't attached a PDF to post yet. Search the lab portal now for this patient's result to review."}
+      </p>
+      {hasScraper ? (
+        <div className="mt-1.5">
+          <ManualUploadButton
+            caseId={row.id}
+            onUploaded={() => loadPendingPdf(true)}
+            label="or upload a PDF"
+          />
+        </div>
+      ) : null}
+    </section>
+  ) : null;
+
+  // Right-column slot: keep the middle row a 2-up grid so Notes never flexes
+  // 50%→100% while the pending-PDF probe is in flight. In result-bearing columns
+  // we reserve the slot with a skeleton during the fetch (a non-result case never
+  // flashes one and reflows). When there's genuinely nothing to show, the slot
+  // renders NOTHING — a seamless black void matching the board, not a highlighted
+  // "empty" placeholder (the Black Void rule). Notes still holds its half-width.
+  const inResultColumn =
+    currentCol === "pending_upload" || currentCol === "sample_sent";
+
+  const loadingCard = (
+    <section key="loading" className="flex flex-1 flex-col rounded-lg border border-zinc-200 p-4">
+      <div className="h-3 w-28 animate-pulse rounded bg-zinc-200" />
+      <div className="mt-3 space-y-2">
+        <div className="h-2.5 w-full animate-pulse rounded bg-zinc-100" />
+        <div className="h-2.5 w-4/5 animate-pulse rounded bg-zinc-100" />
+      </div>
+    </section>
+  );
+
+  // The right-column "action" slot: PDF-review xor staged (mutually exclusive on
+  // pendingPdf), or the skeleton while a result-column probe resolves. null when
+  // the case isn't a result column (so the next card shifts up into the slot).
+  const actionCard =
+    reviewCard ?? stagedCard ?? (inResultColumn && reviewLoading ? loadingCard : null);
+
+  const communicationsCard = (
+    <section key="comms" className="flex flex-col rounded-lg border border-zinc-200 p-4">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+        Communications
+      </h3>
+      <div className="flex flex-col gap-3">
+        <div>
+          <h4 className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-zinc-400">
+            Emails
+          </h4>
+          <EmailLogPanel caseId={row.id} compact />
+        </div>
+        <div>
+          <h4 className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-zinc-400">
+            Calls &amp; texts
+          </h4>
+          <CallsLog caseId={row.id} />
+        </div>
+      </div>
+    </section>
+  );
+
+  const activityCard = (
+    <section key="activity" className="flex flex-col rounded-lg border border-zinc-200 p-4">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+        Activity
+      </h3>
+      <div className="max-h-48 min-h-0 flex-1 overflow-y-auto pr-1">
+        <ActivityLog caseId={row.id} compact />
+      </div>
+    </section>
+  );
+
+  // Every lower card packs into ONE dense 2-up grid in priority order. Absent
+  // cards (no PDF, no siblings) aren't rendered at all, so the next card shifts
+  // UP to fill the slot — Activity rises into a blank action slot instead of a
+  // gap. Any leftover odd cell trails at the very bottom as a seamless void.
+  const lowerCards = [
+    notesCard,
+    actionCard,
+    sameOrderCard,
+    communicationsCard,
+    activityCard,
+  ].filter(Boolean);
+
   return (
     <div className="flex flex-col gap-4">
       {/* Patient + Case — two-column grid on lg+, stacks on smaller screens.
        *  The old separate "Patient" and "Case" sections cost vertical space
        *  without adding scannability; merging them and tightening field rows
        *  fits the whole header above the fold in a typical modal. */}
-      <section>
+      {/* Top row: case details (left) + step progress (right) side by side,
+          stretched to equal height so the two outer cards read as a balanced,
+          symmetrical pair. Clipping is solved INSIDE the Steps card (compact
+          fonts / hint-on-own-line / shrunk buttons), not by widening it. */}
+      <div className="grid gap-4 lg:grid-cols-2">
+      <section className="rounded-lg border border-zinc-200 p-4">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
             Patient &amp; case
@@ -639,6 +1004,19 @@ export function CaseDetail({
               patientEmail={row.patient_email}
               variant="button"
             />
+            {/* View the uploaded result PDF — available once it was posted to PB
+             *  (step5), in every lane right of Pending Upload. Lazy-loaded. */}
+            {row.step5_complete_uploaded ? (
+              <button
+                type="button"
+                onClick={openResultPdf}
+                disabled={resultLoading}
+                title={resultError ?? "View / download the uploaded result PDF"}
+                className="rounded-md border border-zinc-300 bg-white px-2.5 py-0.5 text-[11px] text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+              >
+                {resultLoading ? "Loading…" : resultError ? "No PDF on file" : "View PDF"}
+              </button>
+            ) : null}
             <CaseDialog
               mode="edit"
               initial={row}
@@ -647,276 +1025,138 @@ export function CaseDetail({
             />
           </div>
         </div>
-        <div className="grid gap-x-6 gap-y-1.5 lg:grid-cols-2">
-          <Field label="Email" value={row.patient_email} />
-          <Field
-            label="Lab"
-            children={
-              <span className="flex flex-col gap-0.5">
-                <span className="flex flex-wrap items-center gap-2">
-                  <span>{labelForCase(row)}</span>
-                  <LabPortalLinks labName={row.lab_name} />
-                </span>
-                <span className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
-                  <span>
-                    Acc#{" "}
-                    {row.lab_external_ref ? (
-                      <span className="font-medium text-zinc-900">{row.lab_external_ref}</span>
-                    ) : (
-                      <span className="text-zinc-400">—</span>
-                    )}
-                  </span>
-                  {row.lab_external_ref ? null : (
-                    <FindResultButton caseId={row.id} labName={row.lab_name} />
-                  )}
-                </span>
+        {/* Lab on its own flat row (name · Portal · Acc# on one line), the short
+            patient fields packed 2-up, then tracking on its own flat row (number
+            + Scan kit + carrier status + Refresh, all inline). Dense + horizontal
+            — no bordered status box, no careless vertical stacking. */}
+        <div className="flex flex-col gap-2">
+          <Field label="Lab">
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span className="font-medium">{labelForCase(row)}</span>
+              <LabPortalLinks labName={row.lab_name} />
+              <span className="text-[12px] text-zinc-500">
+                Acc#{" "}
+                {row.lab_external_ref ? (
+                  <span className="font-medium text-zinc-700">{row.lab_external_ref}</span>
+                ) : (
+                  <span className="text-zinc-400">—</span>
+                )}
               </span>
-            }
-          />
-          <Field
-            label="DOB"
-            value={
-              row.patient_dob ? `${row.patient_dob}${ageFromDob(row.patient_dob)}` : null
-            }
-          />
-          <Field
-            label="Ships to"
-            value={
-              destination
-                ? `${destination.city}${destination.state ? `, ${destination.state}` : ""}`
-                : null
-            }
-          />
-          <Field label="Phone" value={row.patient_phone} />
-          <Field label="Collected" value={row.collection_date} />
-          <Field
-            label="Tracking"
-            children={
-              <span className="flex flex-wrap items-center gap-2">
-                <span>{row.tracking_number || <span className="text-zinc-400">—</span>}</span>
+              {row.lab_external_ref ? null : (
+                <FindResultButton caseId={row.id} labName={row.lab_name} />
+              )}
+            </span>
+          </Field>
+          <div className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+            <Field label="Email" value={row.patient_email} />
+            <Field
+              label="Ships to"
+              value={
+                destination
+                  ? `${destination.city}${destination.state ? `, ${destination.state}` : ""}`
+                  : null
+              }
+            />
+            <Field label="Phone" value={row.patient_phone} />
+            <Field label="Collected" value={row.collection_date} />
+            <Field
+              label="DOB"
+              value={
+                row.patient_dob ? `${row.patient_dob}${ageFromDob(row.patient_dob)}` : null
+              }
+            />
+            <Field label="Auto-send" value={row.auto_send_emails ? "On" : "Off"} />
+          </div>
+          <Field label="Tracking">
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span>{row.tracking_number || <span className="text-zinc-400">—</span>}</span>
+              {/* Scan kit attaches a tracking #, so it's only useful before one
+                  exists — once a code is on file it's just clutter on the row. */}
+              {row.tracking_number ? null : (
                 <ScanKitButton
                   caseId={row.id}
-                  hasTracking={Boolean(row.tracking_number)}
+                  hasTracking={false}
                   step1Done={Boolean(row.step1_sample_sent)}
                 />
-              </span>
-            }
-          />
-          <Field
-            label="Auto-send"
-            value={row.auto_send_emails ? "On" : "Off"}
+              )}
+              {row.tracking_number && row.tracking_status ? (
+                <>
+                  <span
+                    className="text-[12px] text-zinc-600"
+                    title={
+                      row.tracking_polled_at
+                        ? `polled ${row.tracking_polled_at.slice(0, 16).replace("T", " ")}`
+                        : undefined
+                    }
+                  >
+                    <strong className="capitalize text-zinc-700">{row.tracking_status.replace(/_/g, " ")}</strong>
+                    {row.tracking_location ? ` · ${row.tracking_location}` : ""}
+                  </span>
+                  {/* Delivered is terminal — no point refreshing, so the row
+                      collapses to just the code + status + location. */}
+                  {row.tracking_status === "delivered" ? null : (
+                    <RefreshTrackingButton caseId={row.id} />
+                  )}
+                  {hasStatusAdapter ? <RefreshLabStatusButton caseId={row.id} /> : null}
+                </>
+              ) : hasStatusAdapter ? (
+                <RefreshLabStatusButton caseId={row.id} />
+              ) : null}
+            </span>
+          </Field>
+          {/* Req-form — only pre-ship (hidden from Sample Sent on, the req left
+              with the kit), so the card ends clean and aligned otherwise. */}
+          {currentCol === "untouched" || currentCol === "ready_to_ship" || currentCol === "with_patient" ? (
+            <ReqFormButton caseId={row.id} labName={row.lab_name} />
+          ) : null}
+          {destWarning ? (
+            <p className="rounded-md border border-orange-200 bg-orange-50 px-2 py-1 text-[11px] text-orange-800">
+              ⚠ {destWarning}
+            </p>
+          ) : null}
+        </div>
+      </section>
+      {/* Steps — right column of the top row. flex-col so the checklist can
+          vertically center and fill the stretched card (no top-heavy clump with
+          a big empty gap at the bottom). */}
+      <section className="flex flex-col rounded-lg border border-zinc-200 p-4">
+        <div className="mb-2 flex shrink-0 flex-wrap items-center justify-between gap-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            Steps
+          </h3>
+          <div className="flex flex-wrap items-center gap-2">
+            <ContactAttemptButton
+              caseId={row.id}
+              openAttempts={openAttempts}
+              onAttempt={setOpenAttempts}
+            />
+            {openAttempts > 0 ? (
+              <ReachedButton caseId={row.id} onReached={() => setOpenAttempts(0)} />
+            ) : null}
+            <MarkClosedButton
+              caseId={row.id}
+              isAlreadyClosed={currentCol === "closed"}
+              isPeptides={workflow === "peptides"}
+            />
+          </div>
+        </div>
+        <div className="flex flex-1 flex-col justify-center">
+          <StepChecklist
+            initial={row}
+            siblingCount={dupSiblings?.length ?? 0}
+            moveSiblings={moveSiblings}
           />
         </div>
-        {destWarning ? (
-          <p className="mt-2 rounded-md border border-orange-200 bg-orange-50 px-2 py-1 text-[11px] text-orange-800">
-            ⚠ {destWarning}
-          </p>
-        ) : null}
-        {/* Req-form auto-fill — only for labs with a template, and only BEFORE
-            the sample ships (Alex, 2026-06-11): once a card is in Sample Sent
-            or later the requisition already left with the kit, so the button
-            is just clutter from there through Completed. */}
-        {currentCol === "untouched" || currentCol === "ready_to_ship" || currentCol === "with_patient" ? (
-          <div className="mt-2">
-            <ReqFormButton caseId={row.id} labName={row.lab_name} />
-          </div>
-        ) : null}
-        {row.tracking_number && row.tracking_status ? (
-          <div className="mt-2 flex items-center justify-between gap-3 rounded-md border border-zinc-200 bg-zinc-50 px-2.5 py-1.5">
-            <p className="text-[11px] text-zinc-700">
-              <strong className="capitalize">{row.tracking_status.replace(/_/g, " ")}</strong>
-              {row.tracking_location ? ` · ${row.tracking_location}` : ""}
-              {row.tracking_status_detail ? ` — ${row.tracking_status_detail}` : ""}
-              {row.tracking_polled_at ? (
-                <span className="ml-2 text-[10px] text-zinc-400">
-                  polled {row.tracking_polled_at.slice(0, 16).replace("T", " ")}
-                </span>
-              ) : null}
-            </p>
-            <div className="flex items-center gap-2">
-              <RefreshTrackingButton caseId={row.id} />
-              {hasStatusAdapter ? <RefreshLabStatusButton caseId={row.id} /> : null}
-            </div>
-          </div>
-        ) : hasStatusAdapter ? (
-          <div className="mt-2 flex items-center justify-end">
-            <RefreshLabStatusButton caseId={row.id} />
-          </div>
-        ) : null}
       </section>
+      </div>
 
-      {/* Shared draw notes — keyed by patient + collection_date so a
-       *  patient with five labs drawn the same day sees one shared note. */}
-      <section>
-        <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-          Notes
-        </h3>
-        <DrawNoteEditor row={row} />
-      </section>
-
-      {/* Merged order — same-accession siblings (one order split across cards).
-       *  Shows every card's lab + tracking #, stacked; the review actions below
-       *  cascade across the whole group so they resolve/move together. */}
-      {dupSiblings && dupSiblings.length > 0 ? (
-        <section className="rounded-md border border-purple-200 bg-purple-50/50 px-4 py-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-purple-800">
-            Same order — {dupSiblings.length + 1} cards
-            {row.lab_external_ref ? (
-              <span className="font-mono normal-case text-purple-600"> · ACC# {row.lab_external_ref}</span>
-            ) : null}
-          </h3>
-          <p className="mt-0.5 text-[11px] text-purple-700">
-            One lab order split across multiple cards (different tracking #s). Approve / Already-on-PB / Disapprove here applies to all of them.
-          </p>
-          <div className="mt-2 divide-y divide-purple-100 overflow-hidden rounded border border-purple-100 bg-white">
-            {[row, ...dupSiblings].map((c) => (
-              <div
-                key={c.id}
-                className="flex items-center justify-between gap-3 px-2 py-1 text-[12px]"
-              >
-                <span className="truncate text-zinc-900">{labelForCase(c)}</span>
-                <span className="shrink-0 font-mono text-[11px] text-zinc-600">
-                  {c.tracking_number ? `TRK ${c.tracking_number}` : "— no tracking —"}
-                </span>
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {/* PDF review banner — shown whenever a PDF is attached but no
-       *  approve / wrong-pdf audit row exists yet. Gate on `pendingPdf`
-       *  alone (not on reviewLoading) so the banner doesn't flash on
-       *  every card while the server action is in-flight: cards with no
-       *  pending PDF should never show it at all. */}
-      {pendingPdf ? (
-        (() => {
-          // Surface a wrong-patient mismatch right on the card banner — before
-          // staff even open the modal — so a bad attach is obvious at a glance.
-          const pdfMismatch = isLastNameMismatch(
-            pendingPdf.reportPatientName,
-            row.patient_name,
-          );
-          return (
-            <section
-              className={`rounded-md border px-4 py-3 ${
-                pdfMismatch ? "border-red-400 bg-red-50" : "border-amber-200 bg-amber-50"
-              }`}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <h3
-                    className={`text-xs font-semibold uppercase tracking-wide ${
-                      pdfMismatch ? "text-red-900" : "text-amber-900"
-                    }`}
-                  >
-                    {pdfMismatch ? "⚠ Patient mismatch — review" : "PDF awaiting review"}
-                  </h3>
-                  {pdfMismatch ? (
-                    <p className="mt-0.5 text-[11.5px] font-medium text-red-800">
-                      The staged report is for{" "}
-                      <span className="font-mono">{pendingPdf.reportPatientName}</span>, but this
-                      case is{" "}
-                      <span className="font-mono">{row.patient_name}</span>. Do NOT upload until you
-                      confirm the patient — open Review.
-                    </p>
-                  ) : (
-                    <p className="mt-0.5 text-[11.5px] text-amber-800">
-                      A result PDF was attached by{" "}
-                      <span className="font-mono">{pendingPdf?.attachedBy ?? "scraper"}</span>
-                      {pendingPdf?.externalRef ? (
-                        <>
-                          {" "}with accession{" "}
-                          <span className="font-mono">{pendingPdf.externalRef}</span>
-                        </>
-                      ) : null}
-                      . Verify the patient + accession + collection date before approving — Approve
-                      uploads to PracticeBetter.
-                    </p>
-                  )}
-                  {pendingPdfError ? (
-                    <p className="mt-1 text-[11px] text-red-700">{pendingPdfError}</p>
-                  ) : null}
-                </div>
-                <button
-                  type="button"
-                  className={`shrink-0 rounded-md px-3 py-1.5 text-[12px] font-medium text-white disabled:opacity-50 ${
-                    pdfMismatch
-                      ? "bg-red-600 hover:bg-red-700"
-                      : "bg-amber-600 hover:bg-amber-700"
-                  }`}
-                  disabled={reviewLoading || !pendingPdf}
-                  onClick={() => setReviewOpen(true)}
-                >
-                  {reviewLoading ? "Loading…" : "Review PDF"}
-                </button>
-              </div>
-            </section>
-          );
-        })()
-      ) : null}
-
-      {/* Backlog #6 — stuck Pending-Upload card with no PDF staged yet. The
-       *  worker "continuously searches" but never lands one (e.g. the accession
-       *  is set but the portal hasn't published, or the scrape keeps missing).
-       *  Give staff a manual probe to search the portal for a result to post —
-       *  same machinery as the accession-less "Find result", relabeled. Gated
-       *  on pending_upload + no staged PDF + not still loading so it only shows
-       *  when there's nothing to Review yet. */}
-      {(currentCol === "pending_upload" || currentCol === "sample_sent") &&
-      !pendingPdf &&
-      !reviewLoading ? (
-        (() => {
-          // Only labs with a portal scraper can be auto-pulled. For the rest
-          // (Kennedy Krieger, MembersPanel, Custom, Mitoswab, Peptides…) there's
-          // nothing to "search" — don't imply a portal pull; tell staff it's
-          // a manual upload/post.
-          const hasScraper = Boolean(probeKeyForLab(row.lab_name));
-          return (
-            <section
-              className={`rounded-md border px-4 py-3 ${
-                hasScraper ? "border-indigo-200 bg-indigo-50" : "border-zinc-200 bg-zinc-50"
-              }`}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <h3
-                    className={`text-xs font-semibold uppercase tracking-wide ${
-                      hasScraper ? "text-indigo-900" : "text-zinc-700"
-                    }`}
-                  >
-                    {hasScraper ? "No result staged yet" : "No auto-scraper for this lab"}
-                  </h3>
-                  <p className={`mt-0.5 text-[11.5px] ${hasScraper ? "text-indigo-800" : "text-zinc-600"}`}>
-                    {!hasScraper
-                      ? `${row.lab_name} has no portal scraper — its result can't be auto-pulled. Post it manually (from the lab's email/portal) once it's in.`
-                      : currentCol === "sample_sent"
-                        ? "Sample's at the lab — if the portal already has a result, pull it now to review (early results land before the predicted window)."
-                        : "The worker hasn't attached a PDF to post yet. Search the lab portal now for this patient's result to review."}
-                  </p>
-                </div>
-                <div className="flex flex-col items-end gap-1.5">
-                  {hasScraper ? (
-                    <FindResultButton
-                      caseId={row.id}
-                      labName={row.lab_name}
-                      idleLabel="Search for lab to post (review PDF)"
-                      busyLabel="Searching portal…"
-                      stageOnFind
-                      onStaged={() => loadPendingPdf(true)}
-                    />
-                  ) : null}
-                  <ManualUploadButton
-                    caseId={row.id}
-                    onUploaded={() => loadPendingPdf(true)}
-                    label={hasScraper ? "or upload a PDF" : "Upload result PDF"}
-                  />
-                </div>
-              </div>
-            </section>
-          );
-        })()
-      ) : null}
+      {/* All lower cards pack into ONE dense 2-up grid (Notes → action → Same-
+          order → Communications → Activity). Absent cards aren't rendered, so
+          each subsequent card shifts UP to fill the slot — Activity rises into a
+          blank action slot rather than leaving a gap. `auto-rows` keeps every row
+          equal-height (identical borders); any odd trailing cell is a seamless
+          void. Notes always holds its half-width (the grid never goes 1-col). */}
+      <div className="grid items-stretch gap-4 lg:grid-cols-2">{lowerCards}</div>
 
       {reviewOpen && pendingPdf ? (
         <PdfReviewModal
@@ -934,53 +1174,15 @@ export function CaseDetail({
         />
       ) : null}
 
-      {/* Steps + action bar. Dropped the "Process" column-strip section —
-       *  the workflow column is implicit in the checked steps below and the
-       *  badge in the dialog header. */}
-      <section>
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-            Steps
-          </h3>
-          <div className="flex flex-wrap items-center gap-2">
-            <ContactAttemptButton
-              caseId={row.id}
-              openAttempts={openAttempts}
-              onAttempt={setOpenAttempts}
-            />
-            {openAttempts > 0 ? (
-              <ReachedButton
-                caseId={row.id}
-                onReached={() => setOpenAttempts(0)}
-              />
-            ) : null}
-            <MarkClosedButton
-              caseId={row.id}
-              isAlreadyClosed={currentCol === "closed"}
-              isPeptides={workflow === "peptides"}
-            />
-          </div>
-        </div>
-        <StepChecklist initial={row} siblingCount={dupSiblings?.length ?? 0} />
-      </section>
+      {resultOpen && resultPdf ? (
+        <PdfReviewModal
+          pdf={resultPdf}
+          patientName={row.patient_name}
+          readOnly
+          onClose={() => setResultOpen(false)}
+        />
+      ) : null}
 
-      {/* Emails + Activity — side by side on lg+, each compact (latest 5
-       *  with internal scroll on expand). Saves a chunk of vertical
-       *  scrolling versus the old stacked panels. */}
-      <section className="grid gap-4 lg:grid-cols-2">
-        <div>
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-            Emails
-          </h3>
-          <EmailLogPanel caseId={row.id} compact />
-        </div>
-        <div>
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-            Activity
-          </h3>
-          <ActivityLog caseId={row.id} compact />
-        </div>
-      </section>
 
       <section className="border-t border-zinc-200 pt-3">
         <div className="flex flex-wrap items-center justify-between gap-2">

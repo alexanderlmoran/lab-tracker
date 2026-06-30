@@ -103,15 +103,16 @@ export function ownerColumnGroups(
 // Each step is named after the BOARD COLUMN it moves the card into, so the
 // checklist reads like the lanes left-to-right (Alex, 2026-06-10). The column
 // name leads; the parenthetical clarifies the action / which email fires / the
-// Nadia + Allison touchpoints. Two steps share a column on purpose — partial-
-// and complete-received both sit in "Pending Upload"; steps 8 + 9 both close to
-// "Protocol received". Must match COLUMN_LABEL above.
+// Nadia + Allison touchpoints. The DISPLAYED ladder is WORKFLOW_STEPS.default =
+// [1,4,5,6,7,8] (one rung per lane). Steps 2/3 (partial) and 9 (Allison-ROF
+// stamp) keep their labels here for the activity log / humanizer but are no
+// longer manual rungs. Must match COLUMN_LABEL above.
 const STEP_LABELS: Record<StepNumber, string> = {
   1: "Sample Sent",
   2: "Pending Upload (partial received)",
   3: "Partial results uploaded to PB (Email 2) — card stays in Sample Sent",
-  4: "Pending Upload (complete received)",
-  5: "Complete Uploaded (Email 3 · Nadia alerted when all the patient's labs reach here)",
+  4: "Pending Upload",
+  5: "Upload Complete (Email 3 · Nadia alerted when all the patient's labs reach here)",
   6: "ROF Scheduled (in Zenoti)",
   7: "ROF Done (Email 4)",
   8: "Protocol received (protocol emailed to patient)",
@@ -156,8 +157,14 @@ export function getCaseWorkflow(row: CaseLike): CaseWorkflow {
   return "default";
 }
 
+// One checklist step per board lane (Alex, 2026-06-29). The partial-results
+// steps (2 + 3, incl. Email 2) and the separate "Allison proofreads" step (9)
+// were folded away — the ladder now reads 1:1 with the columns: Sample Sent ·
+// Pending Upload · Upload Complete · ROF Scheduled · ROF Done · Protocol
+// received. The DB still has step2/3/9 (worker partial handling + the Allison-
+// ROF stamp on step 6 still use them); they're just not manual checklist rungs.
 const WORKFLOW_STEPS: Record<CaseWorkflow, StepNumber[]> = {
-  default: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+  default: [1, 4, 5, 6, 7, 8],
   peptides: [1, 4],
 };
 
@@ -279,7 +286,11 @@ export function getColumnFor(
     if (c.step1_sample_sent) return "sample_sent";
     return "untouched";
   }
-  if (c.step8_protocol_emailed && c.step9_sales_followup) return "closed";
+  // "Protocol received" once the protocol was emailed (step 8). The old
+  // separate "Allison proofreads" gate (step 9) was folded into this lane on
+  // 2026-06-29 — step 9 is still auto-stamped by the Allison-ROF flow but no
+  // longer required to close.
+  if (c.step8_protocol_emailed) return "closed";
   if (c.step7_rof_completed) return "rof_done";
   if (c.step6_rof_scheduled) return "rof_scheduled";
 

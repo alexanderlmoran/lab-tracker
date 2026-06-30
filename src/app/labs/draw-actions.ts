@@ -131,6 +131,30 @@ export async function recordContactAttempt(input: {
   return { ok: true, data: { openAttempts: open } };
 }
 
+export type ContactEvent = {
+  id: string;
+  kind: "contact_attempted" | "contact_reached";
+  note: string | null;
+  actor: string | null;
+  created_at: string;
+};
+
+/** Calls/texts log for a case — contact_attempted + contact_reached events,
+ *  newest first. Powers the Communications card's "Calls & texts" sub-list. */
+export async function listContactAttempts(caseId: string): Promise<ContactEvent[]> {
+  await requireSignedIn();
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("lab_events")
+    .select("id, kind, note, actor, created_at")
+    .eq("case_id", caseId)
+    .in("kind", ["contact_attempted", "contact_reached"])
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ContactEvent[];
+}
+
 export async function markPatientReached(caseId: string): Promise<ActionResult> {
   const user = await requireSignedIn();
   if (!z.string().uuid().safeParse(caseId).success) {

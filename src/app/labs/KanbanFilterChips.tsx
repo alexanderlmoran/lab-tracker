@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
+import { toolbarBtn } from "./toolbar-styles";
 
 /**
  * "Likely ready" and "Stale only" filter chips for the By-lab kanban.
@@ -31,11 +32,7 @@ export function KanbanFilterChips() {
       <button
         type="button"
         onClick={() => toggle("ready", probablyReadyOnly)}
-        className={`rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
-          probablyReadyOnly
-            ? "border-blue-300 bg-blue-50 text-blue-800"
-            : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50"
-        }`}
+        className={toolbarBtn(probablyReadyOnly)}
         title="Show only cases whose results are likely available now"
       >
         Likely ready
@@ -43,11 +40,7 @@ export function KanbanFilterChips() {
       <button
         type="button"
         onClick={() => toggle("stale", staleOnly)}
-        className={`rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
-          staleOnly
-            ? "border-yellow-300 bg-yellow-50 text-yellow-800"
-            : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50"
-        }`}
+        className={toolbarBtn(staleOnly)}
         title="Show only cases with no progress in a while"
       >
         Stale only

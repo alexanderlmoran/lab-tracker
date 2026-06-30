@@ -54,7 +54,7 @@ export function SearchBar() {
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder="Search name, email, test, or tracking #"
-        className="w-full min-w-[180px] rounded-md border border-zinc-300 bg-white py-1.5 pl-2.5 pr-8 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none"
+        className="w-full min-w-[180px] rounded-md border border-zinc-300 bg-white py-1 pl-2.5 pr-8 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none"
       />
       {hasFilters ? (
         <button
