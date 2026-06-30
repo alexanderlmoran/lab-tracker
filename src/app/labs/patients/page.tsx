@@ -4,6 +4,7 @@ import { listPatients } from "../actions";
 import { formatPersonName } from "@/lib/format";
 import { PatientSearch } from "./PatientSearch";
 import { PatientSortHeader } from "./PatientSortHeader";
+import { PatientMergeRow } from "./PatientMergeRow";
 import { HudPulse } from "../HudPulse";
 
 export const dynamic = "force-dynamic";
@@ -95,25 +96,20 @@ export default async function PatientsPage({
               {dupes.length} potential duplicate{dupes.length === 1 ? "" : "s"} — same name, different emails (review &amp; merge)
             </summary>
             <ul className="mt-2 space-y-2">
-              {dupes.map((group) => (
-                <li key={nameKey(group[0].patient_name)} className="rounded-md border border-amber-200 bg-white p-2">
-                  <div className="text-xs font-semibold text-zinc-900">{formatPersonName(group[0].patient_name)}</div>
-                  <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-zinc-600">
-                    {group.map((p) => (
-                      <Link
-                        key={p.patient_email.toLowerCase()}
-                        href={`/labs/patients/${encodeURIComponent(p.patient_email.toLowerCase())}`}
-                        className="hover:underline"
-                      >
-                        {p.patient_email} <span className="text-zinc-400">({p.case_count} case{p.case_count === 1 ? "" : "s"})</span>
-                      </Link>
-                    ))}
-                  </div>
-                </li>
-              ))}
+              {dupes.map((group) => {
+                const key = nameKey(group[0].patient_name);
+                return (
+                  <PatientMergeRow
+                    key={key}
+                    groupId={key}
+                    name={formatPersonName(group[0].patient_name)}
+                    members={group.map((p) => ({ email: p.patient_email, caseCount: p.case_count }))}
+                  />
+                );
+              })}
             </ul>
             <p className="mt-2 text-[11px] text-amber-700">
-              Merge isn&rsquo;t wired yet — this just surfaces likely dupes for a human to confirm. (Merge action coming next.)
+              Pick the email to keep; the rest are re-keyed onto it (recorded in patient_aliases, reversible).
             </p>
           </details>
         ) : null}
