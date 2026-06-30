@@ -13,6 +13,7 @@ import { TrackingBoard } from "./TrackingBoard";
 import { PatientFocusBoard } from "./PatientFocusBoard";
 import { PhlebotomyBoard } from "./phlebotomy/PhlebotomyBoard";
 import { PhlebCalendar } from "./phlebotomy/PhlebCalendar";
+import { PhlebViewToggle } from "./phlebotomy/PhlebViewToggle";
 import {
   listPhlebotomyBoard,
   listAddablePhlebotomyCases,
@@ -143,6 +144,9 @@ export default async function LabsPage({
             triggerClassName="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-900 transition-colors hover:bg-zinc-100"
           />
           <LabsTabs tab={tab} />
+          {isPhleb || isCalendar ? (
+            <PhlebViewToggle current={isCalendar ? "calendar" : "phlebotomy"} />
+          ) : null}
           {!isPatientFocus && !isPhleb && !isCalendar ? (
             <>
               {tab === "labs" ? <MergeViewMenu /> : null}

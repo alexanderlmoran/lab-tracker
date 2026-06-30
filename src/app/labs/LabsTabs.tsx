@@ -6,12 +6,14 @@ import { ToolbarSelect } from "./ToolbarSelect";
 
 export type LabsTab = "patients" | "labs" | "tracking" | "phlebotomy" | "calendar";
 
+// `calendar` is intentionally not its own dropdown entry — it's a sub-view of
+// Phlebotomy reached via the Board/Calendar toggle, so the dropdown shows
+// "Phlebotomy" for both (see the value mapping below).
 const TABS: Array<{ key: LabsTab; label: string }> = [
   { key: "labs", label: "Labs" },
   { key: "patients", label: "Patients" },
   { key: "tracking", label: "Tracking" },
   { key: "phlebotomy", label: "Phlebotomy" },
-  { key: "calendar", label: "Calendar" },
 ];
 
 export function LabsTabs({ tab }: { tab: LabsTab }) {
@@ -57,7 +59,9 @@ export function LabsTabs({ tab }: { tab: LabsTab }) {
   return (
     <ToolbarSelect
       ariaLabel="View"
-      value={tab}
+      // Calendar is a Phlebotomy sub-view, so the dropdown reads "Phlebotomy"
+      // for both — the Board/Calendar toggle distinguishes them.
+      value={tab === "calendar" ? "phlebotomy" : tab}
       options={TABS.map((t) => ({ value: t.key, label: t.label }))}
       onChange={(v) => select(v as LabsTab)}
     />
