@@ -120,8 +120,13 @@ async function claimNext(): Promise<Job | null> {
   return json.job;
 }
 
-async function reportSuccess(jobId: string, pbLabRequestId: string, pbPatientId: string) {
-  await postResult({ outcome: "success", jobId, pbLabRequestId, pbPatientId });
+async function reportSuccess(
+  jobId: string,
+  pbLabRequestId: string,
+  pbPatientId: string,
+  createdPatient = false,
+) {
+  await postResult({ outcome: "success", jobId, pbLabRequestId, pbPatientId, createdPatient });
 }
 
 async function reportFailure(jobId: string, error: string) {
@@ -184,8 +189,11 @@ async function processJob(job: Job) {
       notify: true,
     });
 
-    log(`uploaded → pb_labrequest=${result.labRequestId} pb_patient=${result.patientId}`);
-    await reportSuccess(job.id, result.labRequestId, result.patientId);
+    log(
+      `uploaded → pb_labrequest=${result.labRequestId} pb_patient=${result.patientId}` +
+        (result.createdPatient ? " (CREATED new PB chart)" : ""),
+    );
+    await reportSuccess(job.id, result.labRequestId, result.patientId, result.createdPatient);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`FAIL job ${job.id}: ${msg}`);

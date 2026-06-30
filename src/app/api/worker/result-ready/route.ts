@@ -19,6 +19,7 @@ import { storagePathBelongsToCase } from "@/lib/labs/pdf-upload";
 import { accessionSiblingIds } from "@/lib/labs/siblings";
 import { lastNameKey } from "@/lib/labs/patient-name";
 import { extractPdfText } from "@/lib/inbound/extract-pdf";
+import { extractDobFromText, extractSexFromText, nameLooksLike } from "@/lib/labs/pdf-identity";
 
 export const dynamic = "force-dynamic";
 
@@ -63,7 +64,9 @@ const Body = z.object({
  * a couple of label regexes. Returns null on anything uncertain; the caller
  * then leaves report_patient_name null and relies on the portal/UI name + the
  * accession tie. We never add a new parser or an Anthropic call here. */
-async function bestEffortReportName(pdfBytes: Buffer): Promise<string | null> {
+type ReportIdentity = { name: string | null; dob: string | null; sex: "M" | "F" | null };
+
+async function bestEffortReportIdentity(pdfBytes: Buffer): Promise<ReportIdentity> {
   let text: string;
   try {
     // Copy into a standalone ArrayBuffer (Buffer.buffer is a shared pool slice,
@@ -72,9 +75,12 @@ async function bestEffortReportName(pdfBytes: Buffer): Promise<string | null> {
     new Uint8Array(ab).set(pdfBytes);
     text = await extractPdfText(ab);
   } catch {
-    return null; // unreadable / encrypted PDF — leave null, don't throw
+    return { name: null, dob: null, sex: null }; // unreadable / encrypted — don't throw
   }
-  if (!text) return null;
+  if (!text) return { name: null, dob: null, sex: null };
+  // DOB + sex are printed in the same top banner as the name (cheap regex, no AI).
+  const dob = extractDobFromText(text.slice(0, 4000));
+  const sex = extractSexFromText(text.slice(0, 4000));
   // Look at the report's first page only — the patient banner is at the top of
   // every lab format, and labels deeper in the doc (provider, billing) would be
   // false hits. Match common "Patient/Name: <Name>" banners; a name is 1–4
@@ -84,14 +90,18 @@ async function bestEffortReportName(pdfBytes: Buffer): Promise<string | null> {
     /\bPatient(?:\s+Name)?\s*[:#]?\s*([A-Z][A-Za-z'’.-]+(?:,?\s+[A-Z][A-Za-z'’.-]+){0,3})/,
     /\bName\s*[:#]\s*([A-Z][A-Za-z'’.-]+(?:,?\s+[A-Z][A-Za-z'’.-]+){0,3})/,
   ];
+  let name: string | null = null;
   for (const re of patterns) {
     const m = head.match(re);
     const candidate = m?.[1]?.trim();
     // Only trust it if it yields a real last-name key (filters "Patient: See
     // attached" style noise that wouldn't compare meaningfully anyway).
-    if (candidate && lastNameKey(candidate)) return candidate;
+    if (candidate && lastNameKey(candidate)) {
+      name = candidate;
+      break;
+    }
   }
-  return null;
+  return { name, dob, sex };
 }
 
 export async function POST(request: Request) {
@@ -117,7 +127,7 @@ export async function POST(request: Request) {
 
   const { data: kase, error: caseErr } = await db
     .from("lab_cases")
-    .select("id, lab_external_ref, patient_name, collection_date")
+    .select("id, lab_external_ref, patient_name, patient_email, patient_dob, patient_sex, collection_date")
     .eq("id", parsed.caseId)
     .single();
   if (caseErr || !kase) {
@@ -252,8 +262,13 @@ export async function POST(request: Request) {
   //   3. null — unknown; downstream falls back to the portal/UI name and the
   //      accession tie. Null never blocks an upload.
   let reportPatientName: string | null = parsed.portalPatientName?.trim() || null;
-  if (!reportPatientName && pdfBytes) {
-    reportPatientName = await bestEffortReportName(pdfBytes);
+  let pdfDob: string | null = null;
+  let pdfSex: "M" | "F" | null = null;
+  if (pdfBytes) {
+    const ident = await bestEffortReportIdentity(pdfBytes);
+    if (!reportPatientName) reportPatientName = ident.name;
+    pdfDob = ident.dob;
+    pdfSex = ident.sex;
   }
 
   const { data: pdfRow, error: pdfErr } = await db
@@ -277,6 +292,38 @@ export async function POST(request: Request) {
       { ok: false, error: `pdf row insert: ${pdfErr?.message ?? "unknown"}` },
       { status: 500 },
     );
+  }
+
+  // Close DOB/sex gaps from the most authoritative source — the result itself.
+  // Only when the case lacks them AND a name we trust (portal name, already
+  // gate-verified above, else the PDF's own banner name) matches this case's
+  // patient — never copy a DOB off a wrong-patient report. Cascade to the same
+  // person's other DOB-less cases (same NAME + email — not email alone, since
+  // families share an email and a sibling's DOB must not bleed across).
+  if (
+    pdfDob &&
+    !kase.patient_dob &&
+    reportPatientName &&
+    nameLooksLike(reportPatientName, kase.patient_name as string)
+  ) {
+    const patch: Record<string, unknown> = { patient_dob: pdfDob };
+    if (pdfSex && !kase.patient_sex) patch.patient_sex = pdfSex;
+    await db.from("lab_cases").update(patch).eq("id", parsed.caseId);
+    const email = kase.patient_email as string | null;
+    if (email) {
+      await db
+        .from("lab_cases")
+        .update({ patient_dob: pdfDob })
+        .eq("patient_name", kase.patient_name as string)
+        .eq("patient_email", email)
+        .is("patient_dob", null);
+    }
+    await db.from("lab_events").insert({
+      case_id: parsed.caseId,
+      kind: "case_edited",
+      actor: "worker:result-ready",
+      note: `DOB ${pdfDob}${pdfSex ? ` / sex ${pdfSex}` : ""} captured from the result PDF`,
+    });
   }
 
   // Set — or CORRECT — the accession from the staged report. A manual name-probe

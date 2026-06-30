@@ -27,6 +27,7 @@ const Body = z.discriminatedUnion("outcome", [
     jobId: z.string().uuid(),
     pbLabRequestId: z.string(),
     pbPatientId: z.string(),
+    createdPatient: z.boolean().optional(),
   }),
   z.object({
     outcome: z.literal("failure"),
@@ -84,7 +85,14 @@ export async function POST(request: Request) {
 
     await db
       .from("lab_cases")
-      .update({ step5_complete_uploaded: true })
+      .update({
+        step5_complete_uploaded: true,
+        // Persist WHICH PB chart this result landed on. Previously the resolved
+        // patient id lived only in the event meta below, so the case looked
+        // accountless even after a successful post (Avva Stimler) — and every
+        // future post had to re-resolve by name/email from scratch.
+        ...(parsed.pbPatientId ? { practicebetter_record_id: parsed.pbPatientId } : {}),
+      })
       .eq("id", job.case_id);
 
     await db.from("lab_events").insert({
@@ -93,10 +101,13 @@ export async function POST(request: Request) {
       step: 5,
       completed: true,
       actor: "worker:pb-upload",
-      note: `Uploaded to PracticeBetter (labrequest=${parsed.pbLabRequestId})`,
+      note:
+        `Uploaded to PracticeBetter (labrequest=${parsed.pbLabRequestId})` +
+        (parsed.createdPatient ? " — created a new PB chart for this patient" : ""),
       meta: {
         pb_lab_request_id: parsed.pbLabRequestId,
         pb_patient_id: parsed.pbPatientId,
+        created_pb_patient: Boolean(parsed.createdPatient),
         job_id: job.id,
         pdf_id: job.pdf_id,
       },
@@ -116,7 +127,14 @@ export async function POST(request: Request) {
           .update({ superseded_at: now, superseded_reason: "covered by same-accession sibling uploaded to PB" })
           .in("case_id", sibIds)
           .is("superseded_at", null);
-        await db.from("lab_cases").update({ step5_complete_uploaded: true }).in("id", sibIds);
+        await db
+          .from("lab_cases")
+          .update({
+            step5_complete_uploaded: true,
+            // Same accession = same patient/order = same PB chart.
+            ...(parsed.pbPatientId ? { practicebetter_record_id: parsed.pbPatientId } : {}),
+          })
+          .in("id", sibIds);
         for (const id of sibIds) {
           await db.from("lab_events").insert({
             case_id: id,

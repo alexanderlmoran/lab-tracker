@@ -176,6 +176,8 @@ export type UploadInput = {
 export type UploadResult = {
   labRequestId: string;
   patientId: string;
+  /** True when no PB chart existed and this post created one. */
+  createdPatient?: boolean;
 };
 
 // ── Cookie handling ──────────────────────────────────────────────────
@@ -317,6 +319,12 @@ export async function findPbPatient(
       // DOB typo, e.g. "Micheal" vs "Michael", not a different person.)
       return null;
     }
+  } else if (candidates.length > 1) {
+    // No DOB to disambiguate several same-name charts — returning the first is
+    // exactly the wrong-patient hazard (Avva Stimler had no DOB on file). Refuse
+    // and let the caller hold for a human / backfill the DOB. A single hit is
+    // still returned (no ambiguity to resolve).
+    return null;
   }
   const m = candidates[0];
   return {
@@ -567,14 +575,53 @@ async function createLabRequest(
 export async function uploadPdfToPb(input: UploadInput): Promise<UploadResult> {
   const session = await pbLogin(input.username, input.password);
 
-  const patient = await findPbPatient(
+  let patient = await findPbPatient(
     session,
     input.patientName,
     input.patientDob,
     input.patientEmail,
   );
+  let createdPatient = false;
   if (!patient) {
-    throw new Error(`PB patient not found: ${input.patientName}`);
+    // findPbPatient returns null for two reasons: a genuinely-new patient (no
+    // chart), or several same-name charts it refuses to guess between. Only the
+    // FORMER should auto-create — making a chart when one already exists would
+    // duplicate it. findPbPatient resolves by name OR exact email, so the create
+    // guard must check BOTH: a chart under a typo'd name but the same email must
+    // hold, not spawn a duplicate (the email-only existence path the review
+    // flagged). Hold if any same-name OR same-email chart exists.
+    const sameName = await searchPbPatientCandidates(session, input.patientName);
+    const sameEmail = input.patientEmail
+      ? (await searchPbPatientCandidates(session, input.patientEmail)).filter(
+          (c) => (c.emailAddress ?? "").toLowerCase() === input.patientEmail!.toLowerCase(),
+        )
+      : [];
+    if (sameName.length > 0 || sameEmail.length > 0) {
+      throw new Error(
+        `PB chart may already exist for ${input.patientName} ` +
+          `(${sameName.length} same-name, ${sameEmail.length} same-email) and no DOB to ` +
+          `disambiguate — holding for human review rather than risk a duplicate chart`,
+      );
+    }
+    if (!input.patientEmail) {
+      throw new Error(`No PB chart for ${input.patientName} and no email on file to create one`);
+    }
+    const comma = input.patientName.includes(",");
+    const toks = comma
+      ? input.patientName.split(",").map((s) => s.trim())
+      : input.patientName.trim().split(/\s+/);
+    const firstName = comma ? toks[1] ?? "" : toks[0] ?? "";
+    const lastName = comma ? toks[0] ?? "" : toks.slice(1).join(" ");
+    if (!firstName || !lastName) {
+      throw new Error(`Cannot split "${input.patientName}" into first/last to create a PB chart`);
+    }
+    patient = await createPbPatient(session, {
+      firstName,
+      lastName,
+      email: input.patientEmail,
+      dob: input.patientDob ?? null,
+    });
+    createdPatient = true;
   }
   if (input.expectedPatientId && patient.id !== input.expectedPatientId) {
     throw new Error(
@@ -604,7 +651,7 @@ export async function uploadPdfToPb(input: UploadInput): Promise<UploadResult> {
     notify: input.notify ?? true,
   });
 
-  return { labRequestId, patientId: patient.id };
+  return { labRequestId, patientId: patient.id, createdPatient };
 }
 
 // ── List labrequests for a patient (backfill brain) ─────────────────
