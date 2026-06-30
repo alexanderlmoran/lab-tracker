@@ -42,7 +42,10 @@ export type LabEventKind =
   | "audit_disapprove_upload_failed"
   | "audit_retry_upload"
   | "audit_manual_override"
-  | "audit_accession_edited";
+  | "audit_accession_edited"
+  // Mobile-phlebotomy lifecycle (scheduled · req forwarded · drawn · completed,
+  // etc.) — the humanizer maps this to "Phlebotomy", the note carries specifics.
+  | "phlebotomy_event";
 
 export type LabCase = {
   id: string;
@@ -57,6 +60,10 @@ export type LabCase = {
   lab_external_ref: string | null;
   pickup_confirmation: string | null;
   collection_date: string | null;
+  // How the sample is collected. null/'self' = patient draws themselves;
+  // 'mobile_phlebotomy' = a phlebotomist visits — surfaces the case in the
+  // Phlebotomy tab. See src/lib/phlebotomy.ts.
+  collection_method: string | null;
   partial_expected: boolean;
   auto_send_emails: boolean;
   notes: string | null;

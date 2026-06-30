@@ -104,6 +104,7 @@ export async function HudPulse({ user, cases }: HudPulseProps) {
     { href: "/labs/import", label: "Import", show: true },
     { href: "/labs/patients", label: "Patients", show: true },
     { href: "/labs/iv", label: "IV Charting", show: true },
+    { href: "/labs/phlebotomy", label: "Phlebotomy", show: true },
     { href: "/labs/records", label: "Records", show: true },
     { href: "/labs/analytics", label: "Analytics", show: canManage },
     { href: "/labs/sales", label: "Sales", show: isDeveloper },

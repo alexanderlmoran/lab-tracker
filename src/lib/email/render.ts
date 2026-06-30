@@ -246,6 +246,7 @@ export async function renderTestEmail(args: {
     lab_external_ref: null,
     pickup_confirmation: null,
     collection_date: null,
+    collection_method: null,
     partial_expected: false,
     auto_send_emails: true,
     notes: null,

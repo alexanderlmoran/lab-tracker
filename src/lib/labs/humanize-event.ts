@@ -124,6 +124,11 @@ export function humanizeEvent(ev: LabEvent): HumanizedEvent {
       return { text: "Manual override", major: true };
     case "audit_accession_edited":
       return { text: "Accession # edited", major: true };
+    // Mobile-phlebotomy lifecycle. The specifics ("Scheduled with Draggo for …",
+    // "Req forwarded to vendor", "Marked drawn") live in ev.note, which
+    // ActivityLog appends after this lead phrase.
+    case "phlebotomy_event":
+      return { text: "Phlebotomy", major: true };
     default:
       // Unknown kind: show the raw string but treat as noise so a new event
       // type can't flood the major-only view before it's humanized here.
