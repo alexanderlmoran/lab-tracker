@@ -10,8 +10,85 @@
 
 import { requireRole } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
+import { resolveSell, resolveCost } from "@/lib/labs/pricing";
 
-export type AnalyticsTab = "reports" | "team" | "health" | "engine";
+export type AnalyticsTab = "reports" | "revenue" | "team" | "health" | "engine";
+
+// ── Revenue ────────────────────────────────────────────────────────────────
+export type RevenueData = {
+  totalRevenue: number;
+  totalCost: number;
+  totalCount: number;
+  pricedCount: number;
+  unpricedCount: number;
+  byLab: Array<{ lab: string; count: number; revenue: number }>;
+  byMonth: Array<{ month: string; revenue: number; count: number }>;
+  topUnpriced: Array<{ key: string; count: number }>;
+};
+
+/** Revenue / volume / rough-margin across all non-deleted cases, priced via
+ *  src/lib/labs/pricing.ts (Zenoti sell prices). Includes archived cases — they
+ *  are realized orders. Costs are approximate, so margin is an estimate. */
+export async function getRevenueData(): Promise<RevenueData> {
+  await requireRole("admin");
+  const db = getSupabaseAdmin();
+  const { data } = await db
+    .from("lab_cases")
+    .select("lab_name, lab_panel, zenoti_service_name, collection_date, created_at")
+    .is("deleted_at", null);
+  const rows = (data ?? []) as Array<{
+    lab_name: string | null;
+    lab_panel: string | null;
+    zenoti_service_name: string | null;
+    collection_date: string | null;
+    created_at: string | null;
+  }>;
+
+  let totalRevenue = 0;
+  let totalCost = 0;
+  let pricedCount = 0;
+  let unpricedCount = 0;
+  const byLab = new Map<string, { count: number; revenue: number }>();
+  const byMonth = new Map<string, { revenue: number; count: number }>();
+  const unpriced = new Map<string, number>();
+  const canonical = (n: string) => (n.toLowerCase() === "kennedykrieger" ? "Kennedy Krieger" : n);
+
+  for (const c of rows) {
+    const s = resolveSell(c);
+    totalRevenue += s.amount;
+    totalCost += resolveCost(c);
+    if (s.basis === "unknown") {
+      unpricedCount++;
+      const k = `${c.lab_name ?? "?"}${c.lab_panel ? ` · ${c.lab_panel}` : ""}`;
+      unpriced.set(k, (unpriced.get(k) ?? 0) + 1);
+    } else {
+      pricedCount++;
+    }
+    const lab = canonical(c.lab_name ?? "(unknown)");
+    const L = byLab.get(lab) ?? { count: 0, revenue: 0 };
+    L.count++;
+    L.revenue += s.amount;
+    byLab.set(lab, L);
+    const month = (c.collection_date ?? c.created_at ?? "").slice(0, 7); // YYYY-MM
+    if (/^\d{4}-\d{2}$/.test(month)) {
+      const M = byMonth.get(month) ?? { revenue: 0, count: 0 };
+      M.revenue += s.amount;
+      M.count++;
+      byMonth.set(month, M);
+    }
+  }
+
+  return {
+    totalRevenue,
+    totalCost,
+    totalCount: rows.length,
+    pricedCount,
+    unpricedCount,
+    byLab: [...byLab.entries()].map(([lab, v]) => ({ lab, ...v })).sort((a, b) => b.revenue - a.revenue),
+    byMonth: [...byMonth.entries()].map(([month, v]) => ({ month, ...v })).sort((a, b) => a.month.localeCompare(b.month)).slice(-12),
+    topUnpriced: [...unpriced.entries()].map(([key, count]) => ({ key, count })).sort((a, b) => b.count - a.count).slice(0, 8),
+  };
+}
 
 // ── Team activity ────────────────────────────────────────────────────
 
