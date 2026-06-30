@@ -9,6 +9,7 @@ import {
   formatApptDateTime,
   formatPrice,
   getPhlebColumnFor,
+  summarizeLabs,
   vendorLabel,
   type PhlebColumnKey,
 } from "@/lib/phlebotomy";
@@ -49,8 +50,12 @@ function PhlebCard({ row, onOpen }: { row: PhlebApptRow; onOpen: () => void }) {
       className="kanban-card w-full rounded-lg border border-zinc-200 bg-white p-2 text-left shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50"
     >
       <div className="truncate text-xs font-semibold text-zinc-900">{row.patient_name}</div>
-      <div className="truncate text-[11px] text-zinc-500">
-        {row.lab_panel ? `${row.lab_name} — ${row.lab_panel}` : row.lab_name}
+      <div className="text-[11px] text-zinc-500">
+        {row.labs.length ? (
+          <span className="line-clamp-2">{summarizeLabs(row.labs)}</span>
+        ) : (
+          <span className="text-zinc-400">no labs linked</span>
+        )}
       </div>
       <div className="mt-1 flex flex-wrap items-center gap-1">
         {row.vendor ? <Chip>{vendorLabel(row.vendor, row.vendor_other)}</Chip> : null}

@@ -14,11 +14,13 @@ export type PhlebActionResult =
   | { ok: true }
   | { ok: false; error: string };
 
-/** One row of the Phlebotomy worklist: a mobile-draw case joined to its most
- *  recent appointment. `appt_id` is null when no appointment row exists yet —
- *  the case is freshly flagged mobile and sits in "Needs Scheduling". */
+/** One row of the Phlebotomy worklist = one mobile-draw "sitting" (a patient +
+ *  collection_date), anchored on the clinic's "Mobile Phlebotomy" service case
+ *  and joined to its most recent appointment. `appt_id` is null when no
+ *  appointment exists yet — the draw sits in "Needs Scheduling". `labs` lists
+ *  every lab being drawn that sitting. */
 export type PhlebApptRow = {
-  // ── Appointment (latest per case; null when none yet) ──
+  // ── Appointment (latest per anchor case; null when none yet) ──
   appt_id: string | null;
   vendor: string | null;
   vendor_other: string | null;
@@ -34,14 +36,13 @@ export type PhlebApptRow = {
   completed_confirmed_at: string | null;
   canceled_at: string | null;
   notes: string | null;
-  // ── Case context ──
-  case_id: string;
+  // ── Draw context ──
+  case_id: string; // anchor case (the "Mobile Phlebotomy" service case, preferred)
   patient_name: string;
   patient_email: string;
   patient_phone: string | null;
-  lab_name: string;
-  lab_panel: string | null;
   collection_date: string | null;
+  labs: string[]; // every lab being drawn this sitting
   tracking_status: string | null;
   tracking_delivered_at: string | null;
 };
@@ -121,55 +122,100 @@ async function getOrCreateOpenAppt(
 }
 
 // ── Board ────────────────────────────────────────────────────────────────
+type AnchorRow = {
+  id: string;
+  patient_name: string;
+  patient_email: string;
+  patient_phone: string | null;
+  lab_name: string;
+  collection_date: string | null;
+  tracking_status: string | null;
+  tracking_delivered_at: string | null;
+};
+
+/** The clinic marks each mobile draw with a dedicated lab_name = "Mobile
+ *  Phlebotomy" service case; that (not the individual labs) is the draw. */
+const SERVICE_LAB = /mobile phlebotomy/i;
+const ANCHOR_SEL =
+  "id, patient_name, patient_email, patient_phone, lab_name, collection_date, tracking_status, tracking_delivered_at";
+
+/** Identity of a draw = one patient sitting on one date. */
+function drawKey(email: string, date: string | null): string {
+  return `${email.trim().toLowerCase()}|${date ?? ""}`;
+}
+
 /**
- * The Phlebotomy worklist: every mobile-draw case still in the in-between
- * window (kit out, sample not yet shipped). A case leaves the tab once step 1
- * (Sample Sent) ticks — it rejoins the main lab board there. Each case carries
- * its latest appointment (or a synthetic needs_scheduling shell when none yet).
+ * The Phlebotomy worklist: one card per mobile-draw sitting. A draw is a patient
+ * + collection_date that has either a "Mobile Phlebotomy" service case (the
+ * clinic's convention) or a case manually flagged collection_method=
+ * 'mobile_phlebotomy'. One sitting covers many labs, so the appointment +
+ * activity anchor to the service case (preferred) — one draw = one appointment,
+ * not one per lab — and the card lists every lab being drawn.
  */
 export async function listPhlebotomyBoard(): Promise<PhlebApptRow[]> {
   await requireSignedIn();
   const db = getSupabaseAdmin();
 
-  const { data: caseRows, error: caseErr } = await db
-    .from("lab_cases")
-    .select(
-      "id, patient_name, patient_email, patient_phone, lab_name, lab_panel, collection_date, tracking_status, tracking_delivered_at",
-    )
-    .eq("collection_method", "mobile_phlebotomy")
-    .is("deleted_at", null)
-    .is("archived_at", null)
-    .eq("step1_sample_sent", false);
-  if (caseErr) throw new Error(caseErr.message);
-  const cases = (caseRows ?? []) as Array<{
-    id: string;
-    patient_name: string;
-    patient_email: string;
-    patient_phone: string | null;
-    lab_name: string;
-    lab_panel: string | null;
-    collection_date: string | null;
-    tracking_status: string | null;
-    tracking_delivered_at: string | null;
-  }>;
-  if (cases.length === 0) return [];
+  // Anchors via two simple queries unioned by id (robust vs a spaced-ilike .or()).
+  const [byName, byFlag] = await Promise.all([
+    db.from("lab_cases").select(ANCHOR_SEL).ilike("lab_name", "%mobile phlebotomy%").is("deleted_at", null).is("archived_at", null),
+    db.from("lab_cases").select(ANCHOR_SEL).eq("collection_method", "mobile_phlebotomy").is("deleted_at", null).is("archived_at", null),
+  ]);
+  if (byName.error) throw new Error(byName.error.message);
+  if (byFlag.error) throw new Error(byFlag.error.message);
 
-  const caseIds = cases.map((c) => c.id);
+  const seen = new Set<string>();
+  const anchorsAll: AnchorRow[] = [];
+  for (const r of [...(byName.data ?? []), ...(byFlag.data ?? [])] as AnchorRow[]) {
+    if (seen.has(r.id)) continue;
+    seen.add(r.id);
+    anchorsAll.push(r);
+  }
+  if (anchorsAll.length === 0) return [];
+
+  // One anchor per draw; prefer the service case (it carries no real lab).
+  const anchorByDraw = new Map<string, AnchorRow>();
+  for (const a of anchorsAll) {
+    const k = drawKey(a.patient_email, a.collection_date);
+    const cur = anchorByDraw.get(k);
+    if (!cur || (SERVICE_LAB.test(a.lab_name) && !SERVICE_LAB.test(cur.lab_name))) {
+      anchorByDraw.set(k, a);
+    }
+  }
+
+  // Sibling labs per draw: the patient's other cases on the same date (minus the
+  // service anchor). One batched query over the involved patients.
+  const emails = [...new Set(anchorsAll.map((a) => a.patient_email))];
+  const { data: sibRows } = await db
+    .from("lab_cases")
+    .select("patient_email, collection_date, lab_name")
+    .in("patient_email", emails)
+    .is("deleted_at", null);
+  const labsByDraw = new Map<string, string[]>();
+  for (const s of (sibRows ?? []) as Array<{ patient_email: string; collection_date: string | null; lab_name: string }>) {
+    if (SERVICE_LAB.test(s.lab_name)) continue;
+    const k = drawKey(s.patient_email, s.collection_date);
+    if (!anchorByDraw.has(k)) continue;
+    const arr = labsByDraw.get(k) ?? [];
+    arr.push(s.lab_name);
+    labsByDraw.set(k, arr);
+  }
+
+  // Latest appointment per anchor case.
+  const anchorIds = [...anchorByDraw.values()].map((a) => a.id);
   const { data: apptRows } = await db
     .from("phlebotomy_appointments")
     .select(APPT_COLS)
-    .in("case_id", caseIds)
+    .in("case_id", anchorIds)
     .order("created_at", { ascending: false });
-  const appts = (apptRows ?? []) as ApptRecord[];
-
-  // Latest appointment per case (rows already sorted newest-first).
   const latest = new Map<string, ApptRecord>();
-  for (const a of appts) {
+  for (const a of (apptRows ?? []) as ApptRecord[]) {
     if (!latest.has(a.case_id)) latest.set(a.case_id, a);
   }
 
-  return cases.map((c) => {
+  return [...anchorByDraw.entries()].map(([k, c]) => {
     const a = latest.get(c.id);
+    const labs = (labsByDraw.get(k) ?? []).sort((x, y) => x.localeCompare(y));
     return {
       appt_id: a?.id ?? null,
       vendor: a?.vendor ?? null,
@@ -190,9 +236,8 @@ export async function listPhlebotomyBoard(): Promise<PhlebApptRow[]> {
       patient_name: c.patient_name,
       patient_email: c.patient_email,
       patient_phone: c.patient_phone,
-      lab_name: c.lab_name,
-      lab_panel: c.lab_panel,
       collection_date: c.collection_date,
+      labs,
       tracking_status: c.tracking_status,
       tracking_delivered_at: c.tracking_delivered_at,
     };
@@ -212,6 +257,7 @@ export async function listAddablePhlebotomyCases(): Promise<
     .is("deleted_at", null)
     .is("archived_at", null)
     .eq("step1_sample_sent", false)
+    .not("lab_name", "ilike", "%mobile phlebotomy%") // service cases auto-surface
     .or("collection_method.is.null,collection_method.neq.mobile_phlebotomy")
     .order("collection_date", { ascending: false, nullsFirst: false })
     .limit(200);
@@ -236,7 +282,7 @@ export async function addCaseToPhlebotomy(caseId: string): Promise<PhlebActionRe
   if (error) return { ok: false, error: error.message };
   await getOrCreateOpenAppt(db, caseId, actor);
   await logPhleb(db, caseId, actor, "Added to mobile phlebotomy — needs scheduling");
-  revalidatePath("/labs/phlebotomy");
+  revalidatePath("/labs");
   return { ok: true };
 }
 
@@ -256,7 +302,7 @@ export async function removeCaseFromPhlebotomy(caseId: string): Promise<PhlebAct
     .eq("case_id", caseId)
     .neq("status", "canceled");
   await logPhleb(db, caseId, actor, "Removed from mobile phlebotomy (patient self-draw)");
-  revalidatePath("/labs/phlebotomy");
+  revalidatePath("/labs");
   return { ok: true };
 }
 
@@ -283,7 +329,7 @@ async function patchAppt(
     .eq("id", apptId);
   if (error) return { ok: false, error: error.message };
   await logPhleb(db, caseId, actor, note, meta);
-  revalidatePath("/labs/phlebotomy");
+  revalidatePath("/labs");
   return { ok: true };
 }
 
@@ -417,7 +463,7 @@ export async function setApptNotes(caseId: string, notes: string): Promise<Phleb
     .update({ notes: notes.trim() || null, updated_by: actor })
     .eq("id", apptId);
   if (error) return { ok: false, error: error.message };
-  revalidatePath("/labs/phlebotomy");
+  revalidatePath("/labs");
   return { ok: true };
 }
 
@@ -453,25 +499,36 @@ export async function forwardReq(caseId: string, vendorEmail: string): Promise<P
 
   const { data: c } = await db
     .from("lab_cases")
-    .select("patient_name, lab_name, lab_panel, collection_date")
+    .select("patient_name, patient_email, collection_date")
     .eq("id", caseId)
     .maybeSingle();
   if (!c) return { ok: false, error: "Case not found." };
 
-  // Best-effort req PDF via the shared resolver (patients_seed DOB cascade, name
-  // title-casing, clinic defaults — one source of truth with the req-form modal).
-  // Skips silently if the lab has no template yet.
-  let attachment: { filename: string; content: Buffer } | null = null;
-  try {
-    const resolved = await resolveReqForm(caseId);
-    if (resolved) {
-      const req = await generateReqForm(caseId, resolved.data);
-      if (req.ok) {
-        attachment = { filename: req.filename, content: Buffer.from(req.pdfBase64, "base64") };
-      }
+  // The draw covers every lab the patient is doing that day. Gather the sibling
+  // lab cases and attach each one's auto-filled req (best-effort — a lab with no
+  // template is just listed in the body). Reuses the shared resolver + generator
+  // so the forwarded forms match the req-form modal exactly.
+  const { data: sibRows } = await db
+    .from("lab_cases")
+    .select("id, lab_name")
+    .eq("patient_email", c.patient_email)
+    .eq("collection_date", c.collection_date)
+    .is("deleted_at", null);
+  const sibs = ((sibRows ?? []) as Array<{ id: string; lab_name: string }>).filter(
+    (s) => !SERVICE_LAB.test(s.lab_name),
+  );
+  const labNames = [...new Set(sibs.map((s) => s.lab_name))].sort((a, b) => a.localeCompare(b));
+
+  const attachments: { filename: string; content: Buffer }[] = [];
+  for (const s of sibs) {
+    try {
+      const resolved = await resolveReqForm(s.id);
+      if (!resolved) continue;
+      const req = await generateReqForm(s.id, resolved.data);
+      if (req.ok) attachments.push({ filename: req.filename, content: Buffer.from(req.pdfBase64, "base64") });
+    } catch {
+      /* skip this lab's form */
     }
-  } catch {
-    /* generation failed — fall through to a req-less email */
   }
 
   const cfg = envEmailConfig();
@@ -479,19 +536,19 @@ export async function forwardReq(caseId: string, vendorEmail: string): Promise<P
   // Honor the test redirect so dev sends never reach a real vendor.
   const sendTo = cfg.testRedirect ? [cfg.testRedirect] : [to];
 
-  const labLine = c.lab_panel ? `${c.lab_name} — ${c.lab_panel}` : c.lab_name;
+  const drawList = labNames.length ? labNames.join(", ") : "(see attached)";
   const collLine = c.collection_date ? `\nRequested collection date: ${isoToUs(c.collection_date)}` : "";
-  const subject = `Phlebotomy requisition — ${c.patient_name} (${c.lab_name})`;
+  const subject = `Phlebotomy requisition — ${c.patient_name}`;
   const lines = [
     `Hi,`,
     ``,
-    `Please find the requisition for the upcoming mobile blood draw.`,
+    `Please find the requisition(s) for the upcoming mobile blood draw.`,
     ``,
     `Patient: ${c.patient_name}`,
-    `Draw: ${labLine}${collLine}`,
-    attachment
-      ? `\nThe requisition form is attached.`
-      : `\n(Requisition form will follow separately.)`,
+    `Labs to draw: ${drawList}${collLine}`,
+    attachments.length
+      ? `\n${attachments.length} requisition form${attachments.length === 1 ? "" : "s"} attached.`
+      : `\n(Requisition forms will follow separately.)`,
     ``,
     `Thank you,`,
     cfg.practiceName || "The clinic",
@@ -510,9 +567,7 @@ export async function forwardReq(caseId: string, vendorEmail: string): Promise<P
       subject,
       html,
       text,
-      attachments: attachment
-        ? [{ filename: attachment.filename, content: attachment.content }]
-        : undefined,
+      attachments: attachments.length ? attachments : undefined,
     });
     if (result.error) throw new Error(result.error.message);
   } catch (err) {
@@ -528,9 +583,9 @@ export async function forwardReq(caseId: string, vendorEmail: string): Promise<P
     db,
     caseId,
     actor,
-    `Req forwarded to vendor (${to})${attachment ? " with form" : ""}`,
-    { vendorEmail: to, attached: Boolean(attachment), redirected: Boolean(cfg.testRedirect) },
+    `Req forwarded to vendor (${to}) — ${labNames.length} lab${labNames.length === 1 ? "" : "s"}, ${attachments.length} form${attachments.length === 1 ? "" : "s"} attached`,
+    { vendorEmail: to, labs: labNames, attached: attachments.length, redirected: Boolean(cfg.testRedirect) },
   );
-  revalidatePath("/labs/phlebotomy");
+  revalidatePath("/labs");
   return { ok: true };
 }

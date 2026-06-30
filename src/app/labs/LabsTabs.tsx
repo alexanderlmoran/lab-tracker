@@ -4,12 +4,13 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
 import { ToolbarSelect } from "./ToolbarSelect";
 
-export type LabsTab = "patients" | "labs" | "tracking";
+export type LabsTab = "patients" | "labs" | "tracking" | "phlebotomy";
 
 const TABS: Array<{ key: LabsTab; label: string }> = [
-  { key: "labs", label: "By lab" },
-  { key: "patients", label: "By patient" },
+  { key: "labs", label: "Labs" },
+  { key: "patients", label: "Patients" },
   { key: "tracking", label: "Tracking" },
+  { key: "phlebotomy", label: "Phlebotomy" },
 ];
 
 export function LabsTabs({ tab }: { tab: LabsTab }) {
@@ -35,8 +36,10 @@ export function LabsTabs({ tab }: { tab: LabsTab }) {
     // and not on a stale focused patient.
     if (next !== "patients") {
       params.delete("patient");
-    } else {
-      // Free-text q / lab / test filters don't apply to single-patient focus.
+    }
+    // Free-text q / lab / test filters apply only to the By-lab board — clear them
+    // when focusing a single patient or switching to the phlebotomy worklist.
+    if (next === "patients" || next === "phlebotomy") {
       params.delete("q");
       params.delete("lab");
       params.delete("test");

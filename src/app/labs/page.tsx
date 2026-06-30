@@ -11,6 +11,11 @@ import { parseSinceKey, sinceDaysForKey } from "./time-range";
 import { LabKanbanBoard } from "./LabKanbanBoard";
 import { TrackingBoard } from "./TrackingBoard";
 import { PatientFocusBoard } from "./PatientFocusBoard";
+import { PhlebotomyBoard } from "./phlebotomy/PhlebotomyBoard";
+import {
+  listPhlebotomyBoard,
+  listAddablePhlebotomyCases,
+} from "./phlebotomy/actions";
 import { LabsTabs, type LabsTab } from "./LabsTabs";
 import { TimeRangeTabs } from "./TimeRangeTabs";
 import { SearchBar } from "./SearchBar";
@@ -46,7 +51,10 @@ export default async function LabsPage({
   const test = firstString(sp.test);
   const tabParam = firstString(sp.tab);
   const tab: LabsTab =
-    tabParam === "patients" || tabParam === "tracking" ? tabParam : "labs";
+    tabParam === "patients" || tabParam === "tracking" || tabParam === "phlebotomy"
+      ? tabParam
+      : "labs";
+  const isPhleb = tab === "phlebotomy";
   const sinceParam = firstString(sp.since);
   const since = parseSinceKey(sinceParam);
   const sinceDays = sinceDaysForKey(since);
@@ -103,6 +111,12 @@ export default async function LabsPage({
     countUnreadInbox().catch(() => 0),
   ]);
 
+  // Phlebotomy worklist is its own dataset (mobile-draw appointments), fetched
+  // only when that tab is active.
+  const [phlebRows, phlebAddable] = isPhleb
+    ? await Promise.all([listPhlebotomyBoard(), listAddablePhlebotomyCases()])
+    : [[], []];
+
   const isPatientFocus = tab === "patients";
   const focusedPatientName = focusedCases[0]?.patient_name ?? null;
   const focusedRows = focusedCases.map((c) => ({
@@ -123,7 +137,7 @@ export default async function LabsPage({
             triggerClassName="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-900 transition-colors hover:bg-zinc-100"
           />
           <LabsTabs tab={tab} />
-          {!isPatientFocus ? (
+          {!isPatientFocus && !isPhleb ? (
             <>
               {tab === "labs" ? <MergeViewMenu /> : null}
               {tab === "labs" ? <DateGroupToggle /> : null}
@@ -143,7 +157,11 @@ export default async function LabsPage({
           ) : null}
         </div>
 
-        {isPatientFocus ? (
+        {isPhleb ? (
+          <div className="flex-1 lg:min-h-0">
+            <PhlebotomyBoard rows={phlebRows} addable={phlebAddable} />
+          </div>
+        ) : isPatientFocus ? (
           <div className="flex-1 lg:min-h-0">
             <PatientFocusBoard
               initialEmail={focusedPatient}

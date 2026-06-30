@@ -10,6 +10,7 @@ import {
   formatApptDateTime,
   formatPrice,
   parsePriceToCents,
+  summarizeLabs,
   vendorLabel,
   type PhlebVendor,
 } from "@/lib/phlebotomy";
@@ -138,8 +139,9 @@ export function PhlebApptDrawer({
         <header className="flex items-start gap-2 border-b border-zinc-200 px-4 py-3">
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-semibold">{row.patient_name}</div>
-            <div className="truncate text-xs text-zinc-500">
-              {row.lab_panel ? `${row.lab_name} — ${row.lab_panel}` : row.lab_name}
+            <div className="text-xs text-zinc-500">
+              {row.labs.length ? summarizeLabs(row.labs) : "No labs linked"}
+              {row.collection_date ? ` · ${row.collection_date}` : ""}
             </div>
           </div>
           <span className="shrink-0 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-600">

@@ -89,6 +89,17 @@ export function parsePriceToCents(raw: string | null | undefined): number | null
   return Math.round(dollars * 100);
 }
 
+// ── Labs ─────────────────────────────────────────────────────────────────────
+/** "GlycanAge, KennedyKrieger, Mitoswab, Vibrant ×3" — collapses repeated lab
+ *  names (a patient often does several panels of the same lab) to a ×N count. */
+export function summarizeLabs(labs: string[]): string {
+  const counts = new Map<string, number>();
+  for (const l of labs) counts.set(l, (counts.get(l) ?? 0) + 1);
+  return [...counts.entries()]
+    .map(([name, n]) => (n > 1 ? `${name} ×${n}` : name))
+    .join(", ");
+}
+
 // ── Dates ──────────────────────────────────────────────────────────────────
 /** "Jul 3, 10:00 AM" in clinic time (America/New_York); "" for null/invalid. */
 export function formatApptDateTime(iso: string | null | undefined): string {
