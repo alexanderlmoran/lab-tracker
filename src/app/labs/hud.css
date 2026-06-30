@@ -38,8 +38,11 @@
   gap: 16px;
 }
 
-/* Pulse variant */
-.hud--pulse { position: relative; isolation: isolate; }
+/* Pulse variant. z-index lifts the whole header (and its open nav dropdowns,
+ * which overflow below the bar) above the <main> board content that follows it
+ * in the DOM — without it, the board toolbar/search row paints through the
+ * middle of an open category menu. */
+.hud--pulse { position: relative; isolation: isolate; z-index: 50; }
 .hud--pulse .row { padding-top: 8px; padding-bottom: 8px; }
 
 .hud--pulse .brand { display: flex; align-items: center; gap: 10px; }
