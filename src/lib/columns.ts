@@ -310,7 +310,18 @@ export function getColumnFor(
   // check MUST precede the step2 check below: setting step3 cascades step2 = true.
   if (c.step3_partial_uploaded) return "sample_sent";
   if (c.step2_partial_received) return "pending_upload"; // partial received, awaiting upload
-  if (c.step1_sample_sent) return "sample_sent";
+  if (c.step1_sample_sent) {
+    // Once the carrier shows the sample DELIVERED to the lab, the result is
+    // forthcoming — move it into Pending Upload so staff watch the portal for it
+    // and post it (the daily-check lane, Alex 2026-06-30). Still in transit →
+    // stays in Sample Sent. EXCEPTION: a "Mobile Phlebotomy" row is the draw
+    // KIT/service, not a lab that returns a result, so a delivered kit is simply
+    // done (Upload Complete) — nothing to upload.
+    if (c.tracking_status === "delivered") {
+      return /mobile\s*phlebotomy/i.test(c.lab_name) ? "complete_results" : "pending_upload";
+    }
+    return "sample_sent";
+  }
   // Staff marked the kit physically given to the patient (sample not yet sent).
   // Takes precedence over ready_to_ship; once step 1 ticks, sample_sent wins
   // above so the card leaves this lane without needing to clear the timestamp.
