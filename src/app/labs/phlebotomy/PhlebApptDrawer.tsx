@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { type ChangeEvent, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ActivityLog } from "../ActivityLog";
 import { toolbarBtn } from "../toolbar-styles";
@@ -20,6 +20,7 @@ import {
   confirmAppointment,
   confirmCompleted,
   forwardReq,
+  listReqForwards,
   markDrawn,
   removeCaseFromPhlebotomy,
   requestVendor,
@@ -87,6 +88,8 @@ export function PhlebApptDrawer({
   const [phleb, setPhleb] = useState("");
   const [vendorEmail, setVendorEmail] = useState("");
   const [notes, setNotes] = useState("");
+  const [uploadedReq, setUploadedReq] = useState<{ filename: string; base64: string } | null>(null);
+  const [forwards, setForwards] = useState<Array<{ at: string; vendorEmail: string; note: string }>>([]);
 
   useEffect(() => {
     const d = ref.current;
@@ -108,12 +111,18 @@ export function PhlebApptDrawer({
     setPhleb(row.phlebotomist_name ?? "");
     setNotes(row.notes ?? "");
     setVendorEmail("");
+    setUploadedReq(null);
+    setForwards([]);
+    listReqForwards(row.case_id).then(setForwards).catch(() => setForwards([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rowKey]);
 
   if (!row) {
     return <dialog ref={ref} className="hidden" />;
   }
+
+  const caseId = row.case_id;
+  const statusLabel = PHLEB_STATUS_LABEL[row.status];
 
   function run(fn: () => Promise<{ ok: true } | { ok: false; error: string }>) {
     setErr(null);
@@ -124,8 +133,35 @@ export function PhlebApptDrawer({
     });
   }
 
-  const caseId = row.case_id;
-  const statusLabel = PHLEB_STATUS_LABEL[row.status];
+  function onPickReq(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) {
+      setUploadedReq(null);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result);
+      const base64 = result.includes(",") ? result.split(",")[1] : result;
+      setUploadedReq({ filename: file.name, base64 });
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function sendReq() {
+    setErr(null);
+    startTransition(async () => {
+      const res = await forwardReq(caseId, vendorEmail, uploadedReq ?? undefined);
+      if (!res.ok) {
+        setErr(res.error);
+        return;
+      }
+      setUploadedReq(null);
+      const list = await listReqForwards(caseId).catch(() => []);
+      setForwards(list);
+      router.refresh();
+    });
+  }
 
   return (
     <dialog
@@ -238,6 +274,21 @@ export function PhlebApptDrawer({
           {/* 4 · Forward req */}
           <section className="space-y-1.5">
             <div className={sectionTitle}>4 · Forward requisition</div>
+            {/* Upload the req to forward (optional — otherwise each lab's form auto-attaches). */}
+            <div className="flex items-center gap-1.5">
+              <label className={btn + " cursor-pointer"}>
+                {uploadedReq ? "Change file" : "Upload req"}
+                <input type="file" accept="application/pdf,.pdf" className="hidden" onChange={onPickReq} />
+              </label>
+              {uploadedReq ? (
+                <span className="flex min-w-0 items-center gap-1 text-[11px] text-zinc-600">
+                  <span className="truncate">{uploadedReq.filename}</span>
+                  <button type="button" className="text-zinc-400 hover:text-zinc-700" onClick={() => setUploadedReq(null)} aria-label="Remove file">✕</button>
+                </span>
+              ) : (
+                <span className="text-[10px] text-zinc-400">PDF · else labs&rsquo; forms auto-attach</span>
+              )}
+            </div>
             <div className="flex gap-1.5">
               <input
                 className={input}
@@ -245,13 +296,26 @@ export function PhlebApptDrawer({
                 placeholder="vendor@email.com"
                 onChange={(e) => setVendorEmail(e.target.value)}
               />
-              <button type="button" disabled={pending} className={btn} onClick={() => run(() => forwardReq(caseId, vendorEmail))}>
+              <button type="button" disabled={pending} className={btn} onClick={sendReq}>
                 Send
               </button>
             </div>
-            {row.req_forwarded_at ? (
-              <div className="text-[11px] text-zinc-500">Forwarded <Stamp at={row.req_forwarded_at} /></div>
-            ) : null}
+            {/* Send history */}
+            {forwards.length ? (
+              <ul className="space-y-0.5 rounded-md bg-zinc-50 px-2 py-1.5">
+                {forwards.map((f, i) => (
+                  <li key={i} className="flex items-start gap-2 text-[11px]">
+                    <span className="shrink-0 font-mono text-[10px] text-zinc-500">{fmtStamp(f.at)}</span>
+                    <span className="min-w-0 flex-1 text-zinc-700">
+                      <span className="text-zinc-900">{f.vendorEmail}</span>
+                      {f.note ? <span className="text-zinc-500"> — {f.note}</span> : null}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="text-[11px] text-zinc-400">Not forwarded yet.</div>
+            )}
           </section>
 
           {/* 5 · Confirm */}

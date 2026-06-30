@@ -9,6 +9,7 @@ import {
   type ColumnKey,
 } from "@/lib/columns";
 import { UserChip } from "./UserChip";
+import { NavMenu } from "./NavMenu";
 import { ThemeToggle } from "./ThemeToggle";
 import { logoutAction } from "../login/actions";
 import { countUnreadInbox } from "@/lib/inbound/unread-count";
@@ -95,21 +96,41 @@ export async function HudPulse({ user, cases }: HudPulseProps) {
   const canManage: boolean = user.role === "admin" || user.role === "developer";
   const isDeveloper: boolean = user.role === "developer";
 
-  // Inbox is back in the primary nav (Gmail ingest for lab-result emails —
-  // Kennedy Krieger especially, which is email-only). Archived / Deleted /
-  // lab-portal links still live in Settings tabs.
-  const navItems: Array<{ href: string; label: string; badge?: number; show: boolean }> = [
-    { href: "/labs", label: "Home", show: true },
-    { href: "/labs/inbox", label: "Inbox", badge: unreadInbox, show: true },
-    { href: "/labs/import", label: "Import", show: true },
-    { href: "/labs/patients", label: "Patients", show: true },
-    { href: "/labs/iv", label: "IV Charting", show: true },
-    { href: "/labs?tab=phlebotomy", label: "Phlebotomy", show: true },
-    { href: "/labs/records", label: "Records", show: true },
-    { href: "/labs/analytics", label: "Analytics", show: canManage },
-    { href: "/labs/sales", label: "Sales", show: isDeveloper },
-    { href: "/labs/settings", label: "Settings", show: canManage },
+  // Top nav is grouped into category dropdowns (Medical / Sales / Admin) with
+  // Home as the standalone anchor. Inbox carries the Gmail-ingest unread badge,
+  // which bubbles up to the Medical trigger so the count shows even collapsed.
+  // Role-gated items (`show:false`) drop out; a group with no visible items is
+  // hidden entirely.
+  type NavLink = { href: string; label: string; badge?: number; show?: boolean };
+  const navGroups: Array<{ label: string; items: NavLink[] }> = [
+    {
+      label: "Medical",
+      items: [
+        { href: "/labs/inbox", label: "Inbox", badge: unreadInbox },
+        { href: "/labs/patients", label: "Patients" },
+        { href: "/labs/iv", label: "IV Charting" },
+        { href: "/labs?tab=phlebotomy", label: "Phlebotomy" },
+        { href: "/labs/records", label: "Records" },
+      ],
+    },
+    {
+      label: "Sales",
+      items: [
+        { href: "/labs/sales", label: "Sales", show: isDeveloper },
+        { href: "/labs/analytics", label: "Analytics", show: canManage },
+      ],
+    },
+    {
+      label: "Admin",
+      items: [
+        { href: "/labs/import", label: "Import" },
+        { href: "/labs/settings", label: "Settings", show: canManage },
+      ],
+    },
   ];
+  const visibleGroups = navGroups
+    .map((g) => ({ label: g.label, items: g.items.filter((i) => i.show !== false) }))
+    .filter((g) => g.items.length > 0);
 
   // Username chip is its own client component so it can grey itself out
   // when the user is already on its destination (/labs/settings?tab=general).
@@ -125,14 +146,10 @@ export async function HudPulse({ user, cases }: HudPulseProps) {
         </div>
 
         <nav className="nav" aria-label="Lab tracker sections">
-          {navItems
-            .filter((n) => n.show)
-            .map((n) => (
-              <Link key={n.href} href={n.href}>
-                {n.label}
-                {n.badge && n.badge > 0 ? <span className="badge">{n.badge}</span> : null}
-              </Link>
-            ))}
+          <Link href="/labs">Home</Link>
+          {visibleGroups.map((g) => (
+            <NavMenu key={g.label} label={g.label} items={g.items} />
+          ))}
         </nav>
 
         <div className="hud-right">

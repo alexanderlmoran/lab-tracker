@@ -476,15 +476,24 @@ function isoToUs(iso: string | null | undefined): string {
 
 /**
  * Email the requisition to the phlebotomy vendor so the draw team knows exactly
- * what to collect. Attaches the auto-filled req PDF when the lab has a template;
- * otherwise the body names the lab/panel. Stamps req_forwarded_at + logs.
+ * what to collect. When the staff uploads a req PDF that file is forwarded;
+ * otherwise each lab's auto-filled req is attached (a lab with no template is
+ * just listed in the body). Stamps req_forwarded_at + logs the send (history).
  */
-export async function forwardReq(caseId: string, vendorEmail: string): Promise<PhlebActionResult> {
+export async function forwardReq(
+  caseId: string,
+  vendorEmail: string,
+  uploaded?: { filename: string; base64: string },
+): Promise<PhlebActionResult> {
   const user = await requireSignedIn();
   const actor = user.email ?? "staff";
   const to = vendorEmail.trim();
   if (!to || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) {
     return { ok: false, error: "Enter a valid vendor email." };
+  }
+  // Guard the inline upload against Vercel's ~4.5MB body limit (base64 ≈ 4/3×).
+  if (uploaded?.base64 && uploaded.base64.length > 5_000_000) {
+    return { ok: false, error: "Uploaded req is too large (max ~3.5 MB)." };
   }
   const db = getSupabaseAdmin();
 
@@ -519,15 +528,22 @@ export async function forwardReq(caseId: string, vendorEmail: string): Promise<P
   );
   const labNames = [...new Set(sibs.map((s) => s.lab_name))].sort((a, b) => a.localeCompare(b));
 
+  // An uploaded req takes precedence — it's the explicit form the staff wants
+  // sent. With no upload, auto-fill each lab's req (best-effort).
   const attachments: { filename: string; content: Buffer }[] = [];
-  for (const s of sibs) {
-    try {
-      const resolved = await resolveReqForm(s.id);
-      if (!resolved) continue;
-      const req = await generateReqForm(s.id, resolved.data);
-      if (req.ok) attachments.push({ filename: req.filename, content: Buffer.from(req.pdfBase64, "base64") });
-    } catch {
-      /* skip this lab's form */
+  if (uploaded?.base64) {
+    const safeName = (uploaded.filename || "requisition.pdf").replace(/[^\w.\- ]/g, "_");
+    attachments.push({ filename: safeName, content: Buffer.from(uploaded.base64, "base64") });
+  } else {
+    for (const s of sibs) {
+      try {
+        const resolved = await resolveReqForm(s.id);
+        if (!resolved) continue;
+        const req = await generateReqForm(s.id, resolved.data);
+        if (req.ok) attachments.push({ filename: req.filename, content: Buffer.from(req.pdfBase64, "base64") });
+      } catch {
+        /* skip this lab's form */
+      }
     }
   }
 
@@ -579,13 +595,44 @@ export async function forwardReq(caseId: string, vendorEmail: string): Promise<P
     .from("phlebotomy_appointments")
     .update({ req_forwarded_at: new Date().toISOString(), updated_by: actor })
     .eq("id", apptId);
+  const formNote = uploaded?.base64
+    ? `uploaded req (${attachments[0]?.filename ?? "file"})`
+    : `${attachments.length} form${attachments.length === 1 ? "" : "s"} auto-attached`;
   await logPhleb(
     db,
     caseId,
     actor,
-    `Req forwarded to vendor (${to}) — ${labNames.length} lab${labNames.length === 1 ? "" : "s"}, ${attachments.length} form${attachments.length === 1 ? "" : "s"} attached`,
-    { vendorEmail: to, labs: labNames, attached: attachments.length, redirected: Boolean(cfg.testRedirect) },
+    `Req forwarded to ${to} — ${labNames.length} lab${labNames.length === 1 ? "" : "s"}, ${formNote}`,
+    {
+      vendorEmail: to,
+      labs: labNames,
+      attached: attachments.length,
+      uploaded: Boolean(uploaded?.base64),
+      redirected: Boolean(cfg.testRedirect),
+    },
   );
   revalidatePath("/labs");
   return { ok: true };
+}
+
+/** Past req-forward sends for a draw (the section-4 history). Pulled from the
+ *  activity log (phlebotomy_event rows carrying a vendorEmail in meta). */
+export async function listReqForwards(
+  caseId: string,
+): Promise<Array<{ at: string; vendorEmail: string; note: string }>> {
+  await requireSignedIn();
+  const db = getSupabaseAdmin();
+  const { data } = await db
+    .from("lab_events")
+    .select("created_at, note, meta")
+    .eq("case_id", caseId)
+    .eq("kind", "phlebotomy_event")
+    .order("created_at", { ascending: false });
+  return ((data ?? []) as Array<{ created_at: string; note: string | null; meta: Record<string, unknown> | null }>)
+    .filter((e) => typeof e.meta?.vendorEmail === "string")
+    .map((e) => ({
+      at: e.created_at,
+      vendorEmail: String(e.meta?.vendorEmail ?? ""),
+      note: e.note ?? "",
+    }));
 }

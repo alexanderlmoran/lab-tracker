@@ -4,13 +4,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
 import { ToolbarSelect } from "./ToolbarSelect";
 
-export type LabsTab = "patients" | "labs" | "tracking" | "phlebotomy";
+export type LabsTab = "patients" | "labs" | "tracking" | "phlebotomy" | "calendar";
 
 const TABS: Array<{ key: LabsTab; label: string }> = [
   { key: "labs", label: "Labs" },
   { key: "patients", label: "Patients" },
   { key: "tracking", label: "Tracking" },
   { key: "phlebotomy", label: "Phlebotomy" },
+  { key: "calendar", label: "Calendar" },
 ];
 
 export function LabsTabs({ tab }: { tab: LabsTab }) {
@@ -38,8 +39,8 @@ export function LabsTabs({ tab }: { tab: LabsTab }) {
       params.delete("patient");
     }
     // Free-text q / lab / test filters apply only to the By-lab board — clear them
-    // when focusing a single patient or switching to the phlebotomy worklist.
-    if (next === "patients" || next === "phlebotomy") {
+    // when focusing a single patient or switching to the phlebotomy / calendar views.
+    if (next === "patients" || next === "phlebotomy" || next === "calendar") {
       params.delete("q");
       params.delete("lab");
       params.delete("test");

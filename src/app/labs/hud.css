@@ -105,6 +105,53 @@
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.25) inset;
 }
 
+/* Category nav dropdowns (Medical / Sales / Admin). The trigger mirrors a
+ * .nav link; the popover reuses the toolbar-dropdown look (light CSS → reads as
+ * a dark menu under the root inversion filter). */
+.hud--pulse .nav-menu { position: relative; display: inline-flex; }
+.hud--pulse .nav-menu > button {
+  position: relative;
+  padding: 4px 9px;
+  border: 0;
+  background: transparent;
+  border-radius: 7px;
+  font-size: 12px; font-weight: 500;
+  color: #52525b;
+  cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: inherit;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.hud--pulse .nav-menu > button:hover,
+.hud--pulse .nav-menu[data-active="1"] > button {
+  background: color-mix(in oklab, #6366f1 6%, #ffffff);
+  color: #18181b;
+}
+.hud--pulse .nav-menu-caret { font-size: 9px; color: #a1a1aa; }
+.hud--pulse .nav-menu-pop {
+  position: absolute;
+  left: 0; top: 100%;
+  margin-top: 4px;
+  z-index: 40;
+  min-width: 168px;
+  background: #ffffff;
+  border: 1px solid #e4e4e7;
+  border-radius: 9px;
+  box-shadow: 0 8px 24px rgba(24, 24, 27, 0.12);
+  padding: 4px;
+  display: flex; flex-direction: column; gap: 1px;
+}
+.hud--pulse .nav-menu-pop a {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  font-size: 12px; font-weight: 500;
+  color: #3f3f46;
+  text-decoration: none;
+}
+.hud--pulse .nav-menu-pop a:hover { background: color-mix(in oklab, #6366f1 8%, #ffffff); color: #18181b; }
+.hud--pulse .nav-menu-pop a[data-active="1"] { background: #f4f4f5; color: #18181b; font-weight: 600; }
+
 /* Legacy spacer — no longer used since the nav now centers via auto
  * margins. Kept defined in case any other surface still references it. */
 .hud--pulse .spacer { display: none; }
