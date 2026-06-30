@@ -11,7 +11,7 @@ import "server-only";
 import { Resend } from "resend";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { loadEmailConfig, INTERNAL_SUBJECT } from "./render";
-import { getCaseStaleness, getStaleDaysThreshold } from "@/lib/columns";
+import { getCaseStaleness, getStaleDaysThreshold, getColumnFor } from "@/lib/columns";
 import { appBaseUrl } from "@/lib/app-url";
 import { isLikelyLostKit, type LostKitCase } from "@/lib/labs/result-window";
 import type { EmailKind, LabCase } from "@/lib/types";
@@ -290,6 +290,105 @@ export async function runStaleDigest(opts: {
     emailMessageId: send.ok ? send.messageId : undefined,
     emailError: send.ok ? undefined : send.error,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// #5 — Daily Pending-Upload digest (Catherine + Nadia)
+// ─────────────────────────────────────────────────────────────────────────
+
+export type PendingDigestSummary = {
+  ok: boolean;
+  pendingCount: number;
+  recipients: string[];
+  emailMessageId?: string;
+  emailError?: string;
+};
+
+/** Recipients for the pending-upload list: Nadia (the standard digest target)
+ *  PLUS Catherine. Catherine's address comes from app_settings.catherine_email
+ *  or the CATHERINE_EMAIL env var (set one of those so she actually receives it;
+ *  otherwise only Nadia gets it). De-duped, lowercased. */
+async function pendingDigestRecipients(): Promise<string[]> {
+  const out = new Set<string>();
+  const nadia = (await digestRecipient()).trim();
+  if (nadia) out.add(nadia.toLowerCase());
+  try {
+    const db = getSupabaseAdmin();
+    const { data } = await db
+      .from("app_settings")
+      .select("value")
+      .eq("key", "catherine_email")
+      .maybeSingle();
+    const cat = ((data as { value: string | null } | null)?.value ?? "").trim();
+    if (cat) out.add(cat.toLowerCase());
+  } catch {
+    /* env-only fallback below */
+  }
+  const catEnv = process.env.CATHERINE_EMAIL?.trim();
+  if (catEnv) out.add(catEnv.toLowerCase());
+  return [...out];
+}
+
+/**
+ * Daily "what's in Pending Upload" list for Catherine + Nadia — the cases whose
+ * sample is delivered (or partial/complete received) and now owe a portal check
+ * + post. Mirrors the Pending Upload board lane exactly (getColumnFor ===
+ * 'pending_upload'), oldest-delivered first so the most-overdue checks lead.
+ */
+export async function runPendingDigest(): Promise<PendingDigestSummary> {
+  const db = getSupabaseAdmin();
+  const recipients = await pendingDigestRecipients();
+  const { data, error } = await db
+    .from("lab_cases")
+    .select("*")
+    .is("archived_at", null)
+    .is("deleted_at", null);
+  if (error) return { ok: false, pendingCount: 0, recipients, emailError: error.message };
+
+  const cases = (data ?? []) as LabCase[];
+  const pending = cases.filter((c) => getColumnFor(c) === "pending_upload");
+  if (pending.length === 0) return { ok: true, pendingCount: 0, recipients };
+
+  const daysSince = (iso: string | null): number | null =>
+    iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000) : null;
+  // Most-overdue first: longest since delivered (or since last update as a proxy).
+  pending.sort((a, b) => {
+    const da = daysSince(a.tracking_delivered_at) ?? daysSince(a.updated_at) ?? 0;
+    const dbb = daysSince(b.tracking_delivered_at) ?? daysSince(b.updated_at) ?? 0;
+    return dbb - da;
+  });
+
+  const rows: string[] = [];
+  const textRows: string[] = [];
+  for (const c of pending) {
+    const d = daysSince(c.tracking_delivered_at);
+    const when = d == null ? (c.tracking_status ?? "—") : `delivered ${d}d ago`;
+    rows.push(
+      `<tr><td style="padding:4px 10px 4px 0;">${escapeHtml(c.patient_name)}</td><td style="padding:4px 10px 4px 0;color:#52525b;">${escapeHtml(labLabel(c))}</td><td style="padding:4px 0;color:#71717a;font-size:12px;">${escapeHtml(when)}</td></tr>`,
+    );
+    textRows.push(`  • ${c.patient_name} — ${labLabel(c)} (${when})`);
+  }
+
+  const url = `${appBaseUrl()}/labs?tab=labs`;
+  const html = `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#18181b;">
+<h2 style="margin:0 0 4px;font-size:16px;">Pending Upload — daily check</h2>
+<p style="margin:0 0 12px;color:#52525b;font-size:13px;">${pending.length} case${pending.length === 1 ? "" : "s"} delivered/received and waiting on a portal check + post to PracticeBetter. Oldest first.</p>
+<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:13px;width:100%;max-width:600px;">${rows.join("")}</table>
+<p style="margin-top:16px;color:#71717a;font-size:11px;">Open the Pending Upload lane → <a href="${url}" style="color:#4338ca;">${escapeHtml(url)}</a></p>
+</body></html>`;
+  const text =
+    `Pending Upload — daily check\n\n${pending.length} case(s) delivered/received, waiting on a portal check + post (oldest first):\n` +
+    textRows.join("\n") +
+    `\n\nOpen the board: ${url}\n`;
+
+  let emailError: string | undefined;
+  let emailMessageId: string | undefined;
+  for (const to of recipients) {
+    const send = await dispatchInternal({ to, subject: "Pending Upload — daily check", html, text });
+    if (!send.ok) emailError = send.error;
+    else emailMessageId = send.messageId;
+  }
+  return { ok: !emailError, pendingCount: pending.length, recipients, emailMessageId, emailError };
 }
 
 // ─────────────────────────────────────────────────────────────────────────

@@ -9,6 +9,10 @@
       "schedule": "0 14 * * *"
     },
     {
+      "path": "/api/cron/pending-digest",
+      "schedule": "0 13 * * *"
+    },
+    {
       "path": "/api/cron/rof-reminders",
       "schedule": "30 14 * * *"
     },
