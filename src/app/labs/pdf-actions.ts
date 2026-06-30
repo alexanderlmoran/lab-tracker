@@ -109,7 +109,23 @@ export async function listCaseIdsWithPendingPdf(
       pendingCaseIds.add(p.case_id as string);
     }
   }
-  return [...pendingCaseIds];
+  const ids = [...pendingCaseIds];
+  if (ids.length === 0) return ids;
+
+  // A case whose result is already uploaded (step5) has nothing to review — the
+  // remaining non-superseded rows are just stale duplicates the recurring scrape
+  // re-attached after the post. Without this, such a case keeps the REVIEW badge
+  // while getPendingPdfForCase (newest-PDF-only, and that one's approved) returns
+  // null, so the modal opens empty. Drop completed cases here so badge + modal
+  // agree. (Column placement already exits via the !step5 gate in columns.ts.)
+  const { data: complete, error: completeErr } = await db
+    .from("lab_cases")
+    .select("id")
+    .in("id", ids)
+    .eq("step5_complete_uploaded", true);
+  if (completeErr) throw new Error(completeErr.message);
+  const completeSet = new Set((complete ?? []).map((c) => c.id as string));
+  return ids.filter((id) => !completeSet.has(id));
 }
 
 // ── Reads ─────────────────────────────────────────────────────────────
@@ -124,6 +140,16 @@ export async function getPendingPdfForCase(
 ): Promise<PendingPdf | null> {
   await requireSignedIn();
   const db = getSupabaseAdmin();
+
+  // Already uploaded to PB (step5) → nothing to review. Short-circuit before any
+  // PDF/storage work so a completed case with leftover duplicate rows can't open
+  // an empty review modal (the "View result PDF" affordance covers viewing it).
+  const { data: caseStep } = await db
+    .from("lab_cases")
+    .select("step5_complete_uploaded")
+    .eq("id", caseId)
+    .maybeSingle();
+  if (caseStep?.step5_complete_uploaded) return null;
 
   const { data: pdf, error: pdfErr } = await db
     .from("lab_case_pdfs")
