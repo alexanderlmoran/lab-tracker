@@ -294,13 +294,28 @@ export async function findPbPatient(
 
   let items = await search(patientName);
 
-  // Name search missed → fall back to EMAIL, a unique key. PB names carry typos
-  // (e.g. PB "Micheal Holland" vs the case's "Michael Holland") that block the
-  // name search, but the @email matches exactly. Require an EXACT email match so
-  // we never cross to a different patient.
+  // Name search missed → fall back to EMAIL. This catches PB name typos (PB
+  // "Micheal Holland" vs the case's "Michael Holland") where the @email still
+  // matches. BUT email is NOT a unique patient key: families share one address
+  // (Avva 2019 + Leo Stimler 2016 both use yanatara@me.com). So an exact-email
+  // hit ALSO needs a NAME guard — last name + first initial — or a child's lab
+  // result posts to a parent/sibling chart (this is exactly how Avva's result
+  // cross-matched a relative). The first-initial check keeps the typo case
+  // (Micheal/Michael share "m") while blocking the sibling swap (Avva vs Leo).
   if (items.length === 0 && email) {
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
+    const comma = patientName.includes(",");
+    const toks = comma ? patientName.split(",").map((s) => s.trim()) : patientName.trim().split(/\s+/);
+    const pFirst = norm(comma ? toks[1] ?? "" : toks[0] ?? "");
+    const pLast = norm(comma ? toks[0] ?? "" : toks[toks.length - 1] ?? "");
     const byEmail = await search(email);
-    items = byEmail.filter((it) => (it.profile.emailAddress ?? "").toLowerCase() === email.toLowerCase());
+    items = byEmail.filter((it) => {
+      if ((it.profile.emailAddress ?? "").toLowerCase() !== email.toLowerCase()) return false;
+      const last = norm(it.profile.lastName ?? "");
+      const first = norm(it.profile.firstName ?? "");
+      if (!pLast || pLast !== last) return false;
+      return !pFirst || !first || pFirst === first || pFirst[0] === first[0];
+    });
   }
   if (items.length === 0) return null;
 
