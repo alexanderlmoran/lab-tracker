@@ -129,11 +129,34 @@ async function main() {
     return;
   }
 
+  if (cmd === "update") {
+    // update <table> <id> "col=val,col2=val2"   (val: null/true/false/number else string)
+    if (!a || !b || !c) return void console.error('usage: db.ts update <table> <id> "col=val,col2=val2"');
+    const patch: Record<string, unknown> = {};
+    for (const pair of c.split(",")) {
+      const idx = pair.indexOf("=");
+      if (idx < 0) continue;
+      const k = pair.slice(0, idx).trim();
+      const raw = pair.slice(idx + 1);
+      let val: unknown = raw;
+      if (raw === "null") val = null;
+      else if (raw === "true") val = true;
+      else if (raw === "false") val = false;
+      else if (raw !== "" && !Number.isNaN(Number(raw))) val = Number(raw);
+      patch[k] = val;
+    }
+    const { data, error } = await db.from(a).update(patch).eq("id", b).select("id");
+    if (error) return void console.error("error:", error.message);
+    console.log(`updated ${data?.length ?? 0} row(s) in ${a}:`, JSON.stringify(patch));
+    return;
+  }
+
   console.error(
     "commands:\n" +
       "  count <table>                       row count\n" +
       "  peek <table>                        1 row → column names\n" +
       '  select <table> ["col=op.val"] [n]   filtered read (PostgREST ops: eq,neq,gt,is,ilike…)\n' +
+      '  update <table> <id> "col=val,…"     patch one row by id\n' +
       '  sql "<query>"                       arbitrary SQL      (needs SUPABASE_DB_URL)\n' +
       "  migrate <path.sql>                  apply a migration  (needs SUPABASE_DB_URL)",
   );
