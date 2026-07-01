@@ -71,16 +71,29 @@ table** — patient identity is denormalized onto every `lab_cases` row (see
   cookies; `fetchZenotiLabAppointments()` filters to lab services;
   `fetchZenotiGuestProfile()` pulls DOB/sex/address from the V1 REST API.
 - `worker/src/zenoti/lab-mapping.ts` — `resolveLabName()`: which services become cards.
-- `worker/scripts/zenoti-sync-loop.ts` — a standalone loop (today→+`DAYS_AHEAD`).
-  ⚠️ **Not the live entry point on Fly** — its hardcoded `captures/…/storage.json`
-  path isn't shipped in the image. The live `zenoti` machine runs the combined
-  orchestrator (logs `tracker: received=… / iv: … / consumables: …` every ~3 min)
-  which sources the session from `ZENOTI_SESSION_B64`. **TODO: name that entry point.**
+- **`worker/scripts/zenoti-auto-loop.ts` — THE LIVE ENTRY POINT** (the `zenoti`
+  process group in `fly.toml`; logs `tracker: received=… / iv: … / consumables: …`
+  every ~3 min). It **auto-logs-in headless** via `zenotiLogin()` (`src/zenoti/login.ts`,
+  using `ZENOTI_USERNAME`/`ZENOTI_PASSWORD`) to `/tmp/zenoti-session.json`, re-logging
+  in every ~20h + on any error — it does **NOT** use a stored `ZENOTI_SESSION_B64`
+  secret (that mechanism exists in `portal-sessions.ts` for Genova, but Zenoti
+  ignores it). This is why no other process/machine has a Zenoti session, and why
+  an `fly ssh console` shell can't run the debug script — only the `zenoti` machine
+  has the logged-in cookie file. To dump what the sync sees, hit
+  `GET /debug/zenoti-day?date=…` (Bearer `WORKER_SHARED_SECRET`), which logs in fresh.
+- `worker/scripts/zenoti-sync-loop.ts` — a DEAD standalone variant (hardcoded
+  `captures/…/storage.json` not shipped in the image). Ignore it; read auto-loop.
 
 **Key IDs / vars** (`fetch-browser.ts`):
 - `ORG_ID = 6219e5ea-…`, `CENTER_ID = dba6b8ae-…` (Brickell). **Single center only.**
-- `ZENOTI_DAYS_AHEAD` (default 7), `ZENOTI_SYNC_INTERVAL_MS` (default 60000).
-- Session: `ZENOTI_SESSION_B64` secret → decoded at boot (`src/lib/portal-sessions.ts`).
+- `ZENOTI_DAYS_AHEAD` (default 7), `ZENOTI_LOOP_INTERVAL_MS` (default 180000 = 3 min).
+- Session: **fresh headless login** (`ZENOTI_USERNAME`/`ZENOTI_PASSWORD` → `zenotiLogin()`),
+  NOT a stored secret. Re-logs-in every ~20h and on error.
+- **Reschedule/edit is synced.** When an already-synced appointment is rescheduled
+  (date changes) or its service edited (panel changes), the tracker route
+  (`/api/worker/cases`, existing-branch) mirrors the new `collection_date` +
+  `zenoti_service_name` onto the card — else it stays filed under its ORIGINAL date
+  and never appears on the new day (Leila Centner 2026-07-01, INCIDENTS #31).
 
 **The gates — an appt becomes a card only if ALL hold:**
 1. **`strShowAllTherapist:"True"`** in the setDate body. This is a therapist
