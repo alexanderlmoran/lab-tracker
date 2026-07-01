@@ -116,7 +116,7 @@ export async function POST(request: Request) {
     // it deleted.
     const { data: existing, error: lookupErr } = await db
       .from("lab_cases")
-      .select("id, deleted_at, zenoti_service_name")
+      .select("id, deleted_at, zenoti_service_name, collection_date")
       .eq("zenoti_appointment_id", appt.zenotiAppointmentId)
       .maybeSingle();
 
@@ -128,7 +128,6 @@ export async function POST(request: Request) {
     if (existing) {
       const existingCaseId = existing.id as string;
       const wasDeleted = Boolean(existing.deleted_at);
-      const needsServiceNameBackfill = !existing.zenoti_service_name && appt.serviceName;
 
       // Restore guard: only restore cases that the SYNC previously deleted.
       // If a human staff member soft-deleted the case via the UI, leave it
@@ -151,12 +150,25 @@ export async function POST(request: Request) {
         if (deletedByUser) shouldRestore = false;
       }
 
-      if (shouldRestore || needsServiceNameBackfill) {
-        const restorePatch: Record<string, unknown> = {};
-        if (shouldRestore) restorePatch.deleted_at = null;
-        if (needsServiceNameBackfill)
-          restorePatch.zenoti_service_name = appt.serviceName;
-        await db.from("lab_cases").update(restorePatch).eq("id", existingCaseId);
+      // Sync the MUTABLE appointment fields. Previously the existing-branch only
+      // backfilled a MISSING service name, so a RESCHEDULE (date changed) or a
+      // service EDIT (panel changed) on an already-synced appointment left the
+      // card stuck on its original date/panel — it never moved to the new day.
+      // (Leila Centner 2026-07-01: appt ed564717 rescheduled 06-18 → 07-01 +
+      // "Zoomer - Cellular" → "Zoomer - Toxin", but the card stayed on 06-18 and
+      // never appeared on 07-01 where staff were looking.) The Zenoti appointment
+      // is the source of truth for its own date/service, so mirror them.
+      const dateChanged =
+        Boolean(appt.collectionDate) && existing.collection_date !== appt.collectionDate;
+      const serviceChanged =
+        Boolean(appt.serviceName) && existing.zenoti_service_name !== appt.serviceName;
+
+      if (shouldRestore || serviceChanged || dateChanged) {
+        const patch: Record<string, unknown> = {};
+        if (shouldRestore) patch.deleted_at = null;
+        if (serviceChanged) patch.zenoti_service_name = appt.serviceName;
+        if (dateChanged) patch.collection_date = appt.collectionDate;
+        await db.from("lab_cases").update(patch).eq("id", existingCaseId);
 
         if (shouldRestore) {
           await db.from("lab_events").insert({
@@ -166,6 +178,26 @@ export async function POST(request: Request) {
             note: `Restored: Zenoti appointment ${appt.zenotiAppointmentId} reappeared in sync after prior auto-reconciliation`,
             meta: {
               zenoti_appointment_id: appt.zenotiAppointmentId,
+              service_name: appt.serviceName,
+            },
+          });
+        }
+        if (dateChanged || serviceChanged) {
+          await db.from("lab_events").insert({
+            case_id: existingCaseId,
+            kind: "case_edited",
+            actor: "worker:zenoti-sync",
+            note:
+              "Synced from Zenoti — " +
+              [
+                dateChanged ? `date → ${appt.collectionDate}` : null,
+                serviceChanged ? `service → ${appt.serviceName}` : null,
+              ]
+                .filter(Boolean)
+                .join(", "),
+            meta: {
+              zenoti_appointment_id: appt.zenotiAppointmentId,
+              collection_date: appt.collectionDate,
               service_name: appt.serviceName,
             },
           });
