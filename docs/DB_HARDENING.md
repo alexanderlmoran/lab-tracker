@@ -61,6 +61,46 @@ the outbound guard honor it? Today it's confusing and can strand a job.
 Priority order: **#1 and #6 close the actual incident class; #2 closes the collision
 hole; #5 makes the kill-switch auditable.**
 
+> **Status (2026-07-01):** #1 and #2 are **written** as
+> `supabase/migrations/20260701_patient_safety_triggers.sql` (with `ln_key()`, an
+> exact plpgsql mirror of `lastNameKey()` in `src/lib/labs/patient-name.ts` — surname
+> comparison, so it never false-blocks Vibrant sibling cases sharing one accession).
+> **Not yet applied.** Run the audit queries below first; expect 0 rows (Integrity
+> reports 0 collisions, and the wrong-patient guard has been live since 6/24). #5 and
+> #6 are still pending.
+
+### Audit FIRST — must return 0 rows before applying
+
+Paste into the Supabase SQL editor. This creates the `ln_key` helper (harmless, and
+part of the migration anyway), then finds any existing rows the triggers would flag:
+
+```sql
+-- (helper) — same definition the migration ships
+create or replace function ln_key(s text) returns text language sql immutable as $$
+  select case when position(',' in cleaned) > 0
+    then regexp_replace(btrim(split_part(cleaned, ',', 1)), '^.*[[:space:]]', '')
+    else regexp_replace(btrim(cleaned), '^.*[[:space:]]', '') end
+  from (select lower(regexp_replace(coalesce(s,''), '[^a-zA-Z, ]', ' ', 'g')) as cleaned) t; $$;
+
+-- #1 audit — result PDFs whose report surname differs from the case surname:
+select p.id as pdf_id, p.case_id, p.report_patient_name, c.patient_name
+from lab_case_pdfs p join lab_cases c on c.id = p.case_id
+where p.report_patient_name is not null
+  and ln_key(p.report_patient_name) <> '' and ln_key(c.patient_name) <> ''
+  and ln_key(p.report_patient_name) <> ln_key(c.patient_name);
+
+-- #2 audit — one accession bound to two different surnames (active cases):
+select lab_external_ref, array_agg(distinct patient_name) as patients
+from lab_cases
+where btrim(coalesce(lab_external_ref,'')) <> '' and deleted_at is null and archived_at is null
+group by lab_external_ref
+having count(distinct ln_key(patient_name)) filter (where ln_key(patient_name) <> '') > 1;
+```
+
+Both return **0 rows** → apply the migration (`supabase db push`, or paste the file
+into the SQL editor). Any rows → fix those first (they're pre-existing wrong-patient
+attachments / collisions worth investigating regardless).
+
 ```sql
 -- #1  Backstop the wrong-patient gate in the DB. A PDF's report name, when present,
 --     must share the case's surname key. Trigger (not CHECK — it spans two tables).
