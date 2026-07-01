@@ -14,8 +14,12 @@
 // Or locally with a fresh capture:
 //   ZENOTI_STORAGE_PATH=captures/zenoti/<ts>/storage.json npx tsx scripts/zenoti-debug-day.ts 2026-07-01
 
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { materializePortalSessions } from "../src/lib/portal-sessions.js";
-import { fetchZenotiApptRows } from "../src/zenoti/fetch-browser.js";
+import { fetchZenotiApptRows, CENTER_ID, ORG_ID } from "../src/zenoti/fetch-browser.js";
 import { resolveLabName } from "../src/zenoti/lab-mapping.js";
 
 async function main() {
@@ -26,17 +30,26 @@ async function main() {
     console.error("usage: zenoti-debug-day.ts YYYY-MM-DD");
     process.exit(1);
   }
-  const storagePath = process.env.ZENOTI_STORAGE_PATH;
+  // The RUNNING worker on this machine already decoded the session to a temp file
+  // at boot — even though a fresh `fly ssh console` shell doesn't inherit
+  // ZENOTI_SESSION_B64, that file is on disk. Fall back to it so this "just works".
+  let storagePath = process.env.ZENOTI_STORAGE_PATH;
+  if (!storagePath) {
+    const materialized = join(tmpdir(), "portal-sessions", "zenoti-storage.json");
+    if (existsSync(materialized)) storagePath = materialized;
+  }
   if (!storagePath) {
     console.error(
-      "ZENOTI_STORAGE_PATH not set. On Fly it's decoded from ZENOTI_SESSION_B64 at boot " +
-        "(run inside `fly ssh console` so the secret is present). Locally, point it at a fresh capture.",
+      "No Zenoti session found. Run on the ZENOTI machine (0804045b230d48) where the\n" +
+        "worker materialized it, or set ZENOTI_STORAGE_PATH=/tmp/portal-sessions/zenoti-storage.json\n" +
+        "(or point it at a fresh local capture).",
     );
     process.exit(1);
   }
 
+  console.log(`\nQuerying Zenoti org=${ORG_ID}\n         center=${CENTER_ID}  (the ONE center this sync watches)`);
   const rows = await fetchZenotiApptRows({ storagePath, date, includeCancelled: true });
-  console.log(`\nZenoti setDate ${date} — ${rows.length} raw appointment row(s) at the synced center:\n`);
+  console.log(`\nsetDate ${date} — ${rows.length} raw appointment row(s) at that center:\n`);
   for (const r of rows) {
     const svc = r.servicename ?? "(no service)";
     const lab = resolveLabName(svc);

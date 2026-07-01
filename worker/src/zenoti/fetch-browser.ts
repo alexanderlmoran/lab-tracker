@@ -24,9 +24,11 @@ import type {
 } from "./types.js";
 
 const ZENOTI_BASE = "https://centnerwellness.zenoti.com";
-// Pulled from the capture HAR — Centner-specific identifiers.
-const ORG_ID = "6219e5ea-a4c4-45d0-91e9-3b9ea77feb67";
-const CENTER_ID = "dba6b8ae-615f-4e5c-ad92-d55d48698c42";
+// Pulled from the capture HAR — Centner-specific identifiers. Exported so the
+// zenoti-debug-day diagnostic can report WHICH center it queries (a lab booked
+// at a different Centner location is invisible to this single-center sync).
+export const ORG_ID = "6219e5ea-a4c4-45d0-91e9-3b9ea77feb67";
+export const CENTER_ID = "dba6b8ae-615f-4e5c-ad92-d55d48698c42";
 
 type StorageCookie = {
   name: string;
