@@ -57,7 +57,7 @@ async function loadCookieHeader(storagePath: string): Promise<string> {
 // Subset of the appointment fields we care about. Zenoti returns ~80 fields
 // per appointment; we ignore the ones related to invoicing, theming, and
 // resource scheduling.
-type ZenotiApptRow = {
+export type ZenotiApptRow = {
   appointmentid: string;
   userid: string;
   FName?: string;
@@ -100,8 +100,9 @@ export type FetchOpts = {
 
 /** Fetch the raw appointment rows for one day. Shared by the lab and IV
  *  resolvers so the setDate transport + double-parse lives in exactly one
- *  place (a second copy would drift — see global reuse rule). */
-async function fetchZenotiApptRows(opts: FetchOpts): Promise<ZenotiApptRow[]> {
+ *  place (a second copy would drift — see global reuse rule). Exported so the
+ *  zenoti-debug-day diagnostic can dump the RAW rows Zenoti returns. */
+export async function fetchZenotiApptRows(opts: FetchOpts): Promise<ZenotiApptRow[]> {
   const cookieHeader = await loadCookieHeader(opts.storagePath);
   const body = {
     strAppDate: `${opts.date} 00:00:00`,

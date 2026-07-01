@@ -651,6 +651,9 @@ export type HeartbeatWatchSummary = {
   emailQueue: { swept: number; stillQueued: number; failedLast24h: number };
   /** Lost-kit signal — returned/exception shipments with no result that need re-order. */
   lostKits: LostKitSummary["cases"];
+  /** PDF-pipeline smoke: null = healthy, a string = the failure (result-PDF ingest
+   *  broken in THIS deploy env, the #20 "DOMMatrix" prod-only class). */
+  pdfPipeline?: string | null;
   recipient?: string;
   emailMessageId?: string;
   emailError?: string;
@@ -738,6 +741,34 @@ const WATCHED_LOOPS: Array<{ key: string; label: string; maxAgeH: number }> = [
  * "missing" key (no row yet) is noted but never fires an email by itself, so a
  * fresh deploy (before a loop's first cycle) doesn't false-alarm.
  */
+/** Prove the PDF text pipeline actually RUNS in this deploy env. Incident #20
+ *  (pdf.js "DOMMatrix is not defined") failed ONLY on Vercel — localhost passed,
+ *  so a dead prod PDF stack shipped silent for a day and every result ingested
+ *  with zero text. Generate a 1-page PDF and run it through the real extract path;
+ *  a throw here means result-PDF ingest is broken. Returns null when healthy. */
+async function checkPdfPipeline(): Promise<string | null> {
+  try {
+    const { PDFDocument, StandardFonts } = await import("pdf-lib");
+    const { extractPdfText } = await import("@/lib/inbound/extract-pdf");
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([220, 120]);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    page.drawText("SMOKE OK", { x: 16, y: 60, size: 24, font });
+    const bytes = await doc.save();
+    const ab = bytes.buffer.slice(
+      bytes.byteOffset,
+      bytes.byteOffset + bytes.byteLength,
+    ) as ArrayBuffer;
+    const text = await extractPdfText(ab);
+    if (!text.toUpperCase().includes("SMOKE")) {
+      return `PDF pipeline ran but text extraction returned no readable content (${text.length} chars) — pdf.js may be degraded in prod`;
+    }
+    return null;
+  } catch (e) {
+    return `PDF text extraction THREW (${e instanceof Error ? e.message : String(e)}) — result-PDF ingest is broken in this deploy env`;
+  }
+}
+
 export async function runHeartbeatWatch(): Promise<HeartbeatWatchSummary> {
   const db = getSupabaseAdmin();
   const { data } = await db
@@ -778,21 +809,23 @@ export async function runHeartbeatWatch(): Promise<HeartbeatWatchSummary> {
   const emailTrouble = emailQueue.stillQueued > 0 || emailQueue.failedLast24h >= 3;
   const lostKitScan = await scanLostKits();
   const lostKits = lostKitScan.cases;
+  const pdfPipeline = await checkPdfPipeline();
 
   if (
     stale.length === 0 &&
     drift.length === 0 &&
     keyWarnings.length === 0 &&
     !emailTrouble &&
-    lostKits.length === 0
+    lostKits.length === 0 &&
+    !pdfPipeline
   ) {
-    return { ok: true, staleCount: 0, stale: [], missing, drift, keyWarnings, emailQueue, lostKits };
+    return { ok: true, staleCount: 0, stale: [], missing, drift, keyWarnings, emailQueue, lostKits, pdfPipeline: null };
   }
 
   const recipient = await digestRecipient();
   const url = `${appBaseUrl()}/labs/analytics`;
   const problemCount =
-    stale.length + drift.length + keyWarnings.length + (emailTrouble ? 1 : 0) + lostKits.length;
+    stale.length + drift.length + keyWarnings.length + (emailTrouble ? 1 : 0) + lostKits.length + (pdfPipeline ? 1 : 0);
   const rowsHtml = stale
     .map((s) => `<tr><td style="padding:4px 12px 4px 0;font-weight:600;">${escapeHtml(s.label)}</td><td style="padding:4px 0;color:#b91c1c;">${escapeHtml(s.reason)}</td></tr>`)
     .join("");
@@ -824,13 +857,16 @@ export async function runHeartbeatWatch(): Promise<HeartbeatWatchSummary> {
         )
         .join("")}</table>`
     : "";
+  const pdfHtml = pdfPipeline
+    ? `<p style="margin:12px 0 4px;font-weight:600;color:#b91c1c;">📄 PDF pipeline BROKEN (result ingest dead in prod — the DOMMatrix class):</p><ul style="margin:0;font-size:13px;color:#b91c1c;"><li>${escapeHtml(pdfPipeline)}</li></ul>`
+    : "";
   const missingNote = missing.length
     ? `<p style="margin:8px 0 0;color:#a16207;font-size:12px;">No heartbeat yet (normal right after a deploy): ${missing.map(escapeHtml).join(", ")}.</p>`
     : "";
   const html = `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#18181b;">
 <h2 style="margin:0 0 6px;font-size:16px;color:#b91c1c;">⚠ Automation health alert</h2>
 <p style="margin:0 0 10px;color:#52525b;font-size:13px;">${problemCount} issue(s) found — results may not be syncing/posting until resolved.</p>
-${staleHtml}${driftHtml}${keyHtml}${emailHtml}${lostKitHtml}${missingNote}
+${staleHtml}${driftHtml}${keyHtml}${emailHtml}${lostKitHtml}${pdfHtml}${missingNote}
 <p style="margin:14px 0 0;font-size:12px;color:#71717a;">Loop down? Most common cause: a deploy left the Fly machine stopped — <code>fly machine start &lt;id&gt;</code> (or <code>bash worker/scripts/start-all-machines.sh</code>). Health view → <a href="${url}" style="color:#4338ca;">${escapeHtml(url)}</a></p>
 </body></html>`;
   const text =
@@ -849,6 +885,7 @@ ${staleHtml}${driftHtml}${keyHtml}${emailHtml}${lostKitHtml}${missingNote}
         lostKits.map((k) => `- ${k.patient} — ${k.lab} (${k.trackingStatus ?? "—"})`).join("\n") +
         "\n"
       : "") +
+    (pdfPipeline ? `\nPDF pipeline BROKEN (result ingest dead in prod):\n- ${pdfPipeline}\n` : "") +
     (missing.length ? `\nNo heartbeat yet: ${missing.join(", ")}\n` : "") +
     `\nLoop down? Often a deploy left the Fly machine stopped — fly machine start <id>.\nHealth: ${url}\n`;
 
@@ -862,6 +899,7 @@ ${staleHtml}${driftHtml}${keyHtml}${emailHtml}${lostKitHtml}${missingNote}
     keyWarnings,
     emailQueue,
     lostKits,
+    pdfPipeline,
     recipient,
     emailMessageId: send.ok ? send.messageId : undefined,
     emailError: send.ok ? undefined : send.error,

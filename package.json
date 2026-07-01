@@ -15,6 +15,7 @@
     "predev": "npm run copy-pdf-worker",
     "prebuild": "npm run copy-pdf-worker",
     "build": "next build",
+    "smoke": "tsx scripts/smoke.ts",
     "start": "next start",
     "lint": "eslint"
   },
