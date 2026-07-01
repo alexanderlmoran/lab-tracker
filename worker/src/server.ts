@@ -487,6 +487,8 @@ app.get<{ Querystring: { date?: string } }>("/debug/zenoti-day", async (req, rep
     services: Object.entries(svcCounts).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count })),
     appts: rows.map((r) => ({
       who: redact((r.Name ?? `${r.FName ?? ""} ${r.LName ?? ""}`).trim() || ""),
+      appointmentId: r.appointmentid, // NOT PHI — needed to trace which tracker case it maps to
+      guestId: r.userid,
       service: r.servicename ?? "(none)",
       lab: resolveLabName(r.servicename ?? "") ?? null,
       cancelled: Number(r.cancelOrNoShowStatus ?? "0") !== 0,
