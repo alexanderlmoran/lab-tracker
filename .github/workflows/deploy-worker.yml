@@ -1,0 +1,44 @@
+# Auto-deploy the Fly worker on push — so `git push` ships EVERYTHING in one shot:
+#   • Vercel deploys the app       (existing Vercel↔GitHub integration)
+#   • Supabase applies migrations  (existing Supabase↔GitHub integration)
+#   • this Action deploys the worker + restarts the always-on machines
+#
+# The machine restart is the fix for INCIDENTS.md #23 / open-risk #2: `fly deploy`
+# leaves always-on machines (zenoti, scrape, pbdrain, …) STOPPED, and nothing forced
+# the restart — now it's wired into the deploy path, not a thing to remember.
+#
+# ONE-TIME SETUP (yours): create a deploy token and add it as a repo secret:
+#   fly tokens create deploy -a lab-tracker-worker
+#   → GitHub repo → Settings → Secrets and variables → Actions → new secret
+#     name: FLY_API_TOKEN   value: <the token>
+#
+# Set `branches` to whatever your Vercel *production* branch is (kept in sync so the
+# worker never lags the app).
+
+name: Deploy worker (Fly)
+
+on:
+  push:
+    branches: [main, deploy/audit-fixes]
+    paths:
+      - "worker/**"
+      - ".github/workflows/deploy-worker.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy + restart always-on machines
+        working-directory: worker
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl deploy --remote-only
+          bash scripts/start-all-machines.sh
