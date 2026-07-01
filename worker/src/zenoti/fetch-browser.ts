@@ -107,7 +107,15 @@ async function fetchZenotiApptRows(opts: FetchOpts): Promise<ZenotiApptRow[]> {
     strAppDate: `${opts.date} 00:00:00`,
     orgId: ORG_ID,
     strCenterId: CENTER_ID,
-    strShowAllTherapist: "False",
+    // MUST be "True": this is Zenoti's therapist FILTER, not a display toggle.
+    // "False" returns only the therapists in the captured session's saved book
+    // view — so a lab booked under an atypical provider (e.g. "Alexander" rather
+    // than the usual lab tech) is silently omitted from the response and never
+    // becomes a card, even though its service/date/center are all valid.
+    // "True" returns every therapist's appointments; we still filter to "Labs -"
+    // services downstream, so this only ever ADDS coverage. (Regression found
+    // 2026-07-01: Leila / "Labs - Vibrant Zoomer - Toxin" booked under Alexander.)
+    strShowAllTherapist: "True",
     mode: 0,
     includenoshowcancelled: opts.includeCancelled ? 1 : 0,
     includeVirtualAppts: -1,
