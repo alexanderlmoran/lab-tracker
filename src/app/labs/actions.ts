@@ -969,6 +969,41 @@ export async function setStepCompleted(input: {
   const { caseId, step, completed, note, cascadePrior, cascadeSiblings } = parsed.data;
   const skipWorkflowEmails = input._skipWorkflowEmails === true;
 
+  // ── Stage guard (staff moves only) ──────────────────────────────────────
+  // The automated result pipeline sets these booleans directly (not via this
+  // signed-in action), and internal sibling replays pass _skipWorkflowEmails —
+  // both bypass this. Alex 2026-07-01:
+  //   • No skipping: the upload lanes (Pending Upload = step 4, Upload Complete =
+  //     step 5) require Sample Sent (step 1) already done.
+  //   • Upload Complete (step 5) additionally requires a result PDF on the case
+  //     OR a same-accession sibling — a card can't be marked posted-to-PB with
+  //     nothing to post.
+  // (The "Sample Sent without a tracking number" case is warn-only — a card flag,
+  //  never a block — so it is intentionally NOT guarded here.)
+  if (!skipWorkflowEmails && completed && (step === 4 || step === 5)) {
+    const guardDb = getSupabaseAdmin();
+    const { data: guardRow } = await guardDb
+      .from("lab_cases")
+      .select("step1_sample_sent")
+      .eq("id", caseId)
+      .maybeSingle();
+    if (guardRow && !guardRow.step1_sample_sent) {
+      return { ok: false, error: "Mark Sample Sent first — the upload lanes can't be skipped." };
+    }
+    if (step === 5) {
+      const { accessionSiblingIds } = await import("@/lib/labs/siblings");
+      const groupIds = await accessionSiblingIds(caseId);
+      const { count } = await guardDb
+        .from("lab_case_pdfs")
+        .select("id", { head: true, count: "exact" })
+        .in("case_id", groupIds.length ? groupIds : [caseId])
+        .is("superseded_at", null);
+      if (!count) {
+        return { ok: false, error: "Attach the result PDF before marking Upload Complete." };
+      }
+    }
+  }
+
   // Move the whole same-accession group together. Resolve the lead card first
   // (this call), then replay the identical toggle on each sibling WITHOUT
   // re-cascading siblings (avoids loops). The replays SUPPRESS the Nadia/

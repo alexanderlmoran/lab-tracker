@@ -52,9 +52,11 @@ async function pg() {
     );
     process.exit(2);
   }
-  let postgres: typeof import("postgres").default;
+  type PgClient = { unsafe: (q: string) => Promise<unknown[]>; end: () => Promise<void> };
+  type PgFactory = (url: string, opts?: Record<string, unknown>) => PgClient;
+  let postgres: PgFactory;
   try {
-    ({ default: postgres } = await import("postgres"));
+    postgres = ((await import("postgres")) as unknown as { default: PgFactory }).default;
   } catch {
     console.error("`postgres` not installed. Run:  npm i -D postgres");
     process.exit(2);
@@ -118,7 +120,6 @@ async function main() {
     if (b) {
       const [col, rest] = b.split("=");
       const [op, ...valParts] = (rest ?? "").split(".");
-      // @ts-expect-error dynamic PostgREST filter op
       q = q.filter(col, op, valParts.join("."));
     }
     const limit = c ? Number(c) : 20;

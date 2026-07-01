@@ -216,14 +216,24 @@ export function CaseCard({
           <p className="text-[11px] text-zinc-400">
             Updated <RelativeTime iso={row.updated_at} />
           </p>
-          {staleness.stale ? (
-            <span
-              title={`No progress in ${staleness.daysSinceProgress} days`}
-              className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800"
-            >
-              Stale · {staleness.daysSinceProgress}d
-            </span>
-          ) : null}
+          <div className="flex items-center gap-1.5">
+            {currentCol === "sample_sent" && !row.tracking_number?.trim() ? (
+              <span
+                title="Marked Sample Sent with no tracking number (none given, or USPS untracked). Add one when it's available."
+                className="rounded bg-yellow-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-yellow-800"
+              >
+                No tracking #
+              </span>
+            ) : null}
+            {staleness.stale ? (
+              <span
+                title={`No progress in ${staleness.daysSinceProgress} days`}
+                className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800"
+              >
+                Stale · {staleness.daysSinceProgress}d
+              </span>
+            ) : null}
+          </div>
         </div>
       </div>
 
