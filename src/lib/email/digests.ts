@@ -12,6 +12,7 @@ import { Resend } from "resend";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { loadEmailConfig, INTERNAL_SUBJECT } from "./render";
 import { getCaseStaleness, getStaleDaysThreshold, getColumnFor } from "@/lib/columns";
+import { getIntegrityReport, type GapCase } from "@/lib/labs/integrity";
 import { appBaseUrl } from "@/lib/app-url";
 import { isLikelyLostKit, type LostKitCase } from "@/lib/labs/result-window";
 import type { EmailKind, LabCase } from "@/lib/types";
@@ -389,6 +390,87 @@ export async function runPendingDigest(): Promise<PendingDigestSummary> {
     else emailMessageId = send.messageId;
   }
   return { ok: !emailError, pendingCount: pending.length, recipients, emailMessageId, emailError };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// System-integrity audit — DOB / accession gaps, chased to zero
+// ─────────────────────────────────────────────────────────────────────────
+
+export type IntegrityAuditSummary = {
+  ok: boolean;
+  gapCount: number;
+  dobGaps: number;
+  accessionGaps: number;
+  collisions: number;
+  recipients: string[];
+  emailMessageId?: string;
+  emailError?: string;
+};
+
+/**
+ * Daily zero-gap audit. Emails the list of active cases missing a DOB or a
+ * shipped-case accession (and any accession collision) so nothing slips silently.
+ * Sends ONLY when there's something to chase — the Analytics → Integrity tab
+ * always shows the live state (green when clean).
+ */
+export async function runIntegrityAudit(): Promise<IntegrityAuditSummary> {
+  const report = await getIntegrityReport();
+  const recipients = await pendingDigestRecipients();
+  const summary: IntegrityAuditSummary = {
+    ok: true,
+    gapCount: report.gapCount,
+    dobGaps: report.dobGaps.length,
+    accessionGaps: report.accessionGaps.length,
+    collisions: report.collisions.length,
+    recipients,
+  };
+  if (report.gapCount === 0 && report.collisions.length === 0) return summary;
+
+  const url = `${appBaseUrl()}/labs/analytics?tab=integrity`;
+  const listHtml = (cases: GapCase[]) =>
+    cases
+      .slice(0, 100)
+      .map(
+        (c) =>
+          `<li>${escapeHtml(c.patientName)} <span style="color:#71717a;">— ${escapeHtml(c.labPanel ? `${c.labName} · ${c.labPanel}` : c.labName)}</span></li>`,
+      )
+      .join("");
+  const listText = (cases: GapCase[]) =>
+    cases.map((c) => `  • ${c.patientName} — ${c.labPanel ? `${c.labName} · ${c.labPanel}` : c.labName}`).join("\n");
+
+  const collisionHtml = report.collisions.length
+    ? `<p style="margin:12px 0 4px;font-weight:600;color:#b91c1c;">⚠ Accession collisions (wrong-patient hazard — fix now):</p><ul style="margin:0;font-size:13px;color:#b91c1c;">${report.collisions
+        .map((c) => `<li><span style="font-family:monospace;">${escapeHtml(c.accession)}</span> → ${c.patients.map(escapeHtml).join(", ")}</li>`)
+        .join("")}</ul>`
+    : "";
+  const dobHtml = report.dobGaps.length
+    ? `<p style="margin:12px 0 4px;font-weight:600;">Missing DOB (${report.dobGaps.length}):</p><ul style="margin:0;font-size:13px;">${listHtml(report.dobGaps)}</ul>`
+    : "";
+  const accHtml = report.accessionGaps.length
+    ? `<p style="margin:12px 0 4px;font-weight:600;">Missing accession — shipped (${report.accessionGaps.length}):</p><ul style="margin:0;font-size:13px;">${listHtml(report.accessionGaps)}</ul>`
+    : "";
+
+  const html = `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#18181b;">
+<h2 style="margin:0 0 4px;font-size:16px;">System integrity — ${report.gapCount} gap${report.gapCount === 1 ? "" : "s"} to close</h2>
+<p style="margin:0 0 8px;color:#52525b;font-size:13px;">Every active case missing a DOB or a shipped accession. Goal: zero.</p>
+${collisionHtml}${dobHtml}${accHtml}
+<p style="margin:16px 0 0;font-size:12px;color:#71717a;">Fix them on the Integrity board → <a href="${url}" style="color:#4338ca;">${escapeHtml(url)}</a></p>
+</body></html>`;
+  const text =
+    `System integrity — ${report.gapCount} gap(s) to close\n` +
+    (report.collisions.length ? `\n⚠ ACCESSION COLLISIONS (fix now):\n` + report.collisions.map((c) => `  • ${c.accession} → ${c.patients.join(", ")}`).join("\n") + "\n" : "") +
+    (report.dobGaps.length ? `\nMissing DOB (${report.dobGaps.length}):\n${listText(report.dobGaps)}\n` : "") +
+    (report.accessionGaps.length ? `\nMissing accession — shipped (${report.accessionGaps.length}):\n${listText(report.accessionGaps)}\n` : "") +
+    `\nFix on the Integrity board: ${url}\n`;
+
+  let emailError: string | undefined;
+  let emailMessageId: string | undefined;
+  for (const to of recipients) {
+    const send = await dispatchInternal({ to, subject: `System integrity — ${report.gapCount} gap(s) to close`, html, text });
+    if (!send.ok) emailError = send.error;
+    else emailMessageId = send.messageId;
+  }
+  return { ...summary, ok: !emailError, emailMessageId, emailError };
 }
 
 // ─────────────────────────────────────────────────────────────────────────

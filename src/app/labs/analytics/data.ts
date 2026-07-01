@@ -12,7 +12,7 @@ import { requireRole } from "@/lib/auth-guard";
 import { getSupabaseAdmin } from "@/utils/supabase/admin";
 import { resolveSell, resolveCost } from "@/lib/labs/pricing";
 
-export type AnalyticsTab = "reports" | "revenue" | "team" | "health" | "engine";
+export type AnalyticsTab = "reports" | "revenue" | "integrity" | "team" | "health" | "engine";
 
 // ── Revenue ────────────────────────────────────────────────────────────────
 export type RevenueData = {

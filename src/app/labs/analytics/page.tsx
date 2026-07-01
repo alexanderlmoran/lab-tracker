@@ -3,16 +3,19 @@ import { HudPulse } from "../HudPulse";
 import { AnalyticsTabs } from "./AnalyticsTabs";
 import { ReportsView } from "./ReportsView";
 import { RevenueView } from "./RevenueView";
+import { IntegrityView } from "./IntegrityView";
 import { TeamView } from "./TeamView";
 import { HealthView } from "./HealthView";
 import { EngineView } from "./EngineView";
 import { getTeamActivity, getSystemHealth, getEngineMetrics, getRevenueData, type AnalyticsTab } from "./data";
+import { getIntegrityReport } from "@/lib/labs/integrity";
 
 export const dynamic = "force-dynamic";
 
 const SUBTITLE: Record<AnalyticsTab, string> = {
   reports: "Snapshot of all-time data.",
   revenue: "Sell-price revenue, volume, and rough margin by lab + month.",
+  integrity: "Every DOB / accession gap, tracked to zero.",
   engine: "Is the automation accurate? PDF correctness + posting.",
   team: "Who did what, and how much — per person.",
   health: "Is every part of the pipeline running?",
@@ -29,7 +32,11 @@ export default async function AnalyticsPage({
 
   const rawTab = typeof sp.tab === "string" ? sp.tab : "reports";
   const tab: AnalyticsTab =
-    rawTab === "team" || rawTab === "health" || rawTab === "engine" || rawTab === "revenue"
+    rawTab === "team" ||
+    rawTab === "health" ||
+    rawTab === "engine" ||
+    rawTab === "revenue" ||
+    rawTab === "integrity"
       ? rawTab
       : "reports";
 
@@ -53,6 +60,7 @@ export default async function AnalyticsPage({
 
         {tab === "reports" ? <ReportsView /> : null}
         {tab === "revenue" ? <RevenueView data={await getRevenueData()} /> : null}
+        {tab === "integrity" ? <IntegrityView report={await getIntegrityReport()} /> : null}
         {tab === "engine" ? (
           <EngineView metrics={await getEngineMetrics()} />
         ) : null}
