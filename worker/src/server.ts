@@ -438,6 +438,54 @@ app.post<{
   },
 );
 
+// Debug: dump the RAW Zenoti setDate rows for a day so "why didn't appt X sync?"
+// is answered with DATA, not ssh-machine-hunting (the session is materialized here
+// at boot; a fresh ssh shell doesn't inherit the secret). Redacted — returns the
+// CENTER it queries + service names + first-name/last-initial only, enough to see
+// WHICH center's appointments the sync actually receives without dumping full PHI.
+app.get<{ Querystring: { date?: string } }>("/debug/zenoti-day", async (req, reply) => {
+  if ((req.headers.authorization ?? "") !== `Bearer ${SECRET}`) {
+    return reply.code(401).send({ ok: false, error: "unauthorized" });
+  }
+  const date = (req.query?.date ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return reply.code(400).send({ ok: false, error: "date=YYYY-MM-DD required" });
+  }
+  const storagePath = process.env.ZENOTI_STORAGE_PATH;
+  if (!storagePath) {
+    return reply.code(412).send({ ok: false, error: "ZENOTI_STORAGE_PATH not set (session not materialized on this machine)" });
+  }
+  const { fetchZenotiApptRows, CENTER_ID, ORG_ID } = await import("./zenoti/fetch-browser.js");
+  const { resolveLabName } = await import("./zenoti/lab-mapping.js");
+  const rows = await fetchZenotiApptRows({ storagePath, date, includeCancelled: true });
+  const redact = (full: string) => {
+    const parts = full.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return "(no name)";
+    return parts.length > 1 ? `${parts[0]} ${parts[parts.length - 1][0]}.` : parts[0];
+  };
+  const svcCounts: Record<string, number> = {};
+  for (const r of rows) {
+    const s = r.servicename ?? "(none)";
+    svcCounts[s] = (svcCounts[s] ?? 0) + 1;
+  }
+  return reply.send({
+    ok: true,
+    center: CENTER_ID,
+    org: ORG_ID,
+    date,
+    totalRows: rows.length,
+    labRows: rows.filter((r) => resolveLabName(r.servicename ?? "")).length,
+    services: Object.entries(svcCounts).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count })),
+    appts: rows.map((r) => ({
+      who: redact((r.Name ?? `${r.FName ?? ""} ${r.LName ?? ""}`).trim() || ""),
+      service: r.servicename ?? "(none)",
+      lab: resolveLabName(r.servicename ?? "") ?? null,
+      cancelled: Number(r.cancelOrNoShowStatus ?? "0") !== 0,
+      start: r.starttime ?? null,
+    })),
+  });
+});
+
 const port = Number(process.env.PORT ?? 8080);
 app.listen({ port, host: "0.0.0.0" }).catch((err) => {
   app.log.error(err);
