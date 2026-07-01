@@ -9,6 +9,8 @@ import {
   isFedExConfigured,
   type FedExTrackResult,
 } from "@/lib/tracking/fedex";
+import { upsTrackBatch, isUpsConfigured } from "@/lib/tracking/ups";
+import { detectCarrier, type Carrier } from "@/lib/tracking/normalize";
 import {
   isPickupConfigured,
   schedulePickup,
@@ -101,8 +103,8 @@ type CaseRow = {
   tracking_status: TrackingStatus | null;
 };
 
-function mergeUpdate(result: FedExTrackResult, existing: CaseRow) {
-  // Don't overwrite an existing `delivered` with a later `unknown` — FedEx
+function mergeUpdate(result: FedExTrackResult, existing: CaseRow, carrier: Carrier) {
+  // Don't overwrite an existing `delivered` with a later `unknown` — the carrier
   // sometimes returns "no information available" after a package has long
   // since been delivered. Keep the most-recent useful state.
   if (result.status === "unknown" && existing.tracking_status === "delivered") {
@@ -110,7 +112,7 @@ function mergeUpdate(result: FedExTrackResult, existing: CaseRow) {
   }
   const polledIso = new Date().toISOString();
   return {
-    tracking_carrier: "fedex" as const,
+    tracking_carrier: carrier,
     tracking_status: result.status,
     tracking_status_detail: result.statusDetail,
     tracking_event_at: result.eventAtIso,
@@ -134,10 +136,10 @@ export async function refreshTrackingForCase(
   deliveredAtIso: string | null;
 }>> {
   const user = await requireSignedIn();
-  if (!isFedExConfigured()) {
+  if (!isFedExConfigured() && !isUpsConfigured()) {
     return {
       ok: false,
-      error: "FedEx not configured — set FEDEX_API_KEY/SECRET/BASE in env",
+      error: "No carrier configured — set the FedEx and/or UPS API env vars",
     };
   }
   const db = getSupabaseAdmin();
@@ -153,17 +155,29 @@ export async function refreshTrackingForCase(
     return { ok: false, error: "No tracking number on this case" };
   }
 
+  const carrier = detectCarrier(row.tracking_number);
+  const carrierLabel = carrier === "ups" ? "UPS" : "FedEx";
+  if (carrier === "ups" && !isUpsConfigured()) {
+    return { ok: false, error: "UPS not configured — set UPS_CLIENT_ID/SECRET/BASE in env" };
+  }
+  if (carrier === "fedex" && !isFedExConfigured()) {
+    return { ok: false, error: "FedEx not configured — set FEDEX_API_KEY/SECRET/BASE in env" };
+  }
+
   let results: FedExTrackResult[];
   try {
-    results = await fedexTrackBatch([row.tracking_number]);
+    results =
+      carrier === "ups"
+        ? await upsTrackBatch([row.tracking_number])
+        : await fedexTrackBatch([row.tracking_number]);
   } catch (err) {
     const e = err instanceof FedExError ? err : new Error(String(err));
-    return { ok: false, error: `FedEx error: ${e.message}` };
+    return { ok: false, error: `${carrierLabel} error: ${e.message}` };
   }
   const r = results[0];
-  if (!r) return { ok: false, error: "No result returned from FedEx" };
+  if (!r) return { ok: false, error: `No result returned from ${carrierLabel}` };
 
-  const update = mergeUpdate(r, row as CaseRow);
+  const update = mergeUpdate(r, row as CaseRow, carrier);
   if (update) {
     const { error: updateErr } = await db
       .from("lab_cases")
@@ -193,7 +207,7 @@ export async function refreshTrackingForCase(
         step: 1,
         completed: true,
         actor: user.email ?? "admin",
-        note: "Auto-advanced: FedEx delivered sample to lab",
+        note: `Auto-advanced: ${carrierLabel} delivered sample to lab`,
       });
     } catch (err) {
       console.error("[tracking] manual-refresh delivered transition failed", err);

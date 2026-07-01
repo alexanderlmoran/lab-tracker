@@ -48,3 +48,12 @@ export function normalizeScannedTracking(raw: string): string {
   // Nothing to slice.
   return cleaned;
 }
+
+export type Carrier = "ups" | "fedex";
+
+/** Classify a tracking number by carrier so the refresh loop routes it to the
+ *  right API. UPS numbers start with "1Z" (case-insensitive); everything else
+ *  (all-numeric FedEx Express/Ground) is FedEx — the historical default. */
+export function detectCarrier(trackingNumber: string): Carrier {
+  return /^1z/i.test(trackingNumber.replace(/[\s-]/g, "").trim()) ? "ups" : "fedex";
+}

@@ -12,6 +12,8 @@ import {
   isFedExConfigured,
   type FedExTrackResult,
 } from "./fedex";
+import { upsTrackBatch, isUpsConfigured } from "./ups";
+import { detectCarrier, type Carrier } from "./normalize";
 import type { TrackingStatus } from "@/lib/types";
 import { findLabByName, predictResultDates } from "@/lib/labs/catalog";
 
@@ -41,12 +43,14 @@ async function onDeliveredTransition(args: {
   db: ReturnType<typeof getSupabaseAdmin>;
   caseId: string;
   actor: string;
+  carrier: Carrier;
   step1AlreadyDone: boolean;
   labName: string | null;
   expectedMinAlready: string | null;
   expectedMaxAlready: string | null;
   deliveredAtIso: string | null;
 }): Promise<void> {
+  const carrierLabel = args.carrier === "ups" ? "UPS" : "FedEx";
   // Step 1 tick.
   if (!args.step1AlreadyDone) {
     try {
@@ -60,7 +64,7 @@ async function onDeliveredTransition(args: {
         step: 1,
         completed: true,
         actor: args.actor,
-        note: "Auto-advanced: FedEx delivered sample to lab",
+        note: `Auto-advanced: ${carrierLabel} delivered sample to lab`,
       });
     } catch (err) {
       console.error("[tracking] step1 tick failed", err);
@@ -130,12 +134,12 @@ async function tickStep1SampleSent(
 // printed label) — enough to call it "sample sent".
 const IN_TRANSIT_STATUSES = new Set(["in_transit", "out_for_delivery"]);
 
-function mergeUpdate(result: FedExTrackResult, existing: CaseRow) {
+function mergeUpdate(result: FedExTrackResult, existing: CaseRow, carrier: Carrier) {
   if (result.status === "unknown" && existing.tracking_status === "delivered") {
     return null;
   }
   return {
-    tracking_carrier: "fedex" as const,
+    tracking_carrier: carrier,
     tracking_status: result.status,
     tracking_status_detail: result.statusDetail,
     tracking_event_at: result.eventAtIso,
@@ -166,8 +170,8 @@ export async function refreshTrackingForActiveCasesCore(opts: {
   actor: string;
   limit?: number;
 }): Promise<RefreshSummary> {
-  if (!isFedExConfigured()) {
-    return { ok: false, error: "FedEx not configured" };
+  if (!isFedExConfigured() && !isUpsConfigured()) {
+    return { ok: false, error: "No carrier configured (set FedEx and/or UPS env)" };
   }
   const limit = Math.min(Math.max(opts.limit ?? 300, 1), 1000);
   const db = getSupabaseAdmin();
@@ -194,22 +198,48 @@ export async function refreshTrackingForActiveCasesCore(opts: {
   let updated = 0;
   let errors = 0;
 
+  // Keep FedEx ≤30 per batch call; UPS (one GET per number) rides along in the
+  // same chunk. Each number is routed to its carrier by detectCarrier.
   for (let i = 0; i < cases.length; i += 30) {
     const chunk = cases.slice(i, i + 30);
-    const numbers = chunk.map((c) => c.tracking_number!).filter(Boolean);
-    let results: FedExTrackResult[];
-    try {
-      results = await fedexTrackBatch(numbers);
-    } catch {
-      errors += chunk.length;
-      continue;
+    const fedexNums: string[] = [];
+    const upsNums: string[] = [];
+    for (const c of chunk) {
+      const n = c.tracking_number;
+      if (!n) continue;
+      (detectCarrier(n) === "ups" ? upsNums : fedexNums).push(n);
     }
-    polled += chunk.length;
-    const byNumber = new Map(results.map((r) => [r.trackingNumber, r]));
+
+    const byNumber = new Map<string, FedExTrackResult>();
+    const carrierOf = new Map<string, Carrier>();
+    if (fedexNums.length && isFedExConfigured()) {
+      try {
+        for (const r of await fedexTrackBatch(fedexNums)) {
+          byNumber.set(r.trackingNumber, r);
+          carrierOf.set(r.trackingNumber, "fedex");
+        }
+        polled += fedexNums.length;
+      } catch {
+        errors += fedexNums.length;
+      }
+    }
+    if (upsNums.length && isUpsConfigured()) {
+      try {
+        for (const r of await upsTrackBatch(upsNums)) {
+          byNumber.set(r.trackingNumber, r);
+          carrierOf.set(r.trackingNumber, "ups");
+        }
+        polled += upsNums.length;
+      } catch {
+        errors += upsNums.length;
+      }
+    }
+
     for (const c of chunk) {
       const r = c.tracking_number ? byNumber.get(c.tracking_number) : undefined;
       if (!r) continue;
-      const update = mergeUpdate(r, c);
+      const carrier = (c.tracking_number && carrierOf.get(c.tracking_number)) || "fedex";
+      const update = mergeUpdate(r, c, carrier);
       if (!update) continue;
       const { error: updateErr } = await db
         .from("lab_cases")
@@ -234,6 +264,7 @@ export async function refreshTrackingForActiveCasesCore(opts: {
           db,
           caseId: c.id,
           actor: opts.actor,
+          carrier,
           step1AlreadyDone: Boolean(c.step1_sample_sent),
           labName: c.lab_name,
           expectedMinAlready: c.expected_result_at_min,
@@ -247,7 +278,7 @@ export async function refreshTrackingForActiveCasesCore(opts: {
           db,
           c.id,
           opts.actor,
-          `Auto-advanced: FedEx shows sample in transit${r.location ? ` (${r.location})` : ""}`,
+          `Auto-advanced: ${carrier === "ups" ? "UPS" : "FedEx"} shows sample in transit${r.location ? ` (${r.location})` : ""}`,
         );
       }
     }
