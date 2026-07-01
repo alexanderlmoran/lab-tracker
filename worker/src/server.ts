@@ -451,12 +451,20 @@ app.get<{ Querystring: { date?: string } }>("/debug/zenoti-day", async (req, rep
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return reply.code(400).send({ ok: false, error: "date=YYYY-MM-DD required" });
   }
-  const storagePath = process.env.ZENOTI_STORAGE_PATH;
-  if (!storagePath) {
-    return reply.code(412).send({ ok: false, error: "ZENOTI_STORAGE_PATH not set (session not materialized on this machine)" });
-  }
+  // The live sync (zenoti-auto-loop) doesn't reuse a stored session — it LOGS IN
+  // headless each cycle (ZENOTI_USERNAME/PASSWORD), which is why no process has a
+  // ZENOTI_STORAGE_PATH. Do the same here: a fresh login to a temp path, then fetch
+  // the exact same way the loop does (same CENTER_ID, same setDate transport).
+  const { zenotiLogin } = await import("./zenoti/login.js");
   const { fetchZenotiApptRows, CENTER_ID, ORG_ID } = await import("./zenoti/fetch-browser.js");
   const { resolveLabName } = await import("./zenoti/lab-mapping.js");
+  const storagePath = "/tmp/debug-zenoti-session.json";
+  let cookieCount = 0;
+  try {
+    cookieCount = await zenotiLogin(storagePath);
+  } catch (e) {
+    return reply.code(502).send({ ok: false, error: `zenoti login failed: ${e instanceof Error ? e.message : String(e)}` });
+  }
   const rows = await fetchZenotiApptRows({ storagePath, date, includeCancelled: true });
   const redact = (full: string) => {
     const parts = full.trim().split(/\s+/).filter(Boolean);
@@ -470,6 +478,7 @@ app.get<{ Querystring: { date?: string } }>("/debug/zenoti-day", async (req, rep
   }
   return reply.send({
     ok: true,
+    loginCookies: cookieCount,
     center: CENTER_ID,
     org: ORG_ID,
     date,
