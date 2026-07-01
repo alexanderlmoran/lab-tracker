@@ -11,6 +11,25 @@
 //
 // See docs/INCIDENTS.md (#18, #20) and docs/ARCHITECTURE.md → Deploy / ops.
 
+import { readFileSync } from "node:fs";
+
+// Load .env.local so the deep check finds WORKER_SHARED_SECRET/CRON_SECRET when
+// run locally (CI / Vercel already have real env). Mirrors scripts/db.ts.
+function loadEnvLocal(): void {
+  try {
+    for (const line of readFileSync(".env.local", "utf8").split("\n")) {
+      const m = line.match(/^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$/);
+      if (!m) continue;
+      let v = m[2];
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+      if (process.env[m[1]] === undefined) process.env[m[1]] = v;
+    }
+  } catch {
+    /* rely on real env */
+  }
+}
+loadEnvLocal();
+
 const BASE = (
   process.argv[2] ||
   process.env.SMOKE_BASE_URL ||
