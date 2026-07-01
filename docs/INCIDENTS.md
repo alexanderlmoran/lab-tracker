@@ -12,8 +12,10 @@ add a row here, name the guardrail, and grade its enforcement.
 - **DB** — a constraint/trigger makes it structurally impossible. *Strongest.*
 
 **The north star:** promote PROCESS-only and code-only patient-safety guards to DB or
-CI enforcement. See `docs/DB_HARDENING.md` for the specific constraints. Sorted by
-severity: patient-safety → data-integrity → reliability.
+CI enforcement. See [`DB_HARDENING.md`](DB_HARDENING.md) for the specific constraints,
+[`ARCHITECTURE.md`](ARCHITECTURE.md) for the system map each incident lives in, and
+[`PLAYBOOK.md`](PLAYBOOK.md) for the reuse index. Sorted by severity: patient-safety →
+data-integrity → reliability.
 
 ---
 
