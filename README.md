@@ -1,36 +1,33 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Lab Tracker
 
-## Getting Started
+Human-gated middleware between **Zenoti** (appointments), the **lab portals**
+(7 scrapers), and **PracticeBetter** (patient charts). A Zenoti lab appointment
+becomes a tracker case → the result PDF is scraped when ready → a human approves →
+it posts to the patient's PB chart. Reconcile and integrity passes keep it honest.
 
-First, run the development server:
+- **App:** Next.js 16 on Vercel — `centnerlabs.com`
+- **Worker:** Fly app `lab-tracker-worker` (9 always-on/scale-to-zero process groups)
+- **Data:** Supabase (Postgres + storage), Resend (email), Anthropic (PDF identity)
+
+## Start here (docs)
+
+Read these before writing code or debugging — most "new" problems here were solved once already:
+
+1. **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the system map + the gotchas that cause re-investigation (Zenoti sync gates, the dark-mode `invert()` CSS trap, the `fly deploy` machine-stop, the PB IP block, fail-closed patient safety).
+2. **[docs/INCIDENTS.md](docs/INCIDENTS.md)** — every past bug/gap + its guardrail. Check here before assuming a behavior is a new bug.
+3. **[docs/DB_HARDENING.md](docs/DB_HARDENING.md)** — where patient-safety is code-only vs structural, and the prod-drift checks.
+4. **[docs/PLAYBOOK.md](docs/PLAYBOOK.md)** — the reuse index (does this helper already exist?).
+
+`AGENTS.md` (imported by `CLAUDE.md`) points agents at the same web.
+
+## Dev
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run dev          # Next.js app (root)
+cd worker && npm run dev   # the automation worker
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Deploy: Vercel auto-deploys the root on push. The worker ships with
+`cd worker && fly deploy && bash scripts/start-all-machines.sh` — **the
+`start-all-machines.sh` is not optional** (`fly deploy` leaves always-on machines
+stopped; see ARCHITECTURE → Deploy / ops).

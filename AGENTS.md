@@ -6,7 +6,12 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 # How this system is wired — read before debugging
 
-Before tracing a subsystem to answer "why didn't X happen?", **read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the master system map. It front-loads the *gotchas that cause re-investigation* (the Zenoti sync gates, the dark-mode CSS `invert()` trap, the `fly deploy` machine-stop, the PB IP block, fail-closed patient safety) and maps each subsystem to its owning files/vars. When you spend >2 minutes learning how something works, add it there so the next session doesn't repeat it.
+Before tracing a subsystem to answer "why didn't X happen?", read the doc web in this order:
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the master system map. Front-loads the *gotchas that cause re-investigation* (Zenoti sync gates, the dark-mode CSS `invert()` trap, the `fly deploy` machine-stop, the PB IP block, fail-closed patient safety) and maps each subsystem to its owning files/vars.
+- **[docs/INCIDENTS.md](docs/INCIDENTS.md)** — every past bug/gap since go-live, its root cause, and the guardrail that now prevents it (or "still a risk"). Read before assuming a behavior is a new bug — it may be a known one. **Add a row the day any new incident happens.**
+- **[docs/DB_HARDENING.md](docs/DB_HARDENING.md)** — where patient-safety is code-only vs structural, the constraints that would make regressions impossible, and the **prod-drift checks** (a hand-applied migration that never hit prod can silently disable a guard).
+
+When you spend >2 minutes learning how something works, add it to ARCHITECTURE so the next session doesn't repeat it. We do not repeat the same error twice.
 
 # Reuse before you rebuild
 

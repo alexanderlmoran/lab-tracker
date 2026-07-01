@@ -15,6 +15,20 @@ How to use this file:
 
 ---
 
+## Domain docs (the map, the lessons, the structure)
+
+This file is the *reuse index*. For how the system fits together and what has bitten us:
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — system map + gotchas table (read on startup).
+- **[INCIDENTS.md](INCIDENTS.md)** — every past bug/gap + its guardrail. Never repeat one.
+- **[DB_HARDENING.md](DB_HARDENING.md)** — code-only vs structural safety + prod-drift checks.
+- **[AUTOMATION_STRATEGY.md](AUTOMATION_STRATEGY.md)** — the human-gated middleware philosophy.
+- **[AUTOMATION_MAP.md](AUTOMATION_MAP.md)** — data flow: feed → scrape → stage → post.
+- **[RECIPE_ENGINE_DESIGN.md](RECIPE_ENGINE_DESIGN.md)** — the config-driven scraper engine.
+- **[PORTALS.md](PORTALS.md)** — portal registry (URL / login / scraper status per lab).
+- **[E2E_TEST_RUNBOOK.md](E2E_TEST_RUNBOOK.md)** — full pipeline walkthrough.
+
+---
+
 ## Reusable logic — check here first
 
 | Need | Use this (don't rebuild) | Lesson |
