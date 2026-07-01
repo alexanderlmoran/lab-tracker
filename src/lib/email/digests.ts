@@ -670,6 +670,13 @@ const SCHEMA_SENTINELS: Array<{ table: string; column?: string; migration: strin
   { table: "iv_sessions", migration: "20260609_iv_sessions" },
   { table: "iv_post_jobs", migration: "20260609_iv_post_jobs" },
   { table: "lab_cases", column: "pickup_carrier", migration: "20260608_pickup_cards" },
+  // PATIENT-SAFETY LOAD-BEARING: the wrong-patient guard (result-ready quarantine +
+  // Approve-modal surname check) reads report_patient_name and treats null as "no
+  // name to check" — so if this hand-applied 6/24 incident-fix migration ever fell
+  // out of prod, the guard would silently no-op with ZERO alert. Sentinel it.
+  { table: "lab_case_pdfs", column: "report_patient_name", migration: "20260624_lab_case_pdfs_report_patient_name" },
+  { table: "lab_cases", column: "with_patient_at", migration: "20260624_with_patient_stage" },
+  { table: "patient_aliases", migration: "20260630_patient_aliases" },
 ];
 
 /** Probe each sentinel; return human labels for any whose table/column is absent
