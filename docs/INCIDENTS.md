@@ -82,6 +82,7 @@ These have **NO structural guard** — they are PROCESS-only or NONE. Ranked by 
 9. **`ALLISON_EMAIL` never verified to exist** (`email/internal.ts:26`) — guessed address; step-9 notifications may reach no one. → *confirm the real inbox.*
 10. **Tracking-number semantics** (#15) — a # may be the kit-*out* shipment, not sample-return, and FedEx recycles numbers. Needs name+carrier corroboration; nothing hard-blocks a mis-corroborated advance. → *corroboration gate before auto-advance.*
 11. **PB egress single point of failure** (#21) — the clinic ThinkPad must stay on + `TS_AUTHKEY` renewed. Watchdog warns 14d ahead. → *hardware/PROCESS; document the renewal ritual.*
+12. **Reschedule keeps STALE step-state / tracking** (#31, 2026-07-01). The date/service sync fix moves a rescheduled card to the right day, but its step booleans + tracking from the PRIOR occurrence are NOT reset — so a re-drawn appt (esp. when the test/panel changed, e.g. Leila Cellular→Toxin) lands mid-pipeline (Pending Upload) instead of "To Do". → *decide: auto-reset workflow when the derived LAB/PANEL changes (correct for a new order, but wipes prior progress), or surface a "test changed — verify" flag. Not auto-shipped — judgment call, awaiting Alex.*
 
 ---
 
