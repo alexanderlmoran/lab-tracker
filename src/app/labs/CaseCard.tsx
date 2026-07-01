@@ -249,32 +249,27 @@ export function CaseCard({
               </h2>
               <p className="text-xs text-zinc-500">{row.patient_email}</p>
             </div>
-            <button
-              type="button"
-              onClick={closeDialog}
-              aria-label="Close"
-              className="rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
-            >
-              ×
-            </button>
+            <div className="flex items-center gap-1">
+              <Link
+                href={`/labs/${row.id}`}
+                aria-label="Open in full page"
+                title="Open in full page"
+                className="rounded p-1 text-lg leading-none text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
+              >
+                ⤢
+              </Link>
+              <button
+                type="button"
+                onClick={closeDialog}
+                aria-label="Close"
+                className="rounded p-1 text-lg leading-none text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
+              >
+                ×
+              </button>
+            </div>
           </div>
           <div className="overflow-y-auto px-6 py-5">
             <CaseDetail row={row} />
-          </div>
-          <div className="flex items-center justify-end gap-2 border-t border-zinc-200 px-6 py-3">
-            <Link
-              href={`/labs/${row.id}`}
-              className="text-xs text-zinc-600 underline-offset-2 hover:text-zinc-900 hover:underline"
-            >
-              Open in full page →
-            </Link>
-            <button
-              type="button"
-              onClick={closeDialog}
-              className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50"
-            >
-              Close
-            </button>
           </div>
         </div>
       </dialog>
